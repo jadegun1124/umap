@@ -294,7 +294,7 @@ function Login({ onSubmit }: { onSubmit: (profile: Profile) => void }) {
                 return;
               }
               void persistAccountResult(result);
-              finishAccount(result.account, recovery);
+              finishAccount({ ...result.account, restored: result.restored === true }, recovery);
             }).catch(() => {
               setBusy(false);
               setMessage('복구 코드를 확인하지 못했습니다. 위치 서버에 다시 연결해 주세요.');

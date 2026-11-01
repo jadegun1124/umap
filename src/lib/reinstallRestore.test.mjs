@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { createMemoryAccountStore } from '../../sync/account.mjs';
 import { commitKeys, createMemoryStore, emptyRoom, handleSyncRequest } from '../../sync/protocol.mjs';
@@ -133,4 +134,11 @@ test('kakao sign-in after uninstall restores the name, both members, and sealed 
   });
   assert.equal(opened.historyLocked, false);
   assert.equal(opened.journeys[0].id, 'j-walk');
+});
+
+test('recovery uses the same restored flag so a named account skips the name screen', () => {
+  const source = readFileSync(new URL('../components/family/Onboarding.tsx', import.meta.url), 'utf8');
+  assert.match(source, /finishAccount\(\{ \.\.\.result\.account, restored: result\.restored === true \}/);
+  assert.equal(accountNeedsDisplayName({ restored: true, nameChosen: false, profile: { name: '엄마' } }), false);
+  assert.equal(accountNeedsDisplayName({ nameChosen: false, profile: { name: '엄마' } }), true);
 });
