@@ -498,6 +498,46 @@ test('the main map matches the records line and ends on the pin for a shaped wal
       ));
       assert.equal(alongFirstStreet, true, `${kind} first street skipped ${painted}`);
     }
+
+    const holeOrigin = { lat: 37.62, lng: 127.05, at: Date.UTC(2026, 9, 31, 6, 5, 0), accuracyM: 12, speedMps: 1.3, staying: false };
+    const holeFixes = [holeOrigin];
+    for (let index = 1; index <= 8; index += 1) {
+      holeFixes.push({
+        lat: holeOrigin.lat,
+        lng: eastOf(holeOrigin.lat, holeOrigin.lng, index * 3.2),
+        at: holeOrigin.at + index * 2_500,
+        accuracyM: 12,
+        speedMps: 1.3,
+        staying: false,
+      });
+    }
+    const holeLast = holeFixes[holeFixes.length - 1];
+    const holePin = {
+      lat: northOf(holeLast.lat, 90),
+      lng: holeLast.lng,
+      at: holeLast.at + 30_000,
+      accuracyM: 12,
+      speedMps: 0,
+      staying: true,
+    };
+    const holePoints = ingest(holeFixes);
+    const holeMember = {
+      id: 'self',
+      role: 'self',
+      share: 'allowed',
+      lat: holePin.lat,
+      lng: holePin.lng,
+      updatedAt: holePin.at,
+      accuracyM: 12,
+      moving: false,
+      speedMps: 0,
+      staying: true,
+    };
+    const holeMain = memberLiveLines(holeMember, { self: holePoints }, holePin.at + 1_000, undefined, true);
+    const holePaint = await paint(React, root, bundled, holeMain.lines);
+    const holeCoords = coordsOf(holePaint);
+    assert.equal(holePaint.includes(';'), true, `walk hole bridged solid ${holePaint}`);
+    assert.equal(holeCoords[holeCoords.length - 1], `${holePin.lat.toFixed(5)},${holePin.lng.toFixed(5)}`, holePaint);
   } finally {
     root.unmount();
   }

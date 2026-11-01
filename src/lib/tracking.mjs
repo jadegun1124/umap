@@ -461,11 +461,14 @@ export function liveMotionLabel({ located, moving, points, now, pin }) {
   if (movedAt != null && now >= movedAt && now - movedAt < dwell) return '지금';
   const drawn = drawnPoints(points);
   const end = drawn[drawn.length - 1];
-  // The motion sensor often stays still while a network fix keeps moving the pin.
-  // A pin that has left the last vertex is not 「머무름」, even when the chord is
-  // slower than a fresh 2.5s step or the sensor flag is still false.
-  if (pin && end && Number.isFinite(pin.at) && now >= pin.at && now - pin.at < 10 * 60 * 1000) {
-    if (isVehicleStep(end, pin) || travelStep(end, pin)) return '지금';
+  // A fresh pin can still be travel before that sample is a stored vertex.
+  // A walk hop only counts inside the walk dwell. A city-speed pin counts
+  // inside the ride dwell, so a quiet sensor does not say 「머무름」 while driving.
+  // An older hop does not flip the card back to 「지금」.
+  if (pin && end && Number.isFinite(pin.at) && now >= pin.at) {
+    const pinAge = now - pin.at;
+    if (pinAge < RIDE_STAY_LABEL_MS && isVehicleStep(end, pin)) return '지금';
+    if (pinAge < dwell && travelStep(end, pin)) return '지금';
   }
   if (moving === true && movedAt == null) return '지금';
   if (moving === false) return '머무름';

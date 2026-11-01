@@ -4,7 +4,7 @@ import 'leaflet/dist/leaflet.css';
 import { noteDiag } from '../../lib/diagLog.mjs';
 import { hasLocation } from '../../lib/geo';
 import { memberIsStale, memberPresence } from '../../lib/memberPresence.mjs';
-import { isImpossibleJump, trailDrawParts } from '../../lib/tracking.mjs';
+import { isImpossibleJump, isVehicleStep, trailDrawParts, trailSegmentDashed } from '../../lib/tracking.mjs';
 import { VWORLD_ATTRIBUTION, vworldApiKey, vworldBaseTileUrl } from '../../services/vworld';
 import type { HomeZone, Member, TrackPoint } from '../../types/family';
 
@@ -310,9 +310,10 @@ export const StreetMap = forwardRef<StreetMapHandle, {
       if (trailEnd && paintedEnd && Number.isFinite(trailEnd.lat) && Number.isFinite(trailEnd.lng)) {
         const sameTip = Math.abs(paintedEnd.lat - trailEnd.lat) < 1e-5 && Math.abs(paintedEnd.lng - trailEnd.lng) < 1e-5;
         if (!sameTip && !isImpossibleJump(paintedEnd, trailEnd)) {
+          const hole = !isVehicleStep(paintedEnd, trailEnd) && trailSegmentDashed(paintedEnd, trailEnd);
           const previous = parts[parts.length - 1];
-          if (previous && !previous.dashed) previous.points = previous.points.concat([trailEnd]);
-          else parts.push({ points: [paintedEnd, trailEnd], dashed: false });
+          if (!hole && previous && !previous.dashed) previous.points = previous.points.concat([trailEnd]);
+          else parts.push({ points: [paintedEnd, trailEnd], dashed: hole });
         }
       }
       if (parts.length === 0) continue;
