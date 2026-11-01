@@ -1,6 +1,6 @@
 import { noteDiag } from '../lib/diagLog.mjs';
 import { openJson, sealJson, mintFamilyKey, unwrapFamilyKey, wrapFamilyKey } from '../lib/familySeal.mjs';
-import { ensureDevice, familyKeyRecord, rememberFamilyKey } from '../lib/familyVault.mjs';
+import { HISTORY_SHARE_KID, contentKeyBytes, ensureDevice, familyKeyRecord, rememberFamilyKey, rewrapHistoryShares } from '../lib/familyVault.mjs';
 import { rememberPlaceName } from '../lib/placeAlias.mjs';
 import { optionalRouteMissing } from '../lib/syncRoute.mjs';
 import type { FamilyAlert } from './familyAlert';
@@ -362,6 +362,7 @@ type KeyDirectory = {
   pubs?: Record<string, string>;
   wraps?: Record<string, { epk: string; iv: string; ct: string }>;
   revoked?: string[];
+  history?: Record<string, Record<string, { epk: string; iv: string; ct: string }>>;
 };
 
 async function putRoomKeys(code: string, token: string, profileKey: string, body: Record<string, unknown>): Promise<KeyDirectory | null> {
@@ -441,6 +442,39 @@ export async function syncFamilyKeys(code: string, token: string, memberId: stri
         wraps: missing,
       });
     }
+  }
+  const content = contentKeyBytes(device);
+  const existingOwner = directory.history && directory.history[memberId];
+  if (!existingOwner && content) {
+    const ownerShares: Record<string, { epk: string; iv: string; ct: string }> = {};
+    for (const [id, pub] of livePubs) {
+      const wrap = await wrapFamilyKey(pub, content, HISTORY_SHARE_KID);
+      if (wrap) ownerShares[id] = wrap;
+    }
+    if (Object.keys(ownerShares).length) {
+      await putRoomKeys(code, token, profileKey, {
+        memberId,
+        publicKey: device.publicKey,
+        history: { [memberId]: ownerShares },
+      });
+    }
+  } else if (directory.history) {
+    const refreshed = await rewrapHistoryShares({
+      history: directory.history,
+      pubs: directory.pubs || {},
+      holderId: memberId,
+      holderPrivate: device.privateKey,
+    });
+    const mine = refreshed[memberId] && refreshed[memberId][memberId];
+    if (mine) {
+      localStorage.setItem('umap_history_share_v1', JSON.stringify({ memberId, wrap: mine }));
+      window.dispatchEvent(new Event('umap-family-keys'));
+    }
+    await putRoomKeys(code, token, profileKey, {
+      memberId,
+      publicKey: device.publicKey,
+      history: refreshed,
+    });
   }
   return familyKeyRecord(localStorage, code) != null;
 }

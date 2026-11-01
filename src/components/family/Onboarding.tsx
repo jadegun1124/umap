@@ -122,7 +122,7 @@ function Login({ onSubmit }: { onSubmit: (profile: Profile) => void }) {
   };
 
   const finishProvider = (
-    result: { ok: boolean; snapshot?: AccountSnapshot; message?: string; detail?: string },
+    result: { ok: boolean; snapshot?: AccountSnapshot; message?: string; detail?: string; restored?: boolean },
     fallback: string,
   ) => {
     setBusy(false);
@@ -132,7 +132,7 @@ function Login({ onSubmit }: { onSubmit: (profile: Profile) => void }) {
       return;
     }
     setDetail(null);
-    finishAccount(result.snapshot);
+    finishAccount({ ...result.snapshot, restored: result.restored === true });
   };
 
   if (step === 'name') {
@@ -294,7 +294,7 @@ function Login({ onSubmit }: { onSubmit: (profile: Profile) => void }) {
                 return;
               }
               void persistAccountResult(result);
-              finishAccount(result.account, recovery);
+              finishAccount({ ...result.account, restored: result.restored === true }, recovery);
             }).catch(() => {
               setBusy(false);
               setMessage('복구 코드를 확인하지 못했습니다. 위치 서버에 다시 연결해 주세요.');

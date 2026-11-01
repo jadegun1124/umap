@@ -133,9 +133,12 @@ export function interpretAccountDelete(status, body) {
 
 export function accountNeedsDisplayName(account) {
   if (!account || typeof account !== 'object') return false;
-  if (account.created === true || account.nameChosen === false) return true;
+  if (account.created === true) return true;
   const name = account.profile && typeof account.profile.name === 'string' ? account.profile.name.trim() : '';
-  return !name;
+  if (!name || name === '가족') return true;
+  if (account.restored === true) return false;
+  if (account.nameChosen === false) return true;
+  return false;
 }
 
 export function rememberAccountSecrets(storage, account) {
@@ -187,10 +190,46 @@ export function snapshotFromSession(state) {
       readKey: state.syncReadKey,
     },
     guardians: Array.isArray(state.guardians) ? state.guardians : [],
+    roster: rosterFromMembers(state.members),
     home: state.home || null,
     ...(state.homeCleared ? { homeCleared: true } : {}),
     journeys: selfJourneys(state.journeys, profile.id),
     visits: selfVisits(state.visits, profile.id),
+  };
+}
+
+function rosterFromMembers(members) {
+  const roster = [];
+  for (const member of Array.isArray(members) ? members : []) {
+    if (!member || member.id === 'self' || member.role === 'self') continue;
+    const name = typeof member.name === 'string' ? member.name.trim().slice(0, 20) : '';
+    const id = typeof member.id === 'string' ? member.id.trim().slice(0, 80) : '';
+    if (!name || !id) continue;
+    const row = { id, name };
+    if (typeof member.role === 'string' && member.role) row.role = member.role.slice(0, 20);
+    if (typeof member.publisherId === 'string' && member.publisherId) row.publisherId = member.publisherId.slice(0, 80);
+    if (typeof member.inviteCode === 'string' && member.inviteCode) row.inviteCode = member.inviteCode.slice(0, 6);
+    roster.push(row);
+    if (roster.length >= 12) break;
+  }
+  return roster;
+}
+
+function restoredMember(row) {
+  return {
+    id: row.id,
+    name: row.name,
+    role: row.role || 'admin-share',
+    lat: null,
+    lng: null,
+    accuracyM: 0,
+    battery: null,
+    charging: null,
+    updatedAt: 0,
+    moving: null,
+    share: 'allowed',
+    ...(row.publisherId ? { publisherId: row.publisherId } : {}),
+    ...(row.inviteCode ? { inviteCode: row.inviteCode } : {}),
   };
 }
 
@@ -229,11 +268,17 @@ export function applyAccountSnapshot(state, account) {
   };
   const journeys = Array.isArray(account.journeys) ? account.journeys : [];
   const visits = Array.isArray(account.visits) ? account.visits : [];
-  const nextStage = state.permissions?.completed ? 'map' : 'survey';
+  const roster = Array.isArray(account.roster) ? account.roster : [];
+  const others = roster
+    .filter((row) => row && row.id && row.id !== 'self' && row.name)
+    .map((row) => restoredMember(row));
+  const nextStage = account.created === true
+    ? (state.permissions?.completed ? 'map' : 'survey')
+    : 'map';
   return {
     ...state,
     profile,
-    members: [selfMember(profile)],
+    members: [selfMember(profile), ...others],
     inviteCode: account.room.code,
     syncWriteKey: account.room.writeKey,
     syncReadKey: account.room.readKey,
