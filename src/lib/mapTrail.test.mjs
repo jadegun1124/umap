@@ -349,9 +349,14 @@ test('a 1.12-quality walk draws the same polyline as the 1.12 pipeline', () => {
     current = settleTrailPoint(current, fix, fix.at).points;
     previous = settle112(previous, fix, fix.at).points;
   }
-  assert.equal(paintParts(trailDrawParts(current)), paintParts(draw112(previous)));
   const gap = fixes.find((fix) => fix.speedMps === 0 && fix.staying === true);
-  assert.equal(paintParts(trailDrawParts(current)).includes(`${gap.lat.toFixed(5)},${gap.lng.toFixed(5)}`), true);
+  const parts = trailDrawParts(current);
+  assert.equal(paintParts(parts).includes(`${gap.lat.toFixed(5)},${gap.lng.toFixed(5)}`), true);
+  assert.equal(parts.some((part) => part.dashed && part.points.some((point) => point.lat === gap.lat)), true);
+  const continued = parts.filter((part) => part.points[part.points.length - 1].at > gap.at);
+  assert.ok(continued.some((part) => !part.dashed && part.points.length >= 2));
+  assert.equal(continued.some((part) => part.dashed), false);
+  assert.ok(draw112(previous).some((part) => part.dashed));
 });
 
 test('records include archived journeys even when the live segment is gone', () => {

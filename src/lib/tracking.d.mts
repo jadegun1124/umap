@@ -113,6 +113,7 @@ export function trailSegmentDashed(start: TrailSample | null | undefined, end: T
 export function trailDrawParts(points: TrailSample[] | null | undefined): { points: TrailSample[]; dashed: boolean }[];
 export function visibleTrail(points: TrailSample[] | null | undefined): TrailSample[];
 export function displayCoordinate<T extends TrailSample>(points: TrailSample[] | null | undefined, point: T): T;
+export function walkLeavesStay(points: TrailSample[] | null | undefined, point: TrailSample | null | undefined): boolean;
 export function settleTrailPoint(
   points: TrailSample[] | null | undefined,
   point: TrailSample,

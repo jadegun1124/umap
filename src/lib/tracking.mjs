@@ -687,7 +687,65 @@ function indoorStayDrift(points, point) {
   return point.staying === true && moved >= TRAIL_WALK_VERTEX_M;
 }
 
+function longStayMarked(points, anchor) {
+  const last = Array.isArray(points) ? points[points.length - 1] : null;
+  return !!(last?.stayEnd && anchor && last.at - anchor.at >= STOP_MIN_MS);
+}
+
+/** The sit this short step is leaving, once that sit itself lasted. */
+function staySit(points, anchor) {
+  const prev = previousVertex(points);
+  if (!prev || !anchor) return null;
+  return anchor.at - prev.at >= STOP_MIN_MS ? prev : null;
+}
+
+/**
+ * A real walk leaving a sit. Indoor jitter has no direction, or a reported
+ * speed near zero. A walk has good accuracy and keeps getting farther from
+ * the sit at a walking pace. The first step's clock still includes the sit,
+ * so that one short step is kept and the next sample shows the pace.
+ */
+function departsOnFoot(points, point) {
+  if (!point || point.stayEnd) return false;
+  const accuracy = positiveMeters(point.accuracyM);
+  if (!(accuracy > 0) || accuracy > 25) return false;
+  const reported = pointSpeed(point);
+  if (reported != null && reported < 0.4) return false;
+  const list = Array.isArray(points) ? points : [];
+  const anchor = drawnAnchor(list);
+  if (!anchor || !Number.isFinite(anchor.at)) return false;
+  const moved = haversineMeters(anchor, point);
+  const dt = point.at - anchor.at;
+  if (!(moved >= 8) || dt < 800) return false;
+  const speed = moved / (dt / 1000);
+  const origin = previousVertex(list);
+  const folding = origin && haversineMeters(origin, point) + 4 < haversineMeters(origin, anchor);
+  const longSit = dt >= STOP_MIN_MS || longStayMarked(list, anchor);
+  if (dt <= 90_000 && speed >= 0.7 && speed <= 2.6 && !folding) {
+    const sit = longSit ? null : staySit(list, anchor);
+    if (sit && haversineMeters(sit, point) + 4 < haversineMeters(sit, anchor)) return false;
+    return true;
+  }
+  if (point.staying !== true || !longSit || moved > 48) return false;
+  return true;
+}
+
+/** A lone first step off a sit. The next sample must continue it, or it is jitter. */
+function unconfirmedDeparture(prev, tip) {
+  if (!prev || !tip || tip.staying !== true) return false;
+  const reported = pointSpeed(tip);
+  if (reported != null && reported >= 0.4) return false;
+  const moved = haversineMeters(prev, tip);
+  const dt = tip.at - prev.at;
+  return moved >= 8 && moved <= 48 && dt >= STOP_MIN_MS;
+}
+
+export function walkLeavesStay(points, point) {
+  return departsOnFoot(points, point);
+}
+
 function resolvedTrailDecision(points, point) {
+  if (departsOnFoot(points, point)) return 'keep';
   const anchor = drawnAnchor(Array.isArray(points) ? points : []);
   const decision = trailDecision(anchor, point);
   if (decision === 'keep' && indoorStayDrift(points, point)) return 'snap';
@@ -756,6 +814,17 @@ function trailingSpur(points, point) {
   const tip = drawnAnchor(points);
   const prev = previousVertex(points);
   if (!tip || !prev || !point || tip === point) return false;
+  if (unconfirmedDeparture(prev, tip)) {
+    const step = stepPace(tip, point);
+    const onward = step
+      && step.moved >= 8
+      && step.dt >= 800
+      && step.dt <= 90_000
+      && step.speed >= 0.7
+      && step.speed <= 2.6
+      && haversineMeters(prev, point) + 4 >= haversineMeters(prev, tip);
+    if (!onward) return true;
+  }
   if (spikeDeviation(prev, tip, point) > 0) return true;
   // A stored walk often has no speed. Only an explicit still reading (stay flag or ~0 m/s) is a spike.
   const tipStill = tip.staying === true || (pointSpeed(tip) != null && pointSpeed(tip) < TRAIL_STAY_SPEED_MPS);
@@ -1129,11 +1198,11 @@ export function trailSegmentDashed(start, end) {
  */
 export function trailDrawDashed(start, end, prior) {
   if (!trailSegmentDashed(start, end)) return false;
-  if (start?.staying === true || end?.staying === true) return true;
   const moved = haversineMeters(start, end);
   const dt = Number(end.at) - Number(start.at);
   if (!Number.isFinite(moved) || !Number.isFinite(dt) || dt <= 0) return true;
   const pace = moved / (dt / 1000);
+  // A stay flag left over from the sit does not turn a walked pace into a hole.
   if (moved > TRAIL_WALK_CHORD_M || pace < 0.7 || pace > 2.8) return true;
   if (prior && !prior.stayEnd && Number.isFinite(prior.lat) && Number.isFinite(prior.lng)) {
     const prevMoved = haversineMeters(prior, start);
@@ -1167,7 +1236,7 @@ export function trailDrawParts(points) {
     if (isImpossibleJump(prev, next)) {
       flushRun();
       run = [next];
-    } else if (!isVehicleStep(prev, next) && trailSegmentDashed(prev, next)) {
+    } else if (!isVehicleStep(prev, next) && trailDrawDashed(prev, next, index >= 2 ? sampled[index - 2] : null)) {
       flushRun();
       parts.push({ points: [prev, next], dashed: true });
       run = [next];

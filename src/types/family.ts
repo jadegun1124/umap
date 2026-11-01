@@ -59,6 +59,9 @@ export interface Member {
   /** Publisher's stable member id. Display name can change without moving this row. */
   publisherId?: string;
   place?: string | null;
+  /** Where `place` was looked up. A later accurate walk is measured from here. */
+  placeLat?: number | null;
+  placeLng?: number | null;
   inviteCode?: string;
   share: ShareState;
   /** The other phone still publishes a clear location, so it has not updated to 1.36. */

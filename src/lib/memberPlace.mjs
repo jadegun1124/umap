@@ -12,9 +12,22 @@ export function samePlaceBucket(aLat, aLng, bLat, bLng) {
   return Math.abs(aLat - bLat) < 0.0027 && Math.abs(aLng - bLng) < 0.0035;
 }
 
-export function carryPlace(previous, lat, lng) {
+function metersBetween(aLat, aLng, bLat, bLng) {
+  const dLat = ((bLat - aLat) * Math.PI) / 180;
+  const dLng = ((bLng - aLng) * Math.PI) / 180;
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos((aLat * Math.PI) / 180) * Math.cos((bLat * Math.PI) / 180) * Math.sin(dLng / 2) ** 2;
+  return 2 * 6371000 * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
+export function carryPlace(previous, lat, lng, options = {}) {
   if (!previous || previous.lat == null || previous.lng == null) return '';
-  if (!samePlaceBucket(previous.lat, previous.lng, lat, lng)) return '';
+  const anchorLat = Number.isFinite(previous.placeLat) ? previous.placeLat : previous.lat;
+  const anchorLng = Number.isFinite(previous.placeLng) ? previous.placeLng : previous.lng;
+  const moved = metersBetween(anchorLat, anchorLng, lat, lng);
+  const accuracy = Number(options.accuracyM);
+  const accurate = !Number.isFinite(accuracy) || accuracy <= 25;
+  if (options.directed === true && accurate && moved >= 40) return '';
+  if (!samePlaceBucket(anchorLat, anchorLng, lat, lng)) return '';
   return cleanPlace(previous.place);
 }
 
