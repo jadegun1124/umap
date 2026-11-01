@@ -163,6 +163,7 @@ public class LocationKeepService {
             lastError = "config";
             return false;
         }
+        prefs(context).edit().putBoolean("keepWanted", true).commit();
         if (!hasLocationPermission(context)) {
             lastError = "permission";
             disarm(context);
@@ -203,7 +204,7 @@ public class LocationKeepService {
 
     public static void stop(Context context) {
         attach(context);
-        prefs(context).edit().remove("config").putBoolean("registered", false).commit();
+        prefs(context).edit().remove("config").putBoolean("registered", false).putBoolean("keepWanted", false).commit();
         synchronized (LOCK) {
             clearFilter(context);
             removeUpdates(context);
@@ -213,7 +214,7 @@ public class LocationKeepService {
     }
 
     public static void markUserStopped(Context context) {
-        prefs(context).edit().remove("config").putBoolean("registered", false).putBoolean("userStopped", true).commit();
+        prefs(context).edit().remove("config").putBoolean("registered", false).putBoolean("keepWanted", false).putBoolean("userStopped", true).commit();
         synchronized (LOCK) {
             clearFilter(context);
             removeUpdates(context);
@@ -227,6 +228,18 @@ public class LocationKeepService {
 
     public static boolean userStopped(Context context) {
         return prefs(context).getBoolean("userStopped", false);
+    }
+
+    /** Boot and an APK update drop the LocationManager registration. The saved config starts it again. */
+    public static void restartIfWanted(Context context) {
+        if (context == null) return;
+        attach(context);
+        if (userStopped(context)) return;
+        boolean wanted = prefs(context).getBoolean("keepWanted", false) || prefs(context).getBoolean("registered", false);
+        if (!wanted) return;
+        JSONObject config = readConfig(context);
+        if (config == null) return;
+        start(context, config.toString());
     }
 
     @SuppressWarnings("deprecation")

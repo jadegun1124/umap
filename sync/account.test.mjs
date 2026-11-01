@@ -845,6 +845,43 @@ test('kakao verification reports the upstream code and never logs the token', as
   }
 });
 
+test('an empty keepHistory backup does not erase stored journeys', async () => {
+  const accounts = createMemoryAccountStore();
+  const created = await accountCall(accounts, 'POST', '/v1/account', { body: snapshot() });
+  assert.equal(created.status, 200);
+  const kept = await accountCall(accounts, 'PUT', '/v1/account', {
+    accountKey: created.body.account.accountKey,
+    body: { ...snapshot({ journeys: [], visits: [], home: null }), keepHistory: true },
+  });
+  assert.equal(kept.status, 200);
+  assert.equal(kept.body.account.journeys[0].start.label, '하계1차청구아파트 104동');
+  const home = await accountCall(accounts, 'PUT', '/v1/account', {
+    accountKey: created.body.account.accountKey,
+    body: {
+      ...snapshot({ journeys: [], visits: [] }),
+      keepHistory: true,
+      home: { label: '우리 집', lat: 37.6365, lng: 127.068, radiusM: 150 },
+    },
+  });
+  assert.equal(home.status, 200);
+  assert.equal(home.body.account.journeys[0].start.label, '하계1차청구아파트 104동');
+  assert.equal(home.body.account.home.label, '우리 집');
+  const keptHome = await accountCall(accounts, 'PUT', '/v1/account', {
+    accountKey: created.body.account.accountKey,
+    body: { ...snapshot({ journeys: [], visits: [], home: null }), keepHistory: true },
+  });
+  assert.equal(keptHome.status, 200);
+  assert.equal(keptHome.body.account.home.label, '우리 집');
+  const cleared = await accountCall(accounts, 'PUT', '/v1/account', {
+    accountKey: created.body.account.accountKey,
+    body: { ...snapshot({ journeys: [], visits: [], home: null }), keepHistory: true, homeCleared: true },
+  });
+  assert.equal(cleared.status, 200);
+  assert.equal(cleared.body.account.home, null);
+  assert.equal(cleared.body.account.clearHome, true);
+  assert.equal(cleared.body.account.journeys[0].start.label, '하계1차청구아파트 104동');
+});
+
 test('a sealed backup deletes plaintext history and the stored recovery code', async () => {
   const { base64UrlToBytes, mintDeviceKey, sealJson, wrapVault } = await import('../src/lib/familySeal.mjs');
   const accounts = createMemoryAccountStore();

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createMemoryAccountStore } from './account.mjs';
+import { cleanDiagEvents } from './diag.mjs';
 import { createMemoryStore, handleSyncRequest } from './protocol.mjs';
 
 function snapshot() {
@@ -27,6 +28,20 @@ async function call(accounts, method, path, { body, accountKey, now } = {}) {
   const text = await response.text();
   return { status: response.status, body: text ? JSON.parse(text) : null };
 }
+
+test('geocode candidates and the app version are kept in a diagnostic report', () => {
+  const names = '하계청구아파트,하계 1차청구아파트,105동';
+  const events = cleanDiagEvents([{
+    kind: 'geocode',
+    t: 1,
+    label: '하계 1차청구아파트 105동',
+    candidates: names,
+    version: '1.44.0',
+  }]);
+  assert.equal(events[0].candidates, names);
+  assert.equal(events[0].label, '하계 1차청구아파트 105동');
+  assert.equal(events[0].version, '1.44.0');
+});
 
 test('a diagnostic report is stored on the account and read only by its id', async () => {
   const accounts = createMemoryAccountStore();

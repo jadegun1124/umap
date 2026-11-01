@@ -99,6 +99,15 @@ export async function registerFamilyAccount(snapshot: AccountSnapshot) {
   return readAccountBody(response);
 }
 
+export async function loadFamilyAccount(accountKey = readStoredAccountKey(typeof localStorage === 'undefined' ? null : localStorage)) {
+  if (!accountKey) return { ok: false as const, message: '계정이 없습니다.' };
+  const response = await request('/v1/account', {
+    method: 'GET',
+    headers: accountHeaders(accountKey),
+  });
+  return readAccountBody(response);
+}
+
 export async function backupFamilyAccount(snapshot: AccountSnapshot, accountKey = readStoredAccountKey(localStorage)) {
   if (!accountKey) return registerFamilyAccount(snapshot);
   const response = await request('/v1/account', {

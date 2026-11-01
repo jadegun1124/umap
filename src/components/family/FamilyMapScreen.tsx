@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Bell, ChevronLeft, ChevronRight, Copy, Home, LocateFixed, MapPin, Menu, Plus, Route, Settings, UserPlus, X } from 'lucide-react';
-import { currentAppVersionLabel } from '../../lib/appRelease.mjs';
+import { APP_VERSION_NAME, currentAppVersionLabel } from '../../lib/appRelease.mjs';
 import { looksLikePhone, localProfile } from '../../lib/localProfile.mjs';
 import { KAKAO_SETUP_MESSAGE } from '../../lib/kakaoAuth.mjs';
 import { NAVER_SETUP_MESSAGE } from '../../lib/naverAuth.mjs';
@@ -124,6 +124,7 @@ export function FamilyMapScreen() {
       return;
     }
     let cancel = false;
+    let noted = '';
     const refresh = () => {
       void umapLocation.status().then((status) => {
         if (cancel) return;
@@ -135,7 +136,25 @@ export function FamilyMapScreen() {
           keepAlive: state.backgroundKeepAlive,
           locationMode: state.permissions.locationMode,
           batteryUnrestricted: status.batteryUnrestricted,
+          reason: status.reason || '',
         }));
+        const row = [
+          APP_VERSION_NAME,
+          state.backgroundKeepAlive ? 'on' : 'off',
+          status.running ? 'yes' : 'no',
+          state.permissions.locationMode || 'unknown',
+          status.batteryUnrestricted === false ? 'restricted' : 'open',
+        ].join('|');
+        if (row === noted) return;
+        noted = row;
+        noteDiag({
+          kind: 'keep',
+          version: APP_VERSION_NAME,
+          keep: state.backgroundKeepAlive ? 'on' : 'off',
+          running: status.running ? 'yes' : 'no',
+          location: state.permissions.locationMode || 'unknown',
+          battery: status.batteryUnrestricted === false ? 'restricted' : 'open',
+        });
       }).catch(() => undefined);
     };
     refresh();
@@ -144,10 +163,12 @@ export function FamilyMapScreen() {
       if (document.visibilityState === 'visible') refresh();
     };
     document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('umap-keep-status', refresh);
     return () => {
       cancel = true;
       window.clearInterval(timer);
       document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('umap-keep-status', refresh);
     };
   }, [state.backgroundKeepAlive, state.permissions.locationMode, state.stage]);
   useEffect(() => {

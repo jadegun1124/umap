@@ -44,6 +44,29 @@ test('keep without 항상 허용 opens the location setting', () => {
   assert.equal(banner.action, 'always');
 });
 
+test('a stopped keep says when the permission or the battery is what blocked it', () => {
+  const permission = keepBanner({
+    native: true,
+    onMap: true,
+    serviceRunning: false,
+    keepAlive: true,
+    locationMode: 'always',
+    reason: 'permission',
+  });
+  assert.equal(permission.action, 'always');
+  assert.match(permission.text, /항상 허용이 아닙니다/);
+  const battery = keepBanner({
+    native: true,
+    onMap: true,
+    serviceRunning: false,
+    keepAlive: true,
+    locationMode: 'always',
+    batteryUnrestricted: false,
+  });
+  assert.equal(battery.action, 'battery');
+  assert.match(battery.text, /제한 없음/);
+});
+
 test('a running keep service only warns when the battery is restricted', () => {
   assert.equal(keepBanner({
     native: true,

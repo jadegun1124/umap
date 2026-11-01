@@ -446,7 +446,10 @@ test('a previous cache generation does not keep the short complex name', async (
   const pin = { lat: 37.6372, lng: 127.07085 };
   const key = placeGridKey(pin.lat, pin.lng);
   const saved = globalThis.localStorage;
-  const store = new Map([['umap_geocode_cache_v8', JSON.stringify({ [key]: '하계청구아파트' })]]);
+  const store = new Map([
+    ['umap_geocode_cache_v8', JSON.stringify({ [key]: '하계청구아파트' })],
+    ['umap_geocode_cache_v9', JSON.stringify({ [key]: '하계청구아파트' })],
+  ]);
   globalThis.localStorage = {
     getItem: (id) => (store.has(id) ? store.get(id) : null),
     setItem: (id, value) => { store.set(id, value); },
@@ -586,6 +589,36 @@ test('reverse geocode of the 105동 west edge does not keep 노원소방서', as
   };
   const label = await reverseGeocode(pin.lat, pin.lng, { fetch: fetchImpl, key: 'test-key', kakaoKey: 'kakao', pace: false });
   assert.equal(label, '하계1차청구아파트 105동');
+});
+
+test('a VWorld place search keeps 동 and the longer complex name', async () => {
+  const pin = { lat: 37.6372, lng: 127.07085 };
+  const fetchImpl = async (url) => {
+    const target = String(url);
+    if (target.includes('req/search')) {
+      return jsonResponse({
+        response: {
+          result: {
+            items: [{ title: '하계 1차청구아파트', point: { x: String(pin.lng), y: String(pin.lat) } }],
+          },
+        },
+      });
+    }
+    if (target.includes('LT_C_BLDGINFO')) {
+      return jsonResponse({
+        response: {
+          result: {
+            featureCollection: {
+              features: [{ properties: { buld_nm: '하계청구아파트', dong_nm: '105' } }],
+            },
+          },
+        },
+      });
+    }
+    return jsonResponse({ elements: [] });
+  };
+  const label = await reverseGeocode(pin.lat, pin.lng, { fetch: fetchImpl, key: 'test-key', pace: false });
+  assert.equal(label, '하계 1차청구아파트 105동');
 });
 
 test('family card status starts with the neighborhood, never 근처', () => {

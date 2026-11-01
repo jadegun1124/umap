@@ -139,6 +139,8 @@ export interface Session {
   accountVault: unknown;
   backgroundKeepAlive: boolean;
   home: HomeZone | null;
+  /** True after the person clears 우리 집, so an empty backup does not mean "no home loaded". */
+  homeCleared?: boolean;
   inviteCode: string;
   notices: FamilyNotice[];
   tab: FamilyTab;

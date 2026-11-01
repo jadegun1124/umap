@@ -73,15 +73,33 @@ export function contentKeyBytes(device) {
   return key && key.length === 32 ? key : null;
 }
 
+export function snapshotHistoryEmpty(snapshot) {
+  const journeys = Array.isArray(snapshot && snapshot.journeys) ? snapshot.journeys : [];
+  const visits = Array.isArray(snapshot && snapshot.visits) ? snapshot.visits : [];
+  return journeys.length === 0 && visits.length === 0;
+}
+
+function keepStoredHistory(snapshot) {
+  const kept = { ...snapshot, keepHistory: true };
+  delete kept.journeys;
+  delete kept.visits;
+  delete kept.home;
+  delete kept.sealedHistory;
+  return kept;
+}
+
 export async function prepareBackup(snapshot, storage, recoveryCode) {
-  const code = normalizeRecoveryCode(recoveryCode);
-  if (!code) {
-    const kept = { ...snapshot, keepHistory: true };
-    delete kept.journeys;
-    delete kept.visits;
-    delete kept.home;
+  if (!snapshot || typeof snapshot !== 'object') return snapshot;
+  // An update can open an empty session before the device seal. Sealing that
+  // empty list replaces the server's sealedHistory. Keep what is already there.
+  if (snapshotHistoryEmpty(snapshot)) {
+    const kept = keepStoredHistory(snapshot);
+    if (snapshot.home) kept.home = snapshot.home;
+    if (snapshot.homeCleared === true && !snapshot.home) kept.clearHome = true;
     return kept;
   }
+  const code = normalizeRecoveryCode(recoveryCode);
+  if (!code) return keepStoredHistory(snapshot);
   const device = await ensureDevice(storage);
   const vault = await wrapVault(code, device);
   const content = contentKeyBytes(device);
@@ -133,7 +151,7 @@ export async function openAccountSecrets(account, storage, typedCode = '') {
     if (opened && typeof opened === 'object') {
       journeys = Array.isArray(opened.journeys) ? opened.journeys : [];
       visits = Array.isArray(opened.visits) ? opened.visits : [];
-      home = opened.home || null;
+      home = account.clearHome ? null : (account.home || opened.home || null);
     } else if (!Array.isArray(account.journeys) || account.journeys.length === 0) {
       historyLocked = true;
     }

@@ -3,6 +3,7 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { noteDiag } from '../../lib/diagLog.mjs';
 import { hasLocation } from '../../lib/geo';
+import { spreadPinPositions } from '../../lib/mapPinSpread.mjs';
 import { memberIsStale, memberPresence } from '../../lib/memberPresence.mjs';
 import { isImpossibleJump, isVehicleStep, trailDrawParts, trailSegmentDashed } from '../../lib/tracking.mjs';
 import { VWORLD_ATTRIBUTION, vworldApiKey, vworldBaseTileUrl } from '../../services/vworld';
@@ -258,8 +259,10 @@ export const StreetMap = forwardRef<StreetMapHandle, {
       }).addTo(group);
     }
 
+    const pins = spreadPinPositions(members);
     for (const member of members) {
       if (!hasLocation(member)) continue;
+      const at = pins.get(member.id) || member;
       const selected = member.id === selectedId;
       const dimmed = memberIsStale(memberPresence(member, Date.now()));
       const color = '#0084FF';
@@ -275,7 +278,7 @@ export const StreetMap = forwardRef<StreetMapHandle, {
       const face = photo
         ? `<img alt="" src="${escapeHtml(photo)}" style="width:42px;height:42px;border-radius:999px;object-fit:cover;border:4px solid #fff;box-shadow:0 6px 16px rgba(15,23,42,.2)"/>`
         : `<span style="width:42px;height:42px;border-radius:999px;border:4px solid #fff;background:${color};color:#fff;display:flex;align-items:center;justify-content:center;font-weight:900;box-shadow:0 6px 16px rgba(15,23,42,.2)">${initial}</span>`;
-      const marker = L.marker([member.lat, member.lng], {
+      const marker = L.marker([at.lat, at.lng], {
         zIndexOffset: selected ? 800 : 400,
         icon: L.divIcon({
           className: 'umap-member-pin',

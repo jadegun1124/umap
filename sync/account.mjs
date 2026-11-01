@@ -306,12 +306,13 @@ export function cleanAccountSnapshot(input, now = Date.now()) {
       profile: { name, photo: photo ?? null },
       room,
       guardians,
-      home: sealedHistory || keepHistory ? null : cleanHome(input.home),
+      home: sealedHistory ? null : cleanHome(input.home),
       journeys,
       visits,
       ...(vault ? { vault } : {}),
       ...(sealedHistory ? { sealedHistory } : {}),
       ...(keepHistory ? { keepHistory: true } : {}),
+      ...(keepHistory && input.homeCleared === true && !cleanHome(input.home) ? { clearHome: true } : {}),
       ...(input.dropRecovery === true && vault ? { dropRecovery: true } : {}),
     },
   };
@@ -325,7 +326,8 @@ export function publicAccount(record, extras = {}) {
     profile: record.profile,
     room: record.room,
     guardians: record.guardians || [],
-    home: record.sealedHistory ? null : (record.home || null),
+    home: record.clearHome ? null : (record.home || null),
+    clearHome: record.clearHome === true,
     journeys: record.sealedHistory ? [] : (record.journeys || []),
     visits: record.sealedHistory ? [] : (record.visits || []),
     recoveryCode: record.recoveryCode ? formatRecoveryCode(record.recoveryCode) : '',
@@ -510,10 +512,18 @@ function mergeSnapshot(record, snapshot, now) {
     next.journeys = [];
     next.visits = [];
     next.home = null;
+    next.clearHome = false;
   } else if (!snapshot.keepHistory) {
     next.home = snapshot.home;
     next.journeys = snapshot.journeys;
     next.visits = snapshot.visits;
+    next.clearHome = false;
+  } else if (snapshot.clearHome === true) {
+    next.home = null;
+    next.clearHome = true;
+  } else if (snapshot.home) {
+    next.home = snapshot.home;
+    next.clearHome = false;
   }
   if (snapshot.dropRecovery && next.vault) next.recoveryCode = '';
   return next;

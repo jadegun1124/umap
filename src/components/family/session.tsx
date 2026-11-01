@@ -1,8 +1,18 @@
-import React, { createContext, useContext, useEffect, useReducer } from 'react';
+import React, { createContext, useContext, useEffect, useReducer, useRef, useState } from 'react';
 import { hasLocation, haversineMeters } from '../../lib/geo';
-import { applyAccountSnapshot, clearDeviceAccount, logoutLocalAccount } from '../../lib/accountRestore.mjs';
+import { applyAccountSnapshot, clearDeviceAccount, logoutLocalAccount, readStoredAccountKey } from '../../lib/accountRestore.mjs';
 import { deviceSealAvailable, openDeviceText, sealDeviceText } from '../../lib/deviceSeal.mjs';
-import { cancelAccountBackup, scheduleAccountBackup } from '../../services/familyAccount';
+import { openAccountSecrets } from '../../lib/familyVault.mjs';
+import {
+  FAMILY_STORAGE_KEY,
+  clearPlainSession,
+  collectJsonSnapshots,
+  commitDurableSession,
+  fillFromAccount,
+  needsHistoryRestore,
+  readSeal,
+} from '../../lib/sessionDurable.mjs';
+import { cancelAccountBackup, loadFamilyAccount, scheduleAccountBackup } from '../../services/familyAccount';
 import { deviceProfileKey, localProfile } from '../../lib/localProfile.mjs';
 import { carryPlace, cleanPlace } from '../../lib/memberPlace.mjs';
 import { isSelfEchoPlace, mergePeerSessions, withoutSelfEcho } from '../../lib/peerFamily.mjs';
@@ -46,21 +56,25 @@ type CanonicalTrail = {
   journeys: Journey[];
 };
 
-const STORAGE_KEY = 'umap_family_v1';
+const STORAGE_KEY = FAMILY_STORAGE_KEY;
 const DEVICE_SEAL_PREFIX = 'umap-device-seal:';
 let pendingDeviceSeal = '';
 let restoringDeviceSeal = false;
+let sealOpened = true;
+let appliedPlain = '';
 let sealEpoch = 0;
 
 function cancelDeviceSealRestore() {
   sealEpoch += 1;
   restoringDeviceSeal = false;
   pendingDeviceSeal = '';
+  sealOpened = true;
 }
 const SESSION_KEYS = [STORAGE_KEY, `${STORAGE_KEY}:admin`, `${STORAGE_KEY}:managed`] as const;
 
 function clearStoredSessions() {
   sessionStorage.removeItem(STORAGE_KEY);
+  clearPlainSession(typeof localStorage === 'undefined' ? null : localStorage);
   for (const key of SESSION_KEYS) {
     localStorage.removeItem(key);
     localStorage.removeItem(`${key}:at`);
@@ -68,22 +82,10 @@ function clearStoredSessions() {
 }
 
 function storedSnapshots(): Session[] {
-  const found: Session[] = [];
-  const push = (raw: string, at: number) => {
-    try {
-      const parsed: unknown = JSON.parse(raw);
-      if (isSession(parsed)) found.push({ ...parsed, savedAt: at } as Session);
-    } catch {
-      /* 깨진 저장은 건너뛴다 */
-    }
-  };
-  const tab = sessionStorage.getItem(STORAGE_KEY);
-  if (tab) push(tab, Date.now());
-  for (const key of SESSION_KEYS) {
-    const raw = localStorage.getItem(key);
-    if (raw) push(raw, Number(localStorage.getItem(`${key}:at`) || 0));
-  }
-  return found;
+  return collectJsonSnapshots(
+    typeof localStorage === 'undefined' ? null : localStorage,
+    typeof sessionStorage === 'undefined' ? null : sessionStorage,
+  ).filter(isSession);
 }
 
 const EMPTY_TERMS: Record<string, boolean> = {
@@ -131,12 +133,7 @@ function shouldReset(): boolean {
 }
 
 function sealedSession() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    return raw && raw.startsWith(DEVICE_SEAL_PREFIX) ? raw : '';
-  } catch {
-    return '';
-  }
+  return readSeal(typeof localStorage === 'undefined' ? null : localStorage);
 }
 
 function fresh(stage: Stage = 'splash'): Session {
@@ -161,6 +158,7 @@ function fresh(stage: Stage = 'splash'): Session {
     accountVault: null,
     backgroundKeepAlive: false,
     home: null,
+    homeCleared: false,
     inviteCode: String(10000 + Math.floor(Math.random() * 90000)),
     notices: [],
     tab: 'map',
@@ -567,9 +565,13 @@ function load(): Session {
       if (sealed) {
         pendingDeviceSeal = sealed;
         restoringDeviceSeal = true;
+        sealOpened = false;
+      } else {
+        sealOpened = true;
       }
       return { ...fresh(), pendingSyncToken };
     }
+    sealOpened = true;
     const parsed = merged;
     const invite = readInvite();
     const base = fresh();
@@ -623,7 +625,13 @@ function load(): Session {
     }, now));
   } catch {
     const sealed = sealedSession();
-    if (sealed) pendingDeviceSeal = sealed;
+    if (sealed) {
+      pendingDeviceSeal = sealed;
+      restoringDeviceSeal = true;
+      sealOpened = false;
+    } else {
+      sealOpened = true;
+    }
     return { ...fresh(), pendingSyncToken };
   }
 }
@@ -679,6 +687,7 @@ type Action =
   | { type: 'set-motion-alert-phase'; phase: Session['motionAlertPhase'] }
   | { type: 'notice'; notice: FamilyNotice }
   | { type: 'logout' }
+  | { type: 'fill-history'; journeys: Journey[]; visits: Visit[]; home: Session['home'] }
   | { type: 'unlock-history'; journeys: Journey[]; visits: Visit[]; home: Session['home'] }
   | { type: 'restore-account'; account: Parameters<typeof applyAccountSnapshot>[1] }
   | { type: 'clear-family-room'; serverNote: string | null }
@@ -793,13 +802,14 @@ function reduceSession(state: Session, action: Action): Session {
       return archiveJourneys({
         ...state,
         home: { ...action.home, alertPhone: '' },
+        homeCleared: false,
         phone: state.phone,
         notices: [created, ...state.notices],
         tab: 'map',
       }, Date.now());
     }
     case 'clear-home':
-      return { ...state, home: null };
+      return { ...state, home: null, homeCleared: true };
     case 'add-member': {
       const name = action.name.trim();
       if (name.length < 1) return state;
@@ -1442,6 +1452,25 @@ function reduceSession(state: Session, action: Action): Session {
       return { ...state, notices: [action.notice, ...state.notices].slice(0, 40) };
     case 'logout':
       return fresh('login');
+    case 'fill-history': {
+      const journeysEmpty = !Object.values(state.journeys || {}).some((list) => Array.isArray(list) && list.length > 0);
+      const visitsEmpty = !Object.values(state.visits || {}).some((list) => Array.isArray(list) && list.length > 0);
+      const nextJourneys = journeysEmpty && action.journeys.length
+        ? { ...state.journeys, ...(cleanJourneys({ self: action.journeys })) }
+        : state.journeys;
+      const nextVisits = visitsEmpty && action.visits.length
+        ? { ...state.visits, ...(cleanVisits({ self: action.visits })) }
+        : state.visits;
+      const nextHome = state.homeCleared ? state.home : (state.home || cleanHome(action.home));
+      if (nextJourneys === state.journeys && nextVisits === state.visits && nextHome === state.home) return state;
+      return {
+        ...state,
+        historyLocked: false,
+        journeys: nextJourneys,
+        visits: nextVisits,
+        home: nextHome,
+      };
+    }
     case 'unlock-history': {
       return {
         ...state,
@@ -1474,6 +1503,7 @@ function reduceSession(state: Session, action: Action): Session {
         journeys: state.journeys?.self ? { self: state.journeys.self } : {},
         guardians: [],
         home: null,
+        homeCleared: true,
         inviteCode: next.inviteCode,
         syncWriteKey: next.syncWriteKey,
         syncReadKey: next.syncReadKey,
@@ -1554,30 +1584,39 @@ const FamilyContext = createContext<FamilyApi | null>(null);
 
 export function FamilyProvider({ children }: { children: React.ReactNode }) {
   const [state, dispatch] = useReducer(reducer, undefined, load);
+  const [deviceReady, setDeviceReady] = useState(() => !pendingDeviceSeal);
+  const restoreOnce = useRef(false);
 
   useEffect(() => {
-    if (state.profile) return;
+    if (state.profile || restoringDeviceSeal || !sealOpened) return;
     void umapLocation.stop();
-  }, [state.profile]);
+  }, [state.profile, deviceReady]);
 
   useEffect(() => {
     const epoch = sealEpoch;
     const sealed = pendingDeviceSeal;
-    if (!sealed) return;
+    if (!sealed) {
+      setDeviceReady(true);
+      return;
+    }
     pendingDeviceSeal = '';
     void openDeviceText(sealed).then((plain) => {
       if (epoch !== sealEpoch) return;
       if (!plain) {
         restoringDeviceSeal = false;
+        setDeviceReady(true);
         return;
       }
       try {
         sessionStorage.setItem(STORAGE_KEY, plain);
       } catch {
         restoringDeviceSeal = false;
+        setDeviceReady(true);
         return;
       }
+      sealOpened = true;
       restoringDeviceSeal = false;
+      setDeviceReady(true);
       dispatch({ type: 'rehydrate' });
     });
   }, []);
@@ -1587,17 +1626,31 @@ export function FamilyProvider({ children }: { children: React.ReactNode }) {
     const epoch = sealEpoch;
     const raw = JSON.stringify({ ...state, mode: null });
     if (!state.profile && sealedSession()) return;
+    let wrote = false;
     try {
+      const decision = commitDurableSession(typeof localStorage === 'undefined' ? null : localStorage, state, raw, {
+        sealText: deviceSealAvailable() ? undefined : null,
+        unreadSeal: !sealOpened,
+      });
+      if (!decision.wrote) {
+        if (decision.plain && decision.plain !== appliedPlain) {
+          appliedPlain = decision.plain;
+          sessionStorage.setItem(STORAGE_KEY, decision.plain);
+          dispatch({ type: 'rehydrate' });
+        }
+        return;
+      }
+      wrote = true;
       sessionStorage.setItem(STORAGE_KEY, raw);
       if (deviceSealAvailable()) {
         void sealDeviceText(raw).then((sealed) => {
           if (epoch !== sealEpoch) return;
-          if (typeof sealed === 'string' && sealed.startsWith(DEVICE_SEAL_PREFIX)) localStorage.setItem(STORAGE_KEY, sealed);
+          if (typeof sealed === 'string' && sealed.startsWith(DEVICE_SEAL_PREFIX)) {
+            localStorage.setItem(STORAGE_KEY, sealed);
+            localStorage.setItem(`${STORAGE_KEY}:at`, String(Date.now()));
+          }
         });
-      } else {
-        localStorage.setItem(STORAGE_KEY, raw);
       }
-      localStorage.setItem(`${STORAGE_KEY}:at`, String(Date.now()));
       localStorage.removeItem(`${STORAGE_KEY}:admin`);
       localStorage.removeItem(`${STORAGE_KEY}:managed`);
       localStorage.removeItem(`${STORAGE_KEY}:admin:at`);
@@ -1605,8 +1658,35 @@ export function FamilyProvider({ children }: { children: React.ReactNode }) {
     } catch {
       /* 용량이 가득 차도 화면의 상태는 유지한다 */
     }
-    scheduleAccountBackup(state);
+    if (wrote) scheduleAccountBackup(state);
   }, [state]);
+
+  useEffect(() => {
+    if (!deviceReady || restoringDeviceSeal || !needsHistoryRestore(state)) return;
+    if (restoreOnce.current) return;
+    const storage = typeof localStorage === 'undefined' ? null : localStorage;
+    const accountKey = readStoredAccountKey(storage);
+    if (!accountKey) return;
+    restoreOnce.current = true;
+    let cancel = false;
+    void (async () => {
+      const loaded = await loadFamilyAccount(accountKey).catch(() => ({ ok: false as const }));
+      if (cancel || !loaded.ok || !loaded.account) return;
+      const opened = await openAccountSecrets(loaded.account, storage).catch(() => null);
+      if (cancel || !opened) return;
+      const patch = fillFromAccount(opened);
+      if (!patch) return;
+      dispatch({
+        type: 'fill-history',
+        journeys: patch.journeys as Journey[],
+        visits: patch.visits as Visit[],
+        home: (patch.home || null) as Session['home'],
+      });
+    })();
+    return () => {
+      cancel = true;
+    };
+  }, [deviceReady, state.journeys, state.visits]);
 
   const api: FamilyApi = {
     state,
