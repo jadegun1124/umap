@@ -402,6 +402,40 @@ test('a pin beside 105동 ranks the building edge ahead of a southern fire stati
     geometry: box(127.0707, 37.6366, 127.0716, 37.6376),
   };
   assert.equal(choosePlaceLabel([centroid, station, shortDong, longerShell], pin), '하계1차청구아파트 105동');
+  const only105 = { name: '105동', kind: 'residential', geometry: dong105.geometry };
+  const only104 = { name: '104동', kind: 'residential', geometry: dong104.geometry };
+  const shortComplex = { name: '하계청구아파트', kind: 'residential', lat: 37.6374, lng: 127.0712 };
+  const spaced = { name: '하계 1차청구아파트', kind: 'residential', lat: 37.63735, lng: 127.07115 };
+  assert.equal(choosePlaceLabel([shortComplex, spaced, only104, only105], pin), '하계 1차청구아파트 105동');
+  const full = { name: '하계1차청구아파트 105동', kind: 'residential', geometry: dong105.geometry };
+  assert.equal(choosePlaceLabel([station, full], pin), '하계1차청구아파트 105동');
+});
+
+test('a previous cache generation does not keep the short complex name', async () => {
+  const pin = { lat: 37.6372, lng: 127.07085 };
+  const key = placeGridKey(pin.lat, pin.lng);
+  const saved = globalThis.localStorage;
+  const store = new Map([['umap_geocode_cache_v8', JSON.stringify({ [key]: '하계청구아파트' })]]);
+  globalThis.localStorage = {
+    getItem: (id) => (store.has(id) ? store.get(id) : null),
+    setItem: (id, value) => { store.set(id, value); },
+  };
+  let called = 0;
+  try {
+    await reverseGeocodeCached(pin.lat, pin.lng, {
+      fetch: async () => {
+        called += 1;
+        return { ok: false, json: async () => null };
+      },
+      key: '',
+      kakaoKey: '',
+      pace: false,
+    });
+  } finally {
+    if (saved === undefined) delete globalThis.localStorage;
+    else globalThis.localStorage = saved;
+  }
+  assert.equal(called > 0, true);
 });
 
 test('a point beside a church on a 길 uses the place or the road, not 구·동', async () => {

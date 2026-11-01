@@ -621,9 +621,35 @@ function stationarySample(point) {
  * After the phone has already rested on the anchor, the next walk-sized
  * step may leave in any direction.
  */
+function explicitStill(point) {
+  if (speedShowsMoving(point)) return false;
+  if (point?.staying === true) return true;
+  const speed = pointSpeed(point);
+  return speed != null && speed < TRAIL_STAY_SPEED_MPS;
+}
+
+/**
+ * Still-phone jump that is longer than a walked step.
+ * 25–50m samples with a quiet speed flag are the 1.12 walk. Farther than
+ * about 70m, with no walking speed, is a building hop.
+ */
+const INDOOR_STILL_WALK_M = 70;
+
+function indoorLeap(prev, point) {
+  if (!prev || !point || point.stayEnd || !explicitStill(point)) return false;
+  if (isRideStep(prev, point)) return false;
+  const reported = pointSpeed(point);
+  if (reported != null && reported >= TRAIL_RIDE_MIN_MPS) return false;
+  const moved = haversineMeters(prev, point);
+  if (!Number.isFinite(moved) || moved > INDOOR_STAY_RADIUS_M) return false;
+  if (positiveMeters(point.accuracyM) > TRAIL_POOR_ACCURACY_M && moved >= TRAIL_WALK_VERTEX_M) return true;
+  return moved >= INDOOR_STILL_WALK_M;
+}
+
 function continuesStillWalk(points, point) {
   const anchor = drawnAnchor(points);
   if (!anchor) return false;
+  if (indoorLeap(anchor, point)) return false;
   const pace = stepPace(anchor, point);
   if (!pace || pace.moved < TRAIL_DEPART_STAY_M || pace.moved > INDOOR_WALK_STEP_M) return false;
   if (pace.speed < 0.75 || pace.speed > 2.8 || pace.dt < 1_200 || pace.dt > 60_000) return false;
@@ -2115,7 +2141,10 @@ export function displayLivePoints(points, now) {
   const sorted = orderedTrail(source);
   if (sorted.length < 2) return source;
   const closing = closingStays(sorted, now);
-  if (closing.length === 0) return sorted.length === source.length ? source : sorted;
+  if (closing.length === 0) {
+    if (indoorCloud(sorted, now)) return [];
+    return sorted.length === source.length ? source : sorted;
+  }
   const remainFrom = closing[closing.length - 1].startAt;
   let cut = 0;
   while (cut < sorted.length && sorted[cut].at < remainFrom) cut += 1;
@@ -2123,8 +2152,35 @@ export function displayLivePoints(points, now) {
   const stayed = tail.filter((point) => point && !point.stayEnd);
   const anchor = stayed[0];
   const stillThere = !anchor || stayed.every((point) => haversineMeters(anchor, point) <= STOP_RADIUS_M);
-  if (stillThere || !hasRealTravel(stayed)) return [];
+  if (stillThere || !hasRealTravel(stayed) || indoorCloud(sorted, now)) return [];
   return tail;
+}
+
+/**
+ * A cloud that stays inside one building for the walk-stay wait.
+ * Spikes between nearby 동 do not have to sit inside the 50m stop radius.
+ * A straight walk keeps a high net, so it is not this cloud.
+ */
+function indoorCloud(points, now) {
+  const drawn = (Array.isArray(points) ? points : []).filter((point) => point && !point.stayEnd && Number.isFinite(point.lat) && Number.isFinite(point.at));
+  if (drawn.length < 2) return false;
+  let start = drawn.length - 1;
+  while (start > 0) {
+    const prev = drawn[start - 1];
+    const next = drawn[start];
+    if (isVehicleStep(prev, next) || isRideStep(prev, next)) break;
+    const trial = drawn.slice(start - 1);
+    if (clusterSpread(trial) > INDOOR_STAY_RADIUS_M) break;
+    const shape = travelShape(trial);
+    if (shape.path >= 80 && shape.net >= 80 && shape.ratio >= 0.62) break;
+    start -= 1;
+  }
+  const cloud = drawn.slice(start);
+  if (cloud.length < 2) return false;
+  const begin = cloud[0].at;
+  const endAt = cloud[cloud.length - 1].at;
+  const end = Number.isFinite(now) && now >= endAt ? now : endAt;
+  return end - begin >= WALK_JOURNEY_STAY_MS;
 }
 
 /** The open segment still has a line. A stay cluster and courtyard jitter do not. */

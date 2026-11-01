@@ -8,7 +8,8 @@ export function cleanPlace(value) {
 }
 
 export function samePlaceBucket(aLat, aLng, bLat, bLng) {
-  return Math.abs(aLat - bLat) < 0.001 && Math.abs(aLng - bLng) < 0.001;
+  // About 300m. An indoor spike must not blank a label that still belongs to this building.
+  return Math.abs(aLat - bLat) < 0.0027 && Math.abs(aLng - bLng) < 0.0035;
 }
 
 export function carryPlace(previous, lat, lng) {
