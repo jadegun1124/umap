@@ -2642,12 +2642,11 @@ function AppVersionLine() {
 
 function DiagSendButton() {
   const [busy, setBusy] = useState(false);
-  const [code, setCode] = useState('');
   const [note, setNote] = useState('');
   return (
     <div className="mt-4 rounded-2xl bg-slate-50 px-3 py-3">
       <p className="text-sm font-black text-slate-900">진단 기록 보내기</p>
-      <p className="mt-1 text-xs font-semibold leading-5 text-slate-500">최근 2시간의 위치·궤적 판단을 이 계정으로 올립니다. 좌표가 포함되고 7일 뒤 지워집니다.</p>
+      <p className="mt-1 text-xs font-semibold leading-5 text-slate-500">최근 2시간의 위치·궤적 판단을 개발자에게 바로 보냅니다. 좌표가 포함되고 7일 뒤 지워집니다. 가족 위치와 기록 암호화는 그대로입니다.</p>
       <button
         type="button"
         disabled={busy}
@@ -2656,11 +2655,9 @@ function DiagSendButton() {
           setNote('');
           void import('../../services/familyAccount').then(({ uploadDiagReport }) => uploadDiagReport()).then((result) => {
             if (result.ok && result.id) {
-              setCode(result.id);
-              setNote('이 코드를 개발자에게 보내 주세요.');
+              setNote('보냈습니다');
               return;
             }
-            setCode('');
             setNote(result.message || '올리지 못했습니다.');
           }).finally(() => setBusy(false));
         }}
@@ -2668,7 +2665,6 @@ function DiagSendButton() {
       >
         {busy ? '올리는 중…' : '진단 기록 보내기'}
       </button>
-      {code && <p className="mt-2 select-all break-all text-sm font-black text-slate-900">{code}</p>}
       {note && <p className="mt-1 text-xs font-semibold leading-5 text-slate-600">{note}</p>}
     </div>
   );

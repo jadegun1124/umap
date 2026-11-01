@@ -158,6 +158,8 @@ export const WALK_JOURNEY_STAY_MS = 5 * 60 * 1000;
 export const RIDE_JOURNEY_STAY_MS = 12 * 60 * 1000;
 /** Walk archive threshold. A ride into the stay uses RIDE_JOURNEY_STAY_MS. */
 export const JOURNEY_STAY_MS = WALK_JOURNEY_STAY_MS;
+/** The records screen promises a stay of this long ends the open journey. */
+export const RECORDS_STAY_MS = 7 * 60 * 1000;
 /** Latest stay fix may be this old. A 2 minute still sample is still fresh enough to close the 7 minute wait. */
 export const JOURNEY_STAY_FRESH_MS = 150 * 1000;
 /** Shorter than this is courtyard noise, not a card in 기록. */
@@ -1651,6 +1653,18 @@ export function buildDayRecord(points, now) {
       leftAt: closed ? cluster.endAt : null,
     });
   });
+  const indoor = recordsIndoorStay(sorted, when);
+  if (indoor) {
+    const kept = stops.filter((stop) => stop.leftAt != null && stop.leftAt < indoor.startAt);
+    kept.push({
+      lat: indoor.lat,
+      lng: indoor.lng,
+      arrivedAt: indoor.startAt,
+      leftAt: indoor.ongoing ? null : indoor.endAt,
+    });
+    stops.length = 0;
+    stops.push(...kept);
+  }
   const segments = [];
   for (let index = 0; index < stops.length - 1; index += 1) {
     const departAt = stops[index].leftAt ?? stops[index].arrivedAt;
@@ -1858,6 +1872,8 @@ function locatedPath(points) {
 export function isStayNotJourney(points, durationMs, distanceM) {
   const path = locatedPath(points);
   if (path.length < 2 || !Number.isFinite(durationMs) || durationMs <= 0) return false;
+  const indoor = recordsIndoorStay(path, path[path.length - 1].at);
+  if (indoor && indoor.startAt <= path[0].at + 15_000) return true;
   for (let index = 1; index < path.length; index += 1) {
     if (isRideStep(path[index - 1], path[index])) return false;
   }
@@ -2064,14 +2080,88 @@ function buildClosedJourney(points, departAt, arriveAt) {
  * A last fix this old is a finished stay even when no new sample arrived
  * to grow the 50m cluster. Walk and ride keep their own archive waits.
  */
+/**
+ * Hours inside one building. A 50m cluster never forms when indoor GPS hops
+ * between nearby walls, and one hop fast enough to look like a ride must not
+ * keep the whole stay as a journey.
+ */
+export function recordsIndoorStay(points, now) {
+  const samples = [];
+  for (const point of Array.isArray(points) ? points : []) {
+    if (!point || !Number.isFinite(point.lat) || !Number.isFinite(point.lng) || !Number.isFinite(point.at)) continue;
+    samples.push(point);
+  }
+  if (samples.length < 2) return null;
+  let start = samples.length - 1;
+  while (start > 0) {
+    const prev = samples[start - 1];
+    const next = samples[start];
+    if (!prev.stayEnd && !next.stayEnd && isVehicleStep(prev, next)) break;
+    const trial = samples.slice(start - 1);
+    const located = trial.filter((point) => !point.stayEnd);
+    const body = located.length >= 2 ? located : trial;
+    if (clusterSpread(body) > INDOOR_STAY_RADIUS_M) break;
+    const shape = travelShape(body);
+    const span = body[body.length - 1].at - body[0].at;
+    const slow = span >= RECORDS_STAY_MS && shape.net < 80 && shape.path / (span / 1000) < 0.5;
+    if (!slow && shape.path >= 80 && shape.net >= 80 && shape.ratio >= 0.62) break;
+    start -= 1;
+  }
+  const cloud = samples.slice(start);
+  if (cloud.length < 2) return null;
+  while (cloud.length > 2) {
+    const first = cloud[0];
+    if (first.stayEnd || !isMovingStep(first, cloud[1])) break;
+    cloud.shift();
+  }
+  const begin = cloud[0].at;
+  const endAt = cloud[cloud.length - 1].at;
+  if (endAt - begin < RECORDS_STAY_MS) return null;
+  let lat = 0;
+  let lng = 0;
+  let count = 0;
+  for (const point of cloud) {
+    if (point.stayEnd) continue;
+    lat += point.lat;
+    lng += point.lng;
+    count += 1;
+  }
+  if (count === 0) {
+    lat = cloud[0].lat;
+    lng = cloud[0].lng;
+    count = 1;
+  }
+  const ongoing = Number.isFinite(now) && now - endAt <= 2 * 60 * 1000;
+  return {
+    startAt: begin,
+    endAt: ongoing ? now : endAt,
+    lat: Number((lat / count).toFixed(6)),
+    lng: Number((lng / count).toFixed(6)),
+    ongoing,
+  };
+}
+
+function mergeIndoorStay(points, now, stays) {
+  const indoor = recordsIndoorStay(points, now);
+  if (!indoor) return stays;
+  const kept = [];
+  for (const stay of stays) {
+    if (stay.endAt <= indoor.startAt) kept.push(stay);
+  }
+  kept.push({ startAt: indoor.startAt, endAt: indoor.endAt });
+  return kept;
+}
+
 function closingStays(points, now) {
-  const stays = findClosingStays(points, now);
+  let stays = findClosingStays(points, now);
   const last = points[points.length - 1];
-  if (!last || last.stayEnd || !Number.isFinite(now) || now < last.at) return stays;
+  if (!last || last.stayEnd || !Number.isFinite(now) || now < last.at) return mergeIndoorStay(points, now, stays);
   const limit = journeyStayLimit(points, points.length - 1);
-  if (now - last.at < limit) return stays;
-  if (stays.some((stay) => last.at >= stay.startAt && last.at <= stay.endAt)) return stays;
-  return stays.concat([{ startAt: last.at, endAt: last.at }]);
+  if (now - last.at < limit) return mergeIndoorStay(points, now, stays);
+  if (!stays.some((stay) => last.at >= stay.startAt && last.at <= stay.endAt)) {
+    stays = stays.concat([{ startAt: last.at, endAt: last.at }]);
+  }
+  return mergeIndoorStay(points, now, stays);
 }
 
 /**
@@ -2190,7 +2280,9 @@ export function liveTrailDrawable(points, now = Date.now()) {
 
 /** Today's move that has not closed yet. A hole or a stay cloud stays off the 기록 list. */
 export function previewOpenJourney(points, now) {
+  const indoor = recordsIndoorStay(points, now);
   const path = liveTrailPoints(points, now).filter((point) => point && !point.stayEnd && Number.isFinite(point.lat) && Number.isFinite(point.lng) && Number.isFinite(point.at));
+  if (indoor && path.length && path[0].at >= indoor.startAt - 15_000) return null;
   const moving = clipStayEnds(path);
   if (moving.length < 2) return null;
   const depart = moving[0];

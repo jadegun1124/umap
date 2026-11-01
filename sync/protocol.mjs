@@ -1198,6 +1198,7 @@ export async function handleSyncRequest(store, request, extras = {}) {
       naverClientSecret: extras.naverClientSecret || '',
       naverAccessToken: extras.naverAccessToken || '',
       kakaoAdminKey: extras.kakaoAdminKey || '',
+      diagReadToken: extras.diagReadToken || '',
       unlinkKakao: extras.unlinkKakao,
       revokeNaver: extras.revokeNaver,
       forgetMember,

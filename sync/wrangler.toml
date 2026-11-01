@@ -19,7 +19,8 @@ new_sqlite_classes = ["FamilyRoom"]
 tag = "v2"
 new_sqlite_classes = ["FamilyAccount"]
 
-# Public Naver client id. NAVER_CLIENT_SECRET is a Worker secret and is not in this file.
+# Public Naver client id. NAVER_CLIENT_SECRET and DIAG_READ_TOKEN are Worker secrets
+# and are not in this file. DIAG_READ_TOKEN only unlocks GET /v1/diag/recent.
 [vars]
 NAVER_CLIENT_ID = "dQCiRLIzbNkDG6ULiroD"
 

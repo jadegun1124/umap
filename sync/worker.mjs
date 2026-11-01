@@ -166,6 +166,7 @@ function accountRuntimeOptions(env) {
     naverClientId: env.NAVER_CLIENT_ID || PUBLIC_NAVER_CLIENT_ID,
     naverClientSecret: env.NAVER_CLIENT_SECRET || '',
     kakaoAdminKey: env.KAKAO_ADMIN_KEY || '',
+    diagReadToken: env.DIAG_READ_TOKEN || '',
     forgetMember: env.FAMILY_ROOM ? (target) => forgetMemberDurable(env, target) : undefined,
   };
 }

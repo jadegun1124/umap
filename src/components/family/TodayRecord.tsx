@@ -24,7 +24,7 @@ export function TodayRecord({ visits }: { visits: Visit[] }) {
         )}
       </section>
       <p className="text-[11px] leading-5 text-slate-400">
-        여정과 방문은 이 폰에 서울 날짜로 30일 남고, 서버에는 마지막 위치만 올라갑니다.
+        여정과 방문은 이 폰에 서울 날짜로 30일 남고, 같은 기록이 암호화되어 계정에도 올라갑니다.
       </p>
     </div>
   );
