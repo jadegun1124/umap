@@ -31,10 +31,20 @@ export function carryPlace(previous, lat, lng, options = {}) {
   return cleanPlace(previous.place);
 }
 
+/** Saved place, same name for every member inside its radius. */
+export function savedPlaceLabel(lat, lng, home) {
+  if (!home || !Number.isFinite(Number(lat)) || !Number.isFinite(Number(lng))) return '';
+  if (!Number.isFinite(home.lat) || !Number.isFinite(home.lng)) return '';
+  const radius = Number(home.radiusM);
+  if (!(radius > 0)) return '';
+  if (metersBetween(Number(lat), Number(lng), home.lat, home.lng) > radius) return '';
+  return cleanPlace(home.label) || '우리 집';
+}
+
 export function memberPlaceLabel({ place, located, atHome, homeLabel, address }) {
+  if (atHome) return cleanPlace(homeLabel) || '우리 집';
   const named = cleanPlace(place);
   if (named) return named;
-  if (atHome) return homeLabel || '우리 집';
   if (!located) return '위치 기다리는 중';
   const near = cleanPlace(address);
   if (near) return near;

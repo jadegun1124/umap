@@ -14,13 +14,13 @@ function text(path) {
 }
 
 test('설정 shows versionName and versionCode', () => {
-  assert.equal(APP_VERSION_NAME, '1.48.0');
-  assert.equal(APP_VERSION_CODE, 54);
-  assert.equal(formatAppVersion(), '앱 버전 1.48.0 (54)');
+  assert.equal(APP_VERSION_NAME, '1.49.0');
+  assert.equal(APP_VERSION_CODE, 55);
+  assert.equal(formatAppVersion(), '앱 버전 1.49.0 (55)');
   assert.equal(formatAppVersion('1.36.0', ''), '앱 버전 1.36.0');
   assert.equal(labelFromInstalled('1.10.0 10'), '앱 버전 1.10.0 (10)');
-  assert.equal(labelFromInstalled(''), '앱 버전 1.48.0 (54)');
-  assert.equal(labelFromInstalled('not-a-version'), '앱 버전 1.48.0 (54)');
+  assert.equal(labelFromInstalled(''), '앱 버전 1.49.0 (55)');
+  assert.equal(labelFromInstalled('not-a-version'), '앱 버전 1.49.0 (55)');
 });
 
 test('an installed APK version replaces the bundled label', () => {
@@ -29,32 +29,32 @@ test('an installed APK version replaces the bundled label', () => {
   try {
     assert.equal(currentAppVersionLabel(), '앱 버전 1.10.0 (10)');
     globalThis.window = { UmapAndroid: { appVersion: () => '' } };
-    assert.equal(currentAppVersionLabel(), '앱 버전 1.48.0 (54)');
+    assert.equal(currentAppVersionLabel(), '앱 버전 1.49.0 (55)');
     globalThis.window = {};
-    assert.equal(currentAppVersionLabel(), '앱 버전 1.48.0 (54)');
+    assert.equal(currentAppVersionLabel(), '앱 버전 1.49.0 (55)');
   } finally {
     if (previous === undefined) delete globalThis.window;
     else globalThis.window = previous;
   }
 });
 
-test('package.json, Gradle, and the release workflow stay on 1.48.0 / 54', () => {
+test('package.json, Gradle, and the release workflow stay on 1.49.0 / 55', () => {
   const pkg = JSON.parse(text('../../package.json'));
   const lock = JSON.parse(text('../../package-lock.json'));
-  assert.equal(pkg.version, '1.48.0');
-  assert.equal(lock.version, '1.48.0');
-  assert.equal(lock.packages[''].version, '1.48.0');
+  assert.equal(pkg.version, '1.49.0');
+  assert.equal(lock.version, '1.49.0');
+  assert.equal(lock.packages[''].version, '1.49.0');
 
   const gradle = text('../../android/app/build.gradle');
-  assert.match(gradle, /versionCode 54\b/);
-  assert.match(gradle, /versionName "1\.48\.0"/);
-  assert.match(text('../../android/app/src/main/res/values/strings.xml'), /<string name="version_name">1\.48\.0<\/string>/);
+  assert.match(gradle, /versionCode 55\b/);
+  assert.match(gradle, /versionName "1\.49\.0"/);
+  assert.match(text('../../android/app/src/main/res/values/strings.xml'), /<string name="version_name">1\.49\.0<\/string>/);
 
   const workflow = text('../../.github/workflows/build-apk.yml');
-  assert.match(workflow, /tag_name: v1\.48\.0/);
-  assert.match(workflow, /versionName: 1\.48\.0/);
-  assert.match(workflow, /versionCode: 54/);
-  assert.match(workflow, /kinnex-v1\.48\.0\.apk/);
+  assert.match(workflow, /tag_name: v1\.49\.0/);
+  assert.match(workflow, /versionName: 1\.49\.0/);
+  assert.match(workflow, /versionCode: 55/);
+  assert.match(workflow, /kinnex-v1\.49\.0\.apk/);
   assert.match(workflow, /assembleRelease/);
   assert.match(workflow, /005737352270b84c7fb6016129bda9a3cd09350c/);
   assert.match(workflow, /keytool/);
@@ -63,10 +63,10 @@ test('package.json, Gradle, and the release workflow stay on 1.48.0 / 54', () =>
   assert.equal(workflow.includes('1.26.0'), false);
 
   const readme = text('../../README.md');
-  assert.match(readme, /versionName`은 `1\.48\.0`/);
-  assert.match(readme, /versionCode`는 54입니다/);
+  assert.match(readme, /versionName`은 `1\.49\.0`/);
+  assert.match(readme, /versionCode`는 55입니다/);
   assert.match(readme, /`v1\.26\.0`/);
-  assert.match(text('../../PRD.md'), /kinnex-v1\.48\.0\.apk/);
+  assert.match(text('../../PRD.md'), /kinnex-v1\.49\.0\.apk/);
 
   const home = text('../components/home/CompanyHome.tsx');
   assert.match(home, /APP_VERSION_NAME/);

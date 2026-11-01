@@ -10,7 +10,7 @@ import { bytesToBase64Url } from '../../lib/familySeal.mjs';
 import { familyKeyRecord } from '../../lib/familyVault.mjs';
 import { familyEndpointAvailable, familySyncUrl, publishProfileRemote, publishTrailRemote, splitSyncToken, startManagedFamilySync, syncFamilyKeys, syncTokenFor } from '../../services/familySync';
 import { startLocationWatch } from '../../services/locationWatch';
-import { cleanPlace } from '../../lib/memberPlace.mjs';
+import { cleanPlace, savedPlaceLabel } from '../../lib/memberPlace.mjs';
 import { cachedAddress, placeGridKey, presentPlace, reverseGeocodeCached } from '../../services/placeGeocode';
 import { openAlwaysLocation, readNativeBattery, umapLocation, umapLocationNative, type KeepAliveTarget } from '../../services/umapLocation';
 import { useFamily } from './session';
@@ -655,8 +655,9 @@ export function useFamilyTracking(onFirstFix: (lat: number, lng: number) => void
           placeTimers.current[id] = timer;
         }
       };
-      if (home && id === 'self' && haversineMeters(here, home) <= home.radiusM) {
-        apply(home.label || '우리 집', true);
+      const saved = savedPlaceLabel(here.lat, here.lng, home);
+      if (saved) {
+        apply(saved, true);
         continue;
       }
       const cached = cachedAddress(here.lat, here.lng);

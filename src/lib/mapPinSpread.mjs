@@ -39,3 +39,42 @@ export function spreadPinPositions(members) {
   }
   return placed;
 }
+
+/** Web mercator pixels. The same-spot shift is added after this, in screen pixels. */
+export function projectCallout(lat, lng, zoom) {
+  const latRad = (lat * Math.PI) / 180;
+  const size = 256 * 2 ** zoom;
+  return {
+    x: ((lng + 180) / 360) * size,
+    y: (1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2 * size,
+  };
+}
+
+/**
+ * Pin tip and label tail are one projected point.
+ * dx/dy stay in pixels at every zoom. A meter offset would grow as the zoom changes.
+ */
+export function calloutAnchors({ lat, lng, dx = 0, dy = 0, zoom }) {
+  const origin = projectCallout(lat, lng, zoom);
+  const pin = { x: origin.x + (Number(dx) || 0), y: origin.y + (Number(dy) || 0) };
+  return { origin, pin, labelTail: { x: pin.x, y: pin.y } };
+}
+
+/**
+ * One box for the label, its tail, and the pin.
+ * inline-flex plus max-content gives the bubble a real width inside the
+ * zero-size marker, so the tail stays on the pin instead of the left edge.
+ * The pixel shift is separate from the centering translate.
+ */
+export function memberCalloutHtml({ dx = 0, dy = 0, dimmed = false, tailColor = '#fff', labelHtml = '', faceHtml = '' }) {
+  const shiftX = Number(dx) || 0;
+  const shiftY = Number(dy) || 0;
+  const tail = tailColor === '#0084FF' ? '#0084FF' : '#fff';
+  return `<div data-callout style="position:absolute;left:0;top:0;transform:translate(${shiftX}px, ${shiftY}px);opacity:${dimmed ? '0.55' : '1'}">
+    <div data-bubble style="display:inline-flex;flex-direction:column;align-items:center;width:max-content;transform:translate(-50%,-100%)">
+      ${labelHtml}
+      <span data-label-tail style="display:block;width:0;height:0;border-left:6px solid transparent;border-right:6px solid transparent;border-top:7px solid ${tail}"></span>
+      <span data-pin-anchor style="display:flex;align-items:center;justify-content:center">${faceHtml}</span>
+    </div>
+  </div>`;
+}

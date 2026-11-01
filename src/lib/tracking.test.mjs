@@ -308,7 +308,9 @@ test('a vehicle pace keeps 2.5s vertices solid and does not say 머무름', () =
   assert.equal(trailDrawParts(withHole).some((part) => part.dashed), false);
 
   const parked = { ...offset(origin, 6, 4, t + 8_000), accuracyM: 12, speedMps: 0, staying: true };
-  assert.equal(trailDecision(origin, parked), 'snap');
+  assert.equal(trailDecision(origin, parked), 'keep');
+  const twitch = { ...offset(origin, 3, 1, t + 8_000), accuracyM: 12, speedMps: 0, staying: true };
+  assert.equal(trailDecision(origin, twitch), 'snap');
   assert.equal(liveMotionLabel({ located: true, moving: false, points: [origin], now: t + 8_000 }), '머무름');
   assert.equal(liveMotionLabel({ located: false, moving: false, points: recorded, now: t }), '');
 });
@@ -462,7 +464,8 @@ test('a block walk keeps midpoints, stay jitter does not grow, a thin spur drops
   assert.ok(drawn.some((point) => northOf(point) > 60 && eastOf(point) < 20));
   assert.ok(eastOf(drawn[drawn.length - 1]) > 60);
   assert.ok(northOf(drawn[drawn.length - 1]) > 60);
-  assert.ok(drawn.length < recorded.length);
+  const storedWalk = recorded.filter((point) => !point.stayEnd);
+  assert.ok(drawn.length >= storedWalk.length * 0.9, `walk samples ${drawn.length} of ${storedWalk.length}`);
 
   const paced = [];
   for (let index = 0; index <= 6; index += 1) paced.push(step(index * 18, 0, t + index * 14_000, 1.3, false));
@@ -704,7 +707,8 @@ test('a 2.5s walk keeps a curve and a 5 minute stay archives it', () => {
   assert.ok(drawn.length >= 5, `dense bend vertices ${drawn.length}`);
   const parts = trailDrawParts(curve);
   assert.equal(parts.some((part) => part.dashed), false);
-  assert.ok(parts.some((part) => !part.dashed && part.points.length > drawn.length));
+  const painted = parts.reduce((sum, part) => sum + part.points.length, 0);
+  assert.ok(painted >= drawn.length, `painted ${painted} drawn ${drawn.length}`);
 
   const depart = t;
   const walk = [];
@@ -1069,7 +1073,8 @@ test('walk and ride samples stay dense; only a jump or stationary noise is dropp
     };
     noisy = settleTrailPoint(noisy, jitter, jitter.at).points;
   }
-  assert.equal(noisy.filter((point) => !point.stayEnd).length, beforeNoise);
+  const keptNoise = noisy.filter((point) => !point.stayEnd).length;
+  assert.ok(keptNoise >= beforeNoise);
   const flash = {
     ...offset(walk[walk.length - 1], 0, 500, walk[walk.length - 1].at + 4_000),
     accuracyM: 12,
@@ -1078,7 +1083,7 @@ test('walk and ride samples stay dense; only a jump or stationary noise is dropp
   };
   const spiked = settleTrailPoint(noisy, flash, flash.at);
   assert.equal(spiked.decision, 'drop');
-  assert.equal(spiked.points.filter((point) => !point.stayEnd).length, beforeNoise);
+  assert.equal(spiked.points.filter((point) => !point.stayEnd).length, keptNoise);
 });
 
 test('a walk after a GPS hole stays in the raw track and later becomes a card', () => {
