@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { carryPlace } from './memberPlace.mjs';
 import { appendLiveTip, buildDayRecord, displayLivePoints, liveMotionLabel, mergeVisitStops, previewOpenJourney, settleTrailPoint, storedTrackAfterArchive, trailDrawParts, walkLeavesStay } from './tracking.mjs';
@@ -174,6 +175,58 @@ test('a walked pace onto the live pin stays solid', () => {
   const parts = appendLiveTip([{ points: [start, mid], dashed: false }], tip);
   assert.equal(parts.some((part) => part.dashed), false);
   assert.ok(parts.some((part) => part.points.length >= 3));
+});
+
+test('the recorded walk is on the map once it is about 40m out, before the silent gap', () => {
+  const rows = JSON.parse(readFileSync(new URL('./walk1819.fixture.json', import.meta.url), 'utf8'));
+  const origin = { lat: 37.55, lng: 127.05 };
+  const t0 = Date.parse('2026-11-01T09:19:16Z');
+  let gapAt = -1;
+  for (let index = 1; index < rows.length; index += 1) {
+    const previous = rows[index - 1];
+    const away = Math.hypot(previous.n, previous.e);
+    if (rows[index].dt - previous.dt > 60_000 && away > 30) {
+      gapAt = index;
+      break;
+    }
+  }
+  assert.ok(gapAt > 10);
+  let points = [];
+  const play = (until) => {
+    points = [];
+    for (const row of rows.slice(0, until)) {
+      const at = t0 + row.dt;
+      const lat = origin.lat + row.n / 110540;
+      const lng = origin.lng + row.e / (111320 * Math.cos((origin.lat * Math.PI) / 180));
+      points = settleTrailPoint(points, {
+        lat,
+        lng,
+        at,
+        speedMps: row.s,
+        accuracyM: row.a,
+        staying: row.s < 0.4,
+      }, at).points;
+    }
+    return t0 + rows[until - 1].dt;
+  };
+  const before = play(gapAt);
+  const live = displayLivePoints(points, before);
+  const parts = trailDrawParts(live);
+  const pin = points[points.length - 1];
+  assert.equal(liveMotionLabel({
+    located: true,
+    moving: false,
+    points,
+    now: before,
+    pin: pin ? { lat: pin.lat, lng: pin.lng, at: pin.at, accuracyM: pin.accuracyM } : undefined,
+  }), '지금');
+  assert.ok(parts.some((part) => !part.dashed && chord(part) >= 25), 'the sampled walk is not on the map');
+  play(rows.length);
+  const end = rows[rows.length - 1];
+  const endAt = t0 + end.dt;
+  const drawn = displayLivePoints(points, endAt).filter((point) => !point.stayEnd);
+  const far = drawn.reduce((max, point) => Math.max(max, meters(origin, point)), 0);
+  assert.ok(far > Math.hypot(end.n, end.e) - 40, `trail ends ${Math.round(far)}m short of the pin`);
 });
 
 test('three bubbles at one spot stay apart on screen', () => {

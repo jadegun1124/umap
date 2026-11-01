@@ -2043,7 +2043,7 @@ function sitBehind(points) {
  * Good fixes walking one way for about 40m. A cloud that folds back, or a
  * single leap, is not this. Radius does not decide it.
  */
-function hasDirectedWalk(points) {
+export function hasDirectedWalk(points) {
   const located = [];
   for (const point of Array.isArray(points) ? points : []) {
     if (point && !point.stayEnd && Number.isFinite(point.lat) && Number.isFinite(point.at)) located.push(point);
@@ -2056,13 +2056,24 @@ function hasDirectedWalk(points) {
     return path >= 40 && net >= 30 && path > 0 && net / path >= 0.62;
   };
   for (let index = 1; index < located.length; index += 1) {
-    if (!accurateWalkStep(located[index - 1], located[index])) {
+    const prev = located[index - 1];
+    const point = located[index];
+    const dt = point.at - prev.at;
+    // A second sample in the same second is not a new step and not a break.
+    if (dt >= 0 && dt < 800) continue;
+    const accuracy = positiveMeters(point.accuracyM);
+    const reported = pointSpeed(point);
+    const pace = stepPace(prev, point);
+    const ground = pace && pace.moved >= 2 && pace.dt <= 90_000 && pace.speed >= 0.5 && pace.speed <= 3;
+    const reportedWalk = reported != null && reported >= 0.7 && reported <= 2.6 && pace && pace.moved >= 2 && pace.dt <= 90_000;
+    const walking = accuracy > 0 && accuracy <= 25 && (ground || reportedWalk);
+    if (!walking) {
       if (directed()) return true;
       run = [];
       continue;
     }
-    if (run.length === 0) run.push(located[index - 1]);
-    run.push(located[index]);
+    if (run.length === 0) run.push(prev);
+    run.push(point);
     if (directed()) return true;
   }
   return directed();
@@ -2412,7 +2423,9 @@ export function displayLivePoints(points, now) {
   const tail = cut <= 0 ? (sorted.length === source.length ? source : sorted) : sorted.slice(cut);
   const stayed = tail.filter((point) => point && !point.stayEnd);
   const anchor = stayed[0];
-  const stillThere = !anchor || stayed.every((point) => haversineMeters(anchor, point) <= STOP_RADIUS_M);
+  const insideStop = !anchor || stayed.every((point) => haversineMeters(anchor, point) <= STOP_RADIUS_M);
+  // A directed walk can still be inside the 50m stop bubble. That line is the trip.
+  const stillThere = insideStop && !hasDirectedWalk(stayed);
   if (stillThere || !hasRealTravel(stayed) || indoorCloud(sorted, now)) return [];
   return tail;
 }
