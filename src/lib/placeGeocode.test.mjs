@@ -132,6 +132,21 @@ test('VWorld building layer becomes an apartment and 동 number', async () => {
   const label = await reverseGeocode(37.6362, 127.0675, { fetch: fetchImpl, key: 'test-key', pace: false });
   assert.equal(label, '하계1차청구아파트 104동');
   assert.equal(String(label).includes('근처'), false);
+  const numericDong = async (url) => {
+    if (String(url).includes('LT_C_BLDGINFO')) {
+      return jsonResponse({
+        response: {
+          result: {
+            featureCollection: {
+              features: [{ properties: { buld_nm: '하계청구아파트', dong_nm: '105' } }],
+            },
+          },
+        },
+      });
+    }
+    return jsonResponse({ elements: [] });
+  };
+  assert.equal(await reverseGeocode(37.6362, 127.0675, { fetch: numericDong, key: 'test-key', pace: false }), '하계청구아파트 105동');
 });
 
 test('a browser that refuses User-Agent still receives the neighborhood', async () => {
@@ -412,6 +427,19 @@ test('a pin beside 105동 ranks the building edge ahead of a southern fire stati
   assert.equal(choosePlaceLabel([second, first, only105], pin), '하계1차청구아파트 105동');
   const full = { name: '하계1차청구아파트 105동', kind: 'residential', geometry: dong105.geometry };
   assert.equal(choosePlaceLabel([station, full], pin), '하계1차청구아파트 105동');
+  const onlyNumber105 = { name: '105', buildingType: 'apartments', kind: 'residential', geometry: dong105.geometry };
+  const onlyNumber104 = { name: '104', buildingType: 'apartments', kind: 'residential', geometry: dong104.geometry };
+  const shell = {
+    name: '하계청구아파트',
+    kind: 'residential',
+    landuse: 'residential',
+    geometry: box(127.0704, 37.6365, 127.0718, 37.6378),
+  };
+  assert.equal(choosePlaceLabel([shell, station, onlyNumber104, onlyNumber105], pin), '하계청구아파트 105동');
+  const poiDong = { name: '105동', kind: 'poi', buildingType: 'yes', geometry: dong105.geometry };
+  assert.equal(choosePlaceLabel([shell, poiDong], pin), '하계청구아파트 105동');
+  const shop = { name: '한글비석로1길', kind: 'poi', unit: '15', lat: pin.lat, lng: pin.lng };
+  assert.equal(choosePlaceLabel([shell, shop], pin), '하계청구아파트');
 });
 
 test('a previous cache generation does not keep the short complex name', async () => {

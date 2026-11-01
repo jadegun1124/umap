@@ -263,9 +263,13 @@ export function choosePlaceLabel(candidates, point) {
     if (!label) continue;
     const geometry = candidate.geometry || (Number.isFinite(candidate.lat) && Number.isFinite(candidate.lng) ? candidate : null);
     const parsed = buildingFromText(`${candidate.name || candidate.building || ''} ${candidate.unit || ''}`);
-    const unit = formatUnit(candidate.unit) || parsed.unit;
-    const residential = isResidentialPlace(candidate) || Boolean(unit);
-    const bareUnit = isUnitLabel(candidate.name || candidate.building);
+    const apartment = isResidentialPlace(candidate) || RESIDENTIAL_BUILDING.test(String(candidate.buildingType || ''));
+    const namedUnit = isUnitLabel(candidate.name || candidate.building) ? formatUnit(candidate.name || candidate.building) : '';
+    const fromNumber = apartment ? numberedUnit(candidate.name || candidate.building) : '';
+    // A shop or bus ref is not a 동. Only an apartment, or a name that is itself the 동, is.
+    const unit = namedUnit || fromNumber || (apartment ? (formatUnit(candidate.unit) || parsed.unit) : '');
+    const residential = apartment || Boolean(namedUnit || fromNumber);
+    const bareUnit = Boolean(namedUnit || fromNumber);
     let rawName = bareUnit ? '' : cleanToken(candidate.name || candidate.building);
     if (unit && rawName.endsWith(unit)) rawName = cleanToken(rawName.slice(0, -unit.length));
     const areaM2 = geometryAreaM2(geometry);
@@ -345,6 +349,12 @@ function addressValues(address, keys) {
 
 function isUnitLabel(value) {
   return /^\d+동$/.test(cleanToken(value).replace(/\s+/g, ''));
+}
+
+/** OSM and some building layers name a 동 with only the number, such as "105". */
+function numberedUnit(value) {
+  const text = cleanToken(value).replace(/\s+/g, '');
+  return /^\d{2,4}$/.test(text) ? `${text}동` : '';
 }
 
 function complexPhase(value) {
@@ -576,9 +586,10 @@ function featureName(properties) {
   const building = firstText(properties, ['buld_nm', 'bld_nm', 'bldnm', 'buldNm', 'building_name', 'bldg_nm']);
   const unit = firstText(properties, ['dong_nm', 'buld_dong', 'dongNm']);
   const named = buildingFromText(`${building} ${unit}`);
+  const fromBuilding = numberedUnit(building);
   return {
-    building: named.building || (building && !isDong(building) ? building : ''),
-    unit: named.unit || formatUnit(unit),
+    building: fromBuilding ? '' : (named.building || (building && !isDong(building) ? building : '')),
+    unit: named.unit || formatUnit(unit) || fromBuilding || numberedUnit(unit),
     poi: named.poi,
   };
 }
@@ -599,9 +610,9 @@ function vworldBuilding(body) {
   const candidates = [];
   for (const feature of features) {
     const named = featureName(feature && feature.properties);
-    const name = named.building || named.poi;
-    if (!name) continue;
-    const kind = placeKind(name);
+    const name = named.building || named.poi || '';
+    if (!name && !named.unit) continue;
+    const kind = name ? placeKind(name) : 'residential';
     candidates.push({
       name,
       unit: named.unit,
@@ -801,10 +812,11 @@ function overpassCandidates(body, lat, lng) {
     const residential = RESIDENTIAL_NAME.test(name)
       || RESIDENTIAL_BUILDING.test(String(tags.building || ''))
       || RESIDENTIAL_LANDUSE.test(String(tags.landuse || ''));
+    const fromNumber = residential ? numberedUnit(name) : '';
     const geometry = Array.isArray(element.geometry) ? element.geometry : (Number.isFinite(element.lat) ? { lat: element.lat, lng: element.lon } : { lat, lng });
     candidates.push({
-      name,
-      unit: formatUnit(tags['addr:unit'] || tags.ref || ''),
+      name: fromNumber ? '' : name,
+      unit: residential ? (formatUnit(tags['addr:unit'] || tags.ref || '') || fromNumber) : '',
       kind: residential ? 'residential' : 'poi',
       buildingType: tags.building,
       landuse: tags.landuse,
@@ -824,7 +836,17 @@ async function fetchOverpass(fetchImpl, lat, lng) {
   let last = null;
   for (const url of urls) {
     try {
-      const response = await fetchImpl(url, { signal: timeoutSignal(12000) });
+      let response;
+      try {
+        response = await fetchImpl(url, {
+          headers: { 'User-Agent': NOMINATIM_UA },
+          signal: timeoutSignal(12000),
+        });
+      } catch (error) {
+        const message = error && error.message ? String(error.message) : '';
+        if (!(error instanceof TypeError) || !/unsafe header|User-Agent/i.test(message)) throw error;
+        response = await fetchImpl(url, { signal: timeoutSignal(12000) });
+      }
       const body = await readJson(response);
       const candidates = overpassCandidates(body, lat, lng);
       if (candidates.length || (response && response.ok !== false && body)) return candidates;
