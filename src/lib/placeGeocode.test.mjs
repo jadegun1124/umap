@@ -407,6 +407,9 @@ test('a pin beside 105동 ranks the building edge ahead of a southern fire stati
   const shortComplex = { name: '하계청구아파트', kind: 'residential', lat: 37.6374, lng: 127.0712 };
   const spaced = { name: '하계 1차청구아파트', kind: 'residential', lat: 37.63735, lng: 127.07115 };
   assert.equal(choosePlaceLabel([shortComplex, spaced, only104, only105], pin), '하계 1차청구아파트 105동');
+  const second = { name: '하계 2차청구아파트', kind: 'residential', lat: 37.63745, lng: 127.0713 };
+  const first = { name: '하계1차청구아파트', kind: 'residential', lat: pin.lat, lng: pin.lng + 0.0002 };
+  assert.equal(choosePlaceLabel([second, first, only105], pin), '하계1차청구아파트 105동');
   const full = { name: '하계1차청구아파트 105동', kind: 'residential', geometry: dong105.geometry };
   assert.equal(choosePlaceLabel([station, full], pin), '하계1차청구아파트 105동');
 });

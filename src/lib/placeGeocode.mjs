@@ -301,20 +301,19 @@ export function choosePlaceLabel(candidates, point) {
       .sort((left, right) => left.distanceM - right.distanceM)[0]
     : null;
   const chosen = nearDong || winner;
-  const fold = (value) => String(value || '').replace(/\s+/g, '').replace(/\d+차/g, '');
   const complexes = inRange.filter((item) => item.rawName && !isUnitLabel(item.rawName) && (item.residential || RESIDENTIAL_NAME.test(item.rawName)));
   let name = chosen.rawName;
   if (chosen.unit && !name) {
     const nearest = complexes.slice().sort((left, right) => left.distanceM - right.distanceM || right.rawName.length - left.rawName.length)[0];
     name = nearest ? nearest.rawName : '';
   }
-  // A shorter register name and the same complex with N차 in the middle are one place.
+  // A short register name and the same complex with one N차 in the middle are one place.
+  // 1차 and 2차 stay apart.
   if (chosen.dongBuilding || chosen.landuseShell || chosen.unit) {
     for (const item of complexes) {
       if (!item.rawName || item.rawName === name) continue;
       const contained = name && (item.rawName.includes(name) || name.includes(item.rawName));
-      const sameComplex = name && fold(item.rawName) && fold(item.rawName) === fold(name);
-      if ((contained || sameComplex) && item.rawName.length > name.length) name = item.rawName;
+      if ((contained || sameComplexName(name, item.rawName)) && item.rawName.length > name.length) name = item.rawName;
     }
   }
   if (chosen.unit) {
@@ -346,6 +345,22 @@ function addressValues(address, keys) {
 
 function isUnitLabel(value) {
   return /^\d+동$/.test(cleanToken(value).replace(/\s+/g, ''));
+}
+
+function complexPhase(value) {
+  return [...String(value || '').replace(/\s+/g, '').matchAll(/(\d+)차/g)].map((match) => match[1]);
+}
+
+/** 「하계청구아파트」 and 「하계 1차청구아파트」 match. 「하계1차」 and 「하계2차」 do not. */
+function sameComplexName(left, right) {
+  const a = String(left || '').replace(/\s+/g, '');
+  const b = String(right || '').replace(/\s+/g, '');
+  if (!a || !b || a === b) return false;
+  if (a.replace(/\d+차/g, '') !== b.replace(/\d+차/g, '')) return false;
+  const an = complexPhase(a);
+  const bn = complexPhase(b);
+  if (an.length === 0 || bn.length === 0) return an.length + bn.length <= 1;
+  return an.length === bn.length && an.every((num, index) => num === bn[index]);
 }
 
 /** 하계동·월계3동. A building unit such as 105동, or a complex name ending in that unit, is not one. */

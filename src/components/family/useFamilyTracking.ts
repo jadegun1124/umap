@@ -608,7 +608,7 @@ export function useFamilyTracking(onFirstFix: (lat: number, lng: number) => void
       const job = `${id}:${key}`;
       if (placeJobs.current[id] === job) continue;
       placeJobs.current[id] = job;
-      const apply = (label: string | null, settled: boolean) => {
+      const apply = (label: string | null, settled: boolean, attempt = 0) => {
         if (placeJobs.current[id] !== job) return;
         const short = label ? presentPlace(label) : '';
         if (!short) {
@@ -618,6 +618,12 @@ export function useFamilyTracking(onFirstFix: (lat: number, lng: number) => void
         if (settled) placeKeys.current[id] = key;
         const latest = familyRef.current.state.members.find((item) => item.id === id);
         if (latest && cleanPlace(latest.place) !== short) familyRef.current.setMemberPlace(id, short);
+        if (!settled && attempt < 2) {
+          window.setTimeout(() => {
+            if (placeJobs.current[id] !== job) return;
+            void reverseGeocodeCached(here.lat, here.lng).then((found) => apply(found.label, found.settled, attempt + 1));
+          }, 60_000);
+        }
       };
       if (home && id === 'self' && haversineMeters(here, home) <= home.radiusM) {
         apply(home.label || '우리 집', true);
