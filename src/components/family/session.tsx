@@ -23,7 +23,7 @@ import { hideLeftPublishers, sharedPlaceStopsReporting } from '../../lib/memberP
 import { familyPinId, isMemberId, moveKeyed } from '../../lib/sharedIdentity.mjs';
 import { absorbPlaceholderMembers } from '../../lib/memberRoster.mjs';
 import { clearDiag, noteDiag } from '../../lib/diagLog.mjs';
-import { HISTORY_DAYS, JOURNEY_POINT_CAP, TRAIL_POINT_CAP, fixShowsRide, isWithinHistory, journeysWithinHistory, labelJourneyPlace, lastTravelAt, mergeJourneyLists, seoulDayKey, settleTrailPoint, stayLabelDwellMs, storedTrackAfterArchive, tracksWithinHistory, trimJourneyList, visitsWithinHistory, type JourneyRecord } from '../../lib/tracking.mjs';
+import { HISTORY_DAYS, JOURNEY_POINT_CAP, TRAIL_POINT_CAP, fixShowsRide, isWithinHistory, journeysWithinHistory, labelJourneyPlace, lastTravelAt, mergeJourneyLists, seoulDayKey, mergeVisitStops, settleTrailPoint, stayLabelDwellMs, storedTrackAfterArchive, tracksWithinHistory, trimJourneyList, visitsWithinHistory, walkLeavesStay, type JourneyRecord } from '../../lib/tracking.mjs';
 import type { DayStop } from '../../lib/tracking.mjs';
 import type { SharedPlace, SharedProfile } from '../../services/familyShare';
 import { umapLocation } from '../../services/umapLocation';
@@ -717,6 +717,20 @@ function collapseRoster(state: Session, priorNames: Record<string, string> = {})
   return { ...state, members, tracks, visits, journeys, motionNotifyIds };
 }
 
+function placePatch(member: Member | undefined, lat: number, lng: number, points: TrackPoint[] | undefined, accuracyM: number, at: number) {
+  if (!member) return { place: undefined, placeLat: undefined, placeLng: undefined };
+  const kept = carryPlace(member, lat, lng, {
+    directed: walkLeavesStay(points, { lat, lng, at, accuracyM, staying: member.moving === false }),
+    accuracyM,
+  });
+  if (!kept) return { place: undefined, placeLat: undefined, placeLng: undefined };
+  return {
+    place: kept,
+    placeLat: Number.isFinite(member.placeLat) ? member.placeLat : member.lat,
+    placeLng: Number.isFinite(member.placeLng) ? member.placeLng : member.lng,
+  };
+}
+
 function reducer(state: Session, action: Action): Session {
   return collapseRoster(reduceSession(state, action));
 }
@@ -951,7 +965,7 @@ function reduceSession(state: Session, action: Action): Session {
           at,
         );
         if (!pinMoved && tracks === state.tracks) return archiveJourneys(state, at);
-        const keptPlace = pinMoved ? carryPlace(self, nextLat, nextLng) : self?.place;
+        const selfPlace = pinMoved ? placePatch(self, nextLat, nextLng, state.tracks.self, action.accuracyM, at) : { place: self?.place, placeLat: self?.placeLat, placeLng: self?.placeLng };
         return archiveJourneys({
           ...state,
           visits: visitsWithinHistory(state.visits, at),
@@ -964,7 +978,7 @@ function reduceSession(state: Session, action: Action): Session {
                   lng: nextLng,
                   accuracyM: Math.max(1, Math.round(action.accuracyM)),
                   updatedAt: at,
-                  ...(keptPlace ? { place: keptPlace } : { place: undefined }),
+                  ...selfPlace,
                 }
               : member))
             : state.members,
@@ -976,7 +990,7 @@ function reduceSession(state: Session, action: Action): Session {
       );
       const nextLat = settled.lat ?? action.lat;
       const nextLng = settled.lng ?? action.lng;
-      const keptPlace = carryPlace(self, nextLat, nextLng);
+      const selfPlace = placePatch(self, nextLat, nextLng, state.tracks.self, action.accuracyM, at);
       return archiveJourneys({
         ...state,
         visits: visitsWithinHistory(state.visits, at),
@@ -989,7 +1003,7 @@ function reduceSession(state: Session, action: Action): Session {
                 accuracyM: Math.max(1, Math.round(action.accuracyM)),
                 updatedAt: at,
                 ...(riding ? { moving: true } : {}),
-                ...(keptPlace ? { place: keptPlace } : { place: undefined }),
+                ...selfPlace,
               }
             : member,
         ),
@@ -1070,7 +1084,7 @@ function reduceSession(state: Session, action: Action): Session {
         && (member.publisherId || '') === (memberIdOf(place) || '')
       ) return state;
       if (canonicalTrailAt(state, member) > 0 && place.lat != null && place.lng != null) {
-        const keptPlace = carryPlace(member, place.lat, place.lng);
+        const keptPlace = placePatch(member, place.lat, place.lng, state.tracks[member.id], place.accuracyM || 0, place.at);
         return {
           ...state,
           members: state.members.map((item) =>
@@ -1084,7 +1098,7 @@ function reduceSession(state: Session, action: Action): Session {
                   battery,
                   charging,
                   updatedAt: place.at,
-                  ...(keptPlace ? { place: keptPlace } : { place: undefined }),
+                  ...keptPlace,
                 }, place)
               : item,
           ),
@@ -1112,7 +1126,7 @@ function reduceSession(state: Session, action: Action): Session {
         : keptTracks;
       const lat = settled.decision === 'drop' && hasLocation(member) ? member.lat : (settled.lat ?? place.lat);
       const lng = settled.decision === 'drop' && hasLocation(member) ? member.lng : (settled.lng ?? place.lng);
-      const keptPlace = carryPlace(member, lat, lng);
+      const keptPlace = placePatch(member, lat, lng, keptTracks[member.id], place.accuracyM || 0, place.at);
       return archiveJourneys({
         ...state,
         visits: visitsWithinHistory(state.visits, now),
@@ -1127,7 +1141,7 @@ function reduceSession(state: Session, action: Action): Session {
                 battery,
                 charging,
                 updatedAt: place.at,
-                ...(keptPlace ? { place: keptPlace } : { place: undefined }),
+                ...keptPlace,
                 needsAppUpdate: place.legacyClient === true,
               }, place)
             : item,
@@ -1202,9 +1216,10 @@ function reduceSession(state: Session, action: Action): Session {
             visits = moveKeyed(visits, item.id, roster.id);
             journeys = moveKeyed(journeys, item.id, roster.id);
           }
+          const priorPoints = tracks[roster.id];
           const settled = canonicalTrailAt(state, { publisherId: item.memberId }) > 0 || !isWithinHistory(place.at, now)
             ? null
-            : settleTrailPoint(tracks[roster.id], { lat: place.lat, lng: place.lng, at: place.at, accuracyM: place.accuracyM }, now);
+            : settleTrailPoint(priorPoints, { lat: place.lat, lng: place.lng, at: place.at, accuracyM: place.accuracyM }, now);
           if (settled) {
             noteDiag({
               kind: 'filter',
@@ -1219,7 +1234,7 @@ function reduceSession(state: Session, action: Action): Session {
           }
           const lat = settled && settled.decision === 'drop' && hasLocation(roster) ? roster.lat : (settled?.lat ?? place.lat);
           const lng = settled && settled.decision === 'drop' && hasLocation(roster) ? roster.lng : (settled?.lng ?? place.lng);
-          const keptPlace = carryPlace(roster, lat, lng);
+          const keptPlace = placePatch(roster, lat, lng, priorPoints, place.accuracyM || 0, place.at);
           members = members.map((entry) => (entry.id === roster.id
             ? {
                 ...entry,
@@ -1233,7 +1248,7 @@ function reduceSession(state: Session, action: Action): Session {
                 ...(item.name ? { name: item.name } : {}),
                 ...(item.memberId ? { publisherId: item.memberId } : {}),
                 ...(item.photo ? { photo: item.photo } : {}),
-                ...(keptPlace ? { place: keptPlace } : { place: undefined }),
+                ...keptPlace,
                 needsAppUpdate: place.legacyClient === true,
               }
             : entry));
@@ -1329,8 +1344,7 @@ function reduceSession(state: Session, action: Action): Session {
       const now = Date.now();
       const base = visitsWithinHistory(state.visits, now);
       const current = base[action.memberId] ?? [];
-      const next = action.stops
-        .filter((stop) => isWithinHistory(stop.arrivedAt, now))
+      const next = mergeVisitStops(current, action.stops, now)
         .map((stop) => {
           const id = `${action.memberId}:${stop.arrivedAt}:${stop.lat.toFixed(4)}:${stop.lng.toFixed(4)}`;
           const prev = current.find((visit) => visit.id === id);
@@ -1422,7 +1436,10 @@ function reduceSession(state: Session, action: Action): Session {
       return {
         ...state,
         members: state.members.map((member) => (
-          member.id === action.id ? { ...member, ...(place ? { place } : { place: undefined }) } : member
+          member.id === action.id ? {
+            ...member,
+            ...(place ? { place, placeLat: member.lat, placeLng: member.lng } : { place: undefined, placeLat: undefined, placeLng: undefined }),
+          } : member
         )),
       };
     }

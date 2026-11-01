@@ -619,8 +619,16 @@ export function useFamilyTracking(onFirstFix: (lat: number, lng: number) => void
       const here = { lat: member.lat, lng: member.lng };
       const key = placeGridKey(here.lat, here.lng);
       const id = member.id;
-      if (placeKeys.current[id] === key && cleanPlace(member.place)) continue;
-      const job = `${id}:${key}`;
+      const neighborDisagrees = current.members.some((other) => {
+        if (other.id === id || !hasLocation(other) || other.lat == null || other.lng == null) return false;
+        if (haversineMeters(here, { lat: other.lat, lng: other.lng }) > 40) return false;
+        const theirs = cleanPlace(other.place);
+        const mine = cleanPlace(member.place);
+        return Boolean(theirs && mine && theirs !== mine);
+      });
+      const needsFresh = !cleanPlace(member.place) || neighborDisagrees;
+      if (!needsFresh && placeKeys.current[id] === key) continue;
+      const job = `${id}:${key}:${needsFresh ? 'fresh' : 'cell'}`;
       if (placeJobs.current[id] === job) continue;
       placeJobs.current[id] = job;
       const apply = (label: string | null, settled: boolean, attempt = 0) => {

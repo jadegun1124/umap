@@ -5,7 +5,7 @@ import { noteDiag } from '../../lib/diagLog.mjs';
 import { hasLocation } from '../../lib/geo';
 import { spreadPinPositions } from '../../lib/mapPinSpread.mjs';
 import { memberIsStale, memberPresence } from '../../lib/memberPresence.mjs';
-import { isImpossibleJump, isVehicleStep, trailDrawParts, trailSegmentDashed } from '../../lib/tracking.mjs';
+import { appendLiveTip, trailDrawParts } from '../../lib/tracking.mjs';
 import { VWORLD_ATTRIBUTION, vworldApiKey, vworldBaseTileUrl } from '../../services/vworld';
 import type { HomeZone, Member, TrackPoint } from '../../types/family';
 
@@ -262,7 +262,7 @@ export const StreetMap = forwardRef<StreetMapHandle, {
     const pins = spreadPinPositions(members);
     for (const member of members) {
       if (!hasLocation(member)) continue;
-      const at = pins.get(member.id) || member;
+      const at = pins.get(member.id) || { lat: member.lat, lng: member.lng, dx: 0, dy: 0 };
       const selected = member.id === selectedId;
       const dimmed = memberIsStale(memberPresence(member, Date.now()));
       const color = '#0084FF';
@@ -282,7 +282,7 @@ export const StreetMap = forwardRef<StreetMapHandle, {
         zIndexOffset: selected ? 800 : 400,
         icon: L.divIcon({
           className: 'umap-member-pin',
-          html: `<div style="display:flex;flex-direction:column;align-items:center;transform:translate(-50%,-100%);opacity:${dimmed ? '0.55' : '1'}">
+          html: `<div style="display:flex;flex-direction:column;align-items:center;transform:translate(calc(-50% + ${at.dx || 0}px), calc(-100% + ${at.dy || 0}px));opacity:${dimmed ? '0.55' : '1'}">
             <span style="display:inline-flex;flex-direction:column;align-items:center;margin-bottom:4px;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:700;max-width:180px;box-shadow:0 1px 4px rgba(15,23,42,.16);background:${selected ? '#0084FF' : '#fff'};color:${selected ? '#fff' : '#0f172a'}"><span style="display:inline-flex;align-items:center;white-space:nowrap">${label}${battery}</span>${place ? `<span style="display:block;max-width:164px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;font-weight:600;opacity:.85">${place}</span>` : ''}</span>
             ${face}
           </div>`,
@@ -307,18 +307,7 @@ export const StreetMap = forwardRef<StreetMapHandle, {
     let pointCount = 0;
     for (const trail of trails) {
       if (!trail || trail.length < 2) continue;
-      const parts = trailDrawParts(trail).filter((part) => part.points.length >= 2);
-      const trailEnd = trail[trail.length - 1];
-      const paintedEnd = parts[parts.length - 1]?.points.at(-1);
-      if (trailEnd && paintedEnd && Number.isFinite(trailEnd.lat) && Number.isFinite(trailEnd.lng)) {
-        const sameTip = Math.abs(paintedEnd.lat - trailEnd.lat) < 1e-5 && Math.abs(paintedEnd.lng - trailEnd.lng) < 1e-5;
-        if (!sameTip && !isImpossibleJump(paintedEnd, trailEnd)) {
-          const hole = !isVehicleStep(paintedEnd, trailEnd) && trailSegmentDashed(paintedEnd, trailEnd);
-          const previous = parts[parts.length - 1];
-          if (!hole && previous && !previous.dashed) previous.points = previous.points.concat([trailEnd]);
-          else parts.push({ points: [paintedEnd, trailEnd], dashed: hole });
-        }
-      }
+      const parts = appendLiveTip(trailDrawParts(trail), trail[trail.length - 1]);
       if (parts.length === 0) continue;
       for (const part of parts) {
         pointCount += part.points.length;

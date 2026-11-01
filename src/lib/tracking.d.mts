@@ -111,8 +111,10 @@ export const TRAIL_GAP_M: number;
 export const TRAIL_GAP_MS: number;
 export function trailSegmentDashed(start: TrailSample | null | undefined, end: TrailSample | null | undefined): boolean;
 export function trailDrawParts(points: TrailSample[] | null | undefined): { points: TrailSample[]; dashed: boolean }[];
+export function appendLiveTip(parts: { points: TrailSample[]; dashed: boolean }[] | null | undefined, trailEnd: TrailSample | null | undefined): { points: TrailSample[]; dashed: boolean }[];
 export function visibleTrail(points: TrailSample[] | null | undefined): TrailSample[];
 export function displayCoordinate<T extends TrailSample>(points: TrailSample[] | null | undefined, point: T): T;
+export function walkLeavesStay(points: TrailSample[] | null | undefined, point: TrailSample | null | undefined): boolean;
 export function settleTrailPoint(
   points: TrailSample[] | null | undefined,
   point: TrailSample,
@@ -147,6 +149,7 @@ export function formatDurationMs(durationMs: number): string;
 export function formatFixAge(at: number, now?: number): string;
 export function formatDistanceM(meters: number): string;
 export function buildDayRecord(points: TrailSample[] | null | undefined, now: number): { stops: DayStop[]; segments: DaySegment[] };
+export function mergeVisitStops<T extends DayStop>(previous: T[] | null | undefined, stops: DayStop[] | null | undefined, now: number): Array<T | DayStop>;
 
 export const WALK_JOURNEY_STAY_MS: number;
 export const RIDE_JOURNEY_STAY_MS: number;
