@@ -77,6 +77,7 @@ export function modeLabel(mode: TravelMode | string): string;
 export function seoulDayKey(epochMs: number): string;
 export function needsDailyWipe(storedDay: string | null | undefined, now: number): boolean;
 export function isRideStep(last: TrailSample | null | undefined, point: TrailSample | null | undefined): boolean;
+export function isVehicleStep(last: TrailSample | null | undefined, point: TrailSample | null | undefined): boolean;
 export function fixShowsRide(points: TrailSample[] | null | undefined, point: TrailSample | null | undefined): boolean;
 export function recentRide(points: TrailSample[] | null | undefined, now: number): boolean;
 export function lastTravelAt(points: TrailSample[] | null | undefined): number | null;
@@ -199,6 +200,7 @@ export function storedTrackAfterArchive(
   now: number,
 ): { journeys: JourneyRecord[]; points: TrailSample[] };
 export function liveTrailPoints(points: TrailSample[] | null | undefined, now: number): TrailSample[];
+export function displayLivePoints(points: TrailSample[] | null | undefined, now: number): TrailSample[];
 export function liveTrailDrawable(points: TrailSample[] | null | undefined, now?: number): boolean;
 export function previewOpenJourney(points: TrailSample[] | null | undefined, now: number): JourneyRecord | null;
 export function playbackAnchor(
