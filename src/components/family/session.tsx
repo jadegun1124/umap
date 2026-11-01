@@ -1665,17 +1665,49 @@ export function FamilyProvider({ children }: { children: React.ReactNode }) {
     if (!deviceReady || restoringDeviceSeal || !needsHistoryRestore(state)) return;
     if (restoreOnce.current) return;
     const storage = typeof localStorage === 'undefined' ? null : localStorage;
+    const beforeJ = Object.values(state.journeys || {}).reduce((sum, list) => sum + (Array.isArray(list) ? list.length : 0), 0);
+    const beforeV = Object.values(state.visits || {}).reduce((sum, list) => sum + (Array.isArray(list) ? list.length : 0), 0);
     const accountKey = readStoredAccountKey(storage);
-    if (!accountKey) return;
+    if (!accountKey) {
+      noteDiag({ kind: 'restore', result: 'nokey', beforej: beforeJ, beforev: beforeV, afterj: beforeJ, afterv: beforeV });
+      return;
+    }
     restoreOnce.current = true;
     let cancel = false;
     void (async () => {
       const loaded = await loadFamilyAccount(accountKey).catch(() => ({ ok: false as const }));
-      if (cancel || !loaded.ok || !loaded.account) return;
+      if (cancel) return;
+      if (!loaded.ok || !loaded.account) {
+        noteDiag({ kind: 'restore', result: 'off', beforej: beforeJ, beforev: beforeV, afterj: beforeJ, afterv: beforeV });
+        return;
+      }
+      const account = loaded.account as { sealedHistory?: unknown; updatedAt?: number; journeys?: unknown[]; visits?: unknown[] };
+      const seal = account.sealedHistory ? 1 : 0;
+      const bytes = account.sealedHistory ? JSON.stringify(account.sealedHistory).length : 0;
+      const updated = typeof account.updatedAt === 'number' ? account.updatedAt : 0;
       const opened = await openAccountSecrets(loaded.account, storage).catch(() => null);
-      if (cancel || !opened) return;
+      if (cancel || !opened) {
+        noteDiag({ kind: 'restore', result: 'off', seal, bytes, updated, beforej: beforeJ, beforev: beforeV, afterj: beforeJ, afterv: beforeV });
+        return;
+      }
+      const openedAccount = opened as { historyLocked?: boolean; journeys?: unknown[]; visits?: unknown[] };
+      const decrypt = openedAccount.historyLocked ? 'fail' : 'ok';
       const patch = fillFromAccount(opened);
-      if (!patch) return;
+      const afterJ = patch ? patch.journeys.length : 0;
+      const afterV = patch ? patch.visits.length : 0;
+      noteDiag({
+        kind: 'restore',
+        result: openedAccount.historyLocked ? 'locked' : (afterJ || afterV ? 'filled' : 'empty'),
+        seal,
+        bytes,
+        updated,
+        decrypt,
+        beforej: beforeJ,
+        beforev: beforeV,
+        afterj: afterJ,
+        afterv: afterV,
+      });
+      if (!patch || openedAccount.historyLocked) return;
       dispatch({
         type: 'fill-history',
         journeys: patch.journeys as Journey[],

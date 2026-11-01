@@ -5,7 +5,7 @@
 import { isSeal, isVault } from '../src/lib/familySeal.mjs';
 import { NAVER_REDIRECT, allowedNaverRedirect } from '../src/lib/naverAuth.mjs';
 import { listDisclosures, purgeExpiredDisclosureIndex, purgeExpiredDisclosures } from './disclosure.mjs';
-import { forgetDiagReports, purgeDiagReports, putDiagReport, readDiagReport } from './diag.mjs';
+import { diagReadAuthorized, forgetDiagReports, listDiagReports, purgeDiagReports, putDiagReport, readDiagReport } from './diag.mjs';
 import { listHandling, recordHandling } from './handling.mjs';
 import { mintInvite, redeemInvite } from './invite.mjs';
 
@@ -337,6 +337,7 @@ export function publicAccount(record, extras = {}) {
     kakaoLinked: typeof record.kakaoId === 'string' && record.kakaoId.length > 0,
     naverLinked: typeof record.naverId === 'string' && record.naverId.length > 0,
     nameChosen: record.nameChosen !== false,
+    updatedAt: Number.isFinite(record.updatedAt) ? record.updatedAt : 0,
     ...(extras.accountKey ? { accountKey: extras.accountKey } : {}),
     ...(extras.created ? { created: true } : {}),
   };
@@ -1076,6 +1077,11 @@ export async function parseAccountOperation(request) {
 
   const accountKey = request.headers.get('x-umap-account-key') || '';
 
+  if (path === '/v1/diag/recent') {
+    if (request.method !== 'GET') return json({ error: 'method' }, 405);
+    const limit = Number(url.searchParams.get('limit') || 20);
+    return { kind: 'account-diag-recent', limit, authorization: request.headers.get('authorization') || '' };
+  }
   const diagGet = path.match(/^\/v1\/diag\/([A-Za-z0-9_-]{16,64})$/);
   if (diagGet) {
     if (request.method !== 'GET') return json({ error: 'method' }, 405);
@@ -1272,10 +1278,18 @@ export async function handleAccountOperation(store, op, options = {}) {
     const saved = await putDiagReport(store, {
       accountId: record.id,
       memberId: record.memberId,
+      name: record.profile && record.profile.name,
       events: op.events,
     }, now);
     if (saved.error) return json({ error: saved.error }, 400);
     return json({ ok: true, id: saved.id, exp: saved.exp, count: saved.count });
+  }
+  if (op.kind === 'account-diag-recent') {
+    const gate = await diagReadAuthorized(op.authorization, options.diagReadToken || '');
+    if (gate === 'disabled') return json({ error: 'disabled' }, 404);
+    if (gate !== 'ok') return json({ error: 'unauthorized' }, 401);
+    const reports = await listDiagReports(store, op.limit, now);
+    return json({ ok: true, reports });
   }
   if (op.kind === 'account-diag-get') {
     const report = await readDiagReport(store, op.id, now);

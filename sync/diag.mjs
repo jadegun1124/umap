@@ -122,7 +122,48 @@ export function forgetDiagReports(store, accountId) {
   });
 }
 
-async function putDiagReportNow(store, { accountId, memberId, events }, now) {
+function versionOf(events) {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const version = events[index] && events[index].version;
+    if (typeof version === 'string' && version.trim()) return version.trim().slice(0, 40);
+  }
+  return '';
+}
+
+export function formatDiagKst(ms) {
+  if (!Number.isFinite(ms) || ms <= 0) return '';
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Seoul',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(new Date(ms));
+  const pick = (type) => parts.find((part) => part.type === type)?.value || '';
+  return `${pick('year')}-${pick('month')}-${pick('day')} ${pick('hour')}:${pick('minute')}`;
+}
+
+export async function diagReadAuthorized(authorization, secret) {
+  if (typeof secret !== 'string' || secret.length === 0) return 'disabled';
+  const header = typeof authorization === 'string' ? authorization : '';
+  if (!header.startsWith('Bearer ')) return 'unauthorized';
+  const token = header.slice('Bearer '.length).trim();
+  if (!token) return 'unauthorized';
+  const enc = new TextEncoder();
+  const [left, right] = await Promise.all([
+    crypto.subtle.digest('SHA-256', enc.encode(token)),
+    crypto.subtle.digest('SHA-256', enc.encode(secret)),
+  ]);
+  const a = new Uint8Array(left);
+  const b = new Uint8Array(right);
+  let diff = 0;
+  for (let index = 0; index < a.length; index += 1) diff |= a[index] ^ b[index];
+  return diff === 0 ? 'ok' : 'unauthorized';
+}
+
+async function putDiagReportNow(store, { accountId, memberId, name, events }, now) {
   const cleaned = cleanDiagEvents(events);
   if (cleaned.length === 0) return { error: 'empty' };
   await purgeDiagReportsNow(store, now);
@@ -135,9 +176,21 @@ async function putDiagReportNow(store, { accountId, memberId, events }, now) {
   }
   if (id.length < 16) return { error: 'id' };
   const exp = now + DIAG_TTL_MS;
-  await store.put(`diag:${id}`, { accountId, exp, events: cleaned });
+  const version = versionOf(cleaned);
+  const bytes = JSON.stringify(cleaned).length;
+  const label = typeof name === 'string' ? name.trim().slice(0, 40) : '';
+  await store.put(`diag:${id}`, { accountId, exp, events: cleaned, memberId, name: label, version, bytes, receivedAt: now });
   const rows = await readIndex(store);
-  rows.push({ id, accountId, exp });
+  rows.push({
+    id,
+    accountId,
+    exp,
+    receivedAt: now,
+    memberId: typeof memberId === 'string' ? memberId : '',
+    name: label,
+    version,
+    bytes,
+  });
   await writeIndex(store, rows);
   await recordHandling(store, {
     kind: 'collect',
@@ -151,6 +204,24 @@ async function putDiagReportNow(store, { accountId, memberId, events }, now) {
 
 export function putDiagReport(store, input, now = Date.now()) {
   return enqueueDiag(() => putDiagReportNow(store, input, now));
+}
+
+export function listDiagReports(store, limit = 20, now = Date.now()) {
+  const count = Math.min(50, Math.max(1, Number(limit) || 20));
+  return enqueueDiag(async () => {
+    await purgeDiagReportsNow(store, now);
+    const rows = await readIndex(store);
+    rows.sort((left, right) => (right.receivedAt || 0) - (left.receivedAt || 0) || (right.exp || 0) - (left.exp || 0));
+    return rows.slice(0, count).map((row) => ({
+      id: row.id,
+      receivedAt: row.receivedAt || 0,
+      receivedKst: formatDiagKst(row.receivedAt || 0),
+      name: row.name || '',
+      memberId: row.memberId || '',
+      version: row.version || '',
+      bytes: row.bytes || 0,
+    }));
+  });
 }
 
 export function readDiagReport(store, id, now = Date.now()) {
