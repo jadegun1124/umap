@@ -10,6 +10,7 @@ import android.content.pm.PackageManager;
 import android.location.Location;
 import android.location.LocationManager;
 import android.net.Uri;
+import android.app.AlarmManager;
 import android.os.BatteryManager;
 import android.os.Build;
 import android.util.Base64;
@@ -64,6 +65,7 @@ import org.json.JSONObject;
  */
 public class LocationKeepService {
     public static final String ACTION_FIX = "kr.co.umap.tracker.LOCATION_FIX";
+    public static final String ACTION_HEARTBEAT = "kr.co.umap.tracker.LOCATION_HEARTBEAT";
     private static final String PREFS = "umap_location_keep";
     private static final int REQUEST_CODE = OngoingNotificationCleanup.LOCATION_NOTIFICATION_ID;
     private static final ExecutorService IO = Executors.newSingleThreadExecutor();
@@ -110,6 +112,9 @@ public class LocationKeepService {
     /** Family server. Local emit() is not throttled by these. */
     private static final long PUBLISH_MOVING_MS = 8_000L;
     private static final long PUBLISH_STILL_MS = 120_000L;
+    /** Fresher than the 10 minute family stale window, even when GPS is quiet. */
+    private static final long HEARTBEAT_MS = 3 * 60 * 1000L;
+    private static final int HEARTBEAT_CODE = REQUEST_CODE + 1;
     private static final float PUBLISH_MOVING_M = 25f;
     private static long requestedGpsMs = GPS_STILL_MS;
     private static long stillSinceMs = 0;
@@ -187,6 +192,7 @@ public class LocationKeepService {
             }
         }
         if (!anySharing(config)) IO.execute(() -> publish(context, null));
+        else scheduleHeartbeat(context);
         return true;
     }
 
@@ -196,6 +202,7 @@ public class LocationKeepService {
         synchronized (LOCK) {
             clearFilter(context);
             removeUpdates(context);
+            cancelHeartbeat(context);
         }
         OngoingNotificationCleanup.clear(context);
     }
@@ -205,6 +212,7 @@ public class LocationKeepService {
         synchronized (LOCK) {
             clearFilter(context);
             removeUpdates(context);
+            cancelHeartbeat(context);
         }
     }
 
@@ -249,7 +257,73 @@ public class LocationKeepService {
         prefs(context).edit().putBoolean("registered", false).commit();
         synchronized (LOCK) {
             removeUpdates(context);
+            cancelHeartbeat(context);
         }
+    }
+
+    public static void onHeartbeat(Context context, BroadcastReceiver.PendingResult pending) {
+        attach(context);
+        IO.execute(() -> {
+            try {
+                if (!prefs(context).getBoolean("registered", false)) return;
+                Location last;
+                synchronized (LOCK) {
+                    last = lastPublished != null ? new Location(lastPublished) : storedBeat(context);
+                }
+                if (last != null && anySharing(readConfig(context))) publish(context, last);
+            } finally {
+                scheduleHeartbeat(context);
+                if (pending != null) pending.finish();
+            }
+        });
+    }
+
+    private static android.app.PendingIntent heartbeatIntent(Context context) {
+        Intent intent = new Intent(context, LocationKeepReceiver.class);
+        intent.setAction(ACTION_HEARTBEAT);
+        int flags = android.app.PendingIntent.FLAG_UPDATE_CURRENT;
+        if (Build.VERSION.SDK_INT >= 31) flags |= android.app.PendingIntent.FLAG_IMMUTABLE;
+        return android.app.PendingIntent.getBroadcast(context, HEARTBEAT_CODE, intent, flags);
+    }
+
+    private static void scheduleHeartbeat(Context context) {
+        AlarmManager alarms = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
+        if (alarms == null || !prefs(context).getBoolean("registered", false)) return;
+        try {
+            alarms.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, System.currentTimeMillis() + HEARTBEAT_MS, heartbeatIntent(context));
+        } catch (Exception ignored) {
+            /* 다음 위치 콜백이 심박을 다시 건다 */
+        }
+    }
+
+    private static void cancelHeartbeat(Context context) {
+        AlarmManager alarms = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
+        if (alarms == null) return;
+        try {
+            alarms.cancel(heartbeatIntent(context));
+        } catch (Exception ignored) {
+            /* 이미 없는 알람 */
+        }
+    }
+
+    private static void rememberBeat(Context context, Location location) {
+        if (location == null) return;
+        prefs(context).edit()
+            .putLong("beatLatE6", Math.round(location.getLatitude() * 1_000_000d))
+            .putLong("beatLngE6", Math.round(location.getLongitude() * 1_000_000d))
+            .putInt("beatAcc", Math.max(1, Math.round(location.getAccuracy())))
+            .apply();
+    }
+
+    private static Location storedBeat(Context context) {
+        SharedPreferences saved = prefs(context);
+        if (!saved.contains("beatLatE6") || !saved.contains("beatLngE6")) return null;
+        Location location = new Location("heartbeat");
+        location.setLatitude(saved.getLong("beatLatE6", 0) / 1_000_000d);
+        location.setLongitude(saved.getLong("beatLngE6", 0) / 1_000_000d);
+        location.setAccuracy(saved.getInt("beatAcc", 20));
+        location.setTime(System.currentTimeMillis());
+        return location;
     }
 
     private static SharedPreferences prefs(Context context) {
@@ -501,7 +575,9 @@ public class LocationKeepService {
         }
         lastPublished = new Location(location);
         lastPublishedAt = now;
+        rememberBeat(context, location);
         rememberFilter(context);
+        scheduleHeartbeat(context);
         return new Location(location);
     }
 
@@ -656,7 +732,7 @@ public class LocationKeepService {
                     if (battery >= 0) body.put("batteryPct", battery);
                     body.put("charging", charging);
                 }
-                if (put(base, target.optString("token"), body, identified ? profileKey : "")) {
+                if (putWithRetry(base, target.optString("token"), body, identified ? profileKey : "")) {
                     target.put("revokeSent", !sharing);
                     changed = true;
                 }
@@ -708,6 +784,19 @@ public class LocationKeepService {
         } catch (Exception ignored) {
             return null;
         }
+    }
+
+    private static boolean putWithRetry(String base, String token, JSONObject body, String profileKey) {
+        for (int attempt = 0; attempt < 3; attempt += 1) {
+            if (put(base, token, body, profileKey)) return true;
+            try {
+                Thread.sleep(1_500L * (attempt + 1));
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
+        return false;
     }
 
     private static boolean put(String base, String token, JSONObject body, String profileKey) {

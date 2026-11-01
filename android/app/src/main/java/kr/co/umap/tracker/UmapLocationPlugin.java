@@ -503,6 +503,8 @@ public class UmapLocationPlugin extends Plugin {
         result.put("running", LocationKeepService.isRunning());
         result.put("userStopped", LocationKeepService.userStopped(getContext()));
         result.put("native", true);
+        PowerManager power = (PowerManager) getContext().getSystemService(Context.POWER_SERVICE);
+        result.put("batteryUnrestricted", power != null && power.isIgnoringBatteryOptimizations(getContext().getPackageName()));
         String reason = LocationKeepService.lastError();
         if (reason != null) result.put("reason", reason);
         call.resolve(result);

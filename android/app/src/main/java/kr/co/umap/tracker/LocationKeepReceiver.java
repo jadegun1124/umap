@@ -9,6 +9,11 @@ import android.location.Location;
 public class LocationKeepReceiver extends BroadcastReceiver {
     @Override
     public void onReceive(Context context, Intent intent) {
+        if (intent != null && LocationKeepService.ACTION_HEARTBEAT.equals(intent.getAction())) {
+            PendingResult pending = goAsync();
+            LocationKeepService.onHeartbeat(context.getApplicationContext(), pending);
+            return;
+        }
         Location location = LocationKeepService.locationFrom(intent);
         if (location == null) return;
         PendingResult pending = goAsync();
