@@ -721,9 +721,12 @@ function departsOnFoot(points, point) {
   const origin = previousVertex(list);
   const folding = origin && haversineMeters(origin, point) + 4 < haversineMeters(origin, anchor);
   const longSit = dt >= STOP_MIN_MS || longStayMarked(list, anchor);
-  if (dt <= 90_000 && speed >= 0.7 && speed <= 2.6 && !folding) {
-    const sit = longSit ? null : staySit(list, anchor);
-    if (sit && haversineMeters(sit, point) + 4 < haversineMeters(sit, anchor)) return false;
+  if (dt <= 90_000 && speed >= 0.7 && speed <= 2.6) {
+    const sit = sitBehind(list);
+    const left = sit ? haversineMeters(sit, anchor) : 0;
+    // Still inside the sit: a step that folds back is jitter. Once the walk
+    // is about 40m out, the way back is the same walk, not a cloud.
+    if (left < 40 && (folding || (sit && sit !== anchor && haversineMeters(sit, point) + 4 < left))) return false;
     return true;
   }
   if (point.staying !== true || !longSit || moved > 48) return false;
@@ -814,6 +817,10 @@ function trailingSpur(points, point) {
   const tip = drawnAnchor(points);
   const prev = previousVertex(points);
   if (!tip || !prev || !point || tip === point) return false;
+  const sit = sitBehind(points);
+  // A walk that already left the sit keeps its far corner. Turning back for
+  // the return must not peel that line off as if it were a courtyard spike.
+  if (sit && haversineMeters(sit, tip) >= 40) return false;
   if (unconfirmedDeparture(prev, tip)) {
     const step = stepPace(tip, point);
     const onward = step
@@ -1752,6 +1759,28 @@ export function buildDayRecord(points, now) {
   return { stops, segments };
 }
 
+/**
+ * Closed visits stay on the record after the live track is trimmed to the
+ * open sit. A new stop that covers the same time replaces the old one.
+ * An open visit is only whatever the current track still shows.
+ */
+export function mergeVisitStops(previous, stops, now) {
+  const when = Number.isFinite(now) ? now : Date.now();
+  const next = (Array.isArray(stops) ? stops : []).filter((stop) => stop && Number.isFinite(stop.arrivedAt) && isWithinHistory(stop.arrivedAt, when));
+  const kept = [];
+  for (const visit of Array.isArray(previous) ? previous : []) {
+    if (!visit || visit.leftAt == null || !Number.isFinite(visit.arrivedAt)) continue;
+    if (!isWithinHistory(visit.arrivedAt, when)) continue;
+    const visitEnd = visit.leftAt;
+    const overlaps = next.some((stop) => {
+      const end = stop.leftAt ?? when;
+      return visit.arrivedAt < end && visitEnd > stop.arrivedAt;
+    });
+    if (!overlaps) kept.push(visit);
+  }
+  return kept.concat(next);
+}
+
 function orderedTrail(points) {
   const list = [];
   for (const point of Array.isArray(points) ? points : []) {
@@ -1968,10 +1997,64 @@ function journeyPathRecordable(path, durationMs) {
  * A step that leaves a stay. Still-phone jitter, even a long chord inside the
  * block, is not movement. A walk pace or a ride is.
  */
+/**
+ * One good-accuracy step of a walk. A stay flag and a missing speed do not
+ * make it jitter. A reported speed near zero, or a leap, still does.
+ */
+function accurateWalkStep(prev, point) {
+  if (!prev || !point || prev.stayEnd || point.stayEnd) return false;
+  const accuracy = positiveMeters(point.accuracyM);
+  if (!(accuracy > 0) || accuracy > 25) return false;
+  const reported = pointSpeed(point);
+  if (reported != null && reported < 0.4) return false;
+  const pace = stepPace(prev, point);
+  if (!pace || pace.moved < 8 || pace.dt < 800 || pace.dt > 90_000) return false;
+  return pace.speed >= 0.7 && pace.speed <= 2.6;
+}
+
+/** The vertex this walk left. Steps that are not a walk stay put. */
+function sitBehind(points) {
+  const drawn = drawnPoints(points);
+  for (let index = drawn.length - 1; index >= 1; index -= 1) {
+    if (!accurateWalkStep(drawn[index - 1], drawn[index])) return drawn[index];
+  }
+  return drawn[0] || null;
+}
+
+/**
+ * Good fixes walking one way for about 40m. A cloud that folds back, or a
+ * single leap, is not this. Radius does not decide it.
+ */
+function hasDirectedWalk(points) {
+  const located = [];
+  for (const point of Array.isArray(points) ? points : []) {
+    if (point && !point.stayEnd && Number.isFinite(point.lat) && Number.isFinite(point.at)) located.push(point);
+  }
+  let run = [];
+  const directed = () => {
+    if (run.length < 3) return false;
+    const path = pathDistance(run);
+    const net = haversineMeters(run[0], run[run.length - 1]);
+    return path >= 40 && net >= 30 && path > 0 && net / path >= 0.62;
+  };
+  for (let index = 1; index < located.length; index += 1) {
+    if (!accurateWalkStep(located[index - 1], located[index])) {
+      if (directed()) return true;
+      run = [];
+      continue;
+    }
+    if (run.length === 0) run.push(located[index - 1]);
+    run.push(located[index]);
+    if (directed()) return true;
+  }
+  return directed();
+}
+
 function isMovingStep(prev, point) {
   if (!prev || !point || prev.stayEnd || point.stayEnd) return false;
   if (isImpossibleJump(prev, point)) return false;
   if (isRideStep(prev, point)) return true;
+  if (accurateWalkStep(prev, point)) return true;
   const pace = stepPace(prev, point);
   if (!pace || pace.dt < 800 || pace.moved < TRAIL_WALK_VERTEX_M || pace.speed < 0.7 || pace.speed > 12) return false;
   if (point.staying === true && !speedShowsMoving(point)) return false;
@@ -2169,6 +2252,7 @@ export function recordsIndoorStay(points, now) {
     const trial = samples.slice(start - 1);
     const located = trial.filter((point) => !point.stayEnd);
     const body = located.length >= 2 ? located : trial;
+    if (hasDirectedWalk(body)) break;
     if (clusterSpread(body) > INDOOR_STAY_RADIUS_M) break;
     const shape = travelShape(body);
     const span = body[body.length - 1].at - body[0].at;
@@ -2329,6 +2413,7 @@ function indoorCloud(points, now) {
     const next = drawn[start];
     if (isVehicleStep(prev, next) || isRideStep(prev, next)) break;
     const trial = drawn.slice(start - 1);
+    if (hasDirectedWalk(trial)) break;
     if (clusterSpread(trial) > INDOOR_STAY_RADIUS_M) break;
     const shape = travelShape(trial);
     if (shape.path >= 80 && shape.net >= 80 && shape.ratio >= 0.62) break;

@@ -148,6 +148,7 @@ export function formatDurationMs(durationMs: number): string;
 export function formatFixAge(at: number, now?: number): string;
 export function formatDistanceM(meters: number): string;
 export function buildDayRecord(points: TrailSample[] | null | undefined, now: number): { stops: DayStop[]; segments: DaySegment[] };
+export function mergeVisitStops<T extends DayStop>(previous: T[] | null | undefined, stops: DayStop[] | null | undefined, now: number): Array<T | DayStop>;
 
 export const WALK_JOURNEY_STAY_MS: number;
 export const RIDE_JOURNEY_STAY_MS: number;

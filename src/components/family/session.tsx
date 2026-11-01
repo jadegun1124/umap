@@ -23,7 +23,7 @@ import { hideLeftPublishers, sharedPlaceStopsReporting } from '../../lib/memberP
 import { familyPinId, isMemberId, moveKeyed } from '../../lib/sharedIdentity.mjs';
 import { absorbPlaceholderMembers } from '../../lib/memberRoster.mjs';
 import { clearDiag, noteDiag } from '../../lib/diagLog.mjs';
-import { HISTORY_DAYS, JOURNEY_POINT_CAP, TRAIL_POINT_CAP, fixShowsRide, isWithinHistory, journeysWithinHistory, labelJourneyPlace, lastTravelAt, mergeJourneyLists, seoulDayKey, settleTrailPoint, stayLabelDwellMs, storedTrackAfterArchive, tracksWithinHistory, trimJourneyList, visitsWithinHistory, walkLeavesStay, type JourneyRecord } from '../../lib/tracking.mjs';
+import { HISTORY_DAYS, JOURNEY_POINT_CAP, TRAIL_POINT_CAP, fixShowsRide, isWithinHistory, journeysWithinHistory, labelJourneyPlace, lastTravelAt, mergeJourneyLists, seoulDayKey, mergeVisitStops, settleTrailPoint, stayLabelDwellMs, storedTrackAfterArchive, tracksWithinHistory, trimJourneyList, visitsWithinHistory, walkLeavesStay, type JourneyRecord } from '../../lib/tracking.mjs';
 import type { DayStop } from '../../lib/tracking.mjs';
 import type { SharedPlace, SharedProfile } from '../../services/familyShare';
 import { umapLocation } from '../../services/umapLocation';
@@ -1344,8 +1344,7 @@ function reduceSession(state: Session, action: Action): Session {
       const now = Date.now();
       const base = visitsWithinHistory(state.visits, now);
       const current = base[action.memberId] ?? [];
-      const next = action.stops
-        .filter((stop) => isWithinHistory(stop.arrivedAt, now))
+      const next = mergeVisitStops(current, action.stops, now)
         .map((stop) => {
           const id = `${action.memberId}:${stop.arrivedAt}:${stop.lat.toFixed(4)}:${stop.lng.toFixed(4)}`;
           const prev = current.find((visit) => visit.id === id);

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { carryPlace } from './memberPlace.mjs';
-import { displayLivePoints, liveMotionLabel, settleTrailPoint, storedTrackAfterArchive, trailDrawParts, walkLeavesStay } from './tracking.mjs';
+import { buildDayRecord, displayLivePoints, liveMotionLabel, mergeVisitStops, previewOpenJourney, settleTrailPoint, storedTrackAfterArchive, trailDrawParts, walkLeavesStay } from './tracking.mjs';
 import { spreadPinPositions } from './mapPinSpread.mjs';
 
 function eastOf(lat, lng, metersEast) {
@@ -57,6 +57,73 @@ test('a 300m accurate walk leaves the stay within a minute, relabels, and draws 
   assert.equal(sawMoving, true);
   assert.equal(relabeled, true);
   assert.equal(solidWalk, true);
+});
+
+test('a 100m store run inside 300m is a short journey and splits the home visit', () => {
+  const home = { lat: 37.55, lng: 127.05, place: '옛아파트' };
+  const t0 = Date.parse('2026-11-01T09:00:00Z');
+  const fixes = [];
+  for (let minute = 0; minute < 8; minute += 1) {
+    fixes.push({ ...home, at: t0 + minute * 60_000, speedMps: 0, accuracyM: 12, staying: true });
+  }
+  const leave = t0 + 8 * 60_000;
+  const stepM = 1.2 * 8;
+  const outSteps = Math.ceil(100 / stepM);
+  for (let index = 1; index <= outSteps; index += 1) {
+    const east = Math.min(100, index * stepM);
+    fixes.push({ ...eastOf(home.lat, home.lng, east), at: leave + index * 8_000, speedMps: null, accuracyM: 8, staying: true });
+  }
+  let at = fixes[fixes.length - 1].at;
+  let east = 100;
+  while (east > 0) {
+    east = Math.max(0, east - stepM);
+    at += 8_000;
+    fixes.push({ ...eastOf(home.lat, home.lng, east), at, speedMps: null, accuracyM: 8, staying: true });
+  }
+  const back = fixes[fixes.length - 1].at;
+  for (let minute = 1; minute <= 8; minute += 1) {
+    fixes.push({ ...home, at: back + minute * 60_000, speedMps: 0, accuracyM: 12, staying: true });
+  }
+  let points = [];
+  let journeys = [];
+  let visits = [];
+  let sawMoving = false;
+  let relabeled = false;
+  let solidWalk = false;
+  for (const fix of fixes) {
+    const before = points;
+    const directed = walkLeavesStay(before, fix);
+    points = settleTrailPoint(before, fix, fix.at).points;
+    const archived = storedTrackAfterArchive(points, fix.at);
+    if (archived.journeys.length > 0) {
+      journeys = journeys.concat(archived.journeys);
+      points = archived.points;
+    }
+    visits = mergeVisitStops(visits, buildDayRecord(points, fix.at).stops, fix.at);
+    const east = meters(home, fix);
+    if (fix.at - leave <= 90_000 && fix.at > leave && liveMotionLabel({ located: true, moving: false, points, now: fix.at, pin: fix }) === '지금') {
+      sawMoving = true;
+    }
+    if (east >= 50 && east <= 120 && directed && carryPlace({ ...home, placeLat: home.lat, placeLng: home.lng }, fix.lat, fix.lng, { directed, accuracyM: 8 }) === '') {
+      relabeled = true;
+    }
+    const live = displayLivePoints(points, fix.at);
+    const parts = trailDrawParts(live.length >= 2 ? live : points);
+    if (east >= 40 && east <= 120 && parts.some((part) => !part.dashed && chord(part) >= 40)) solidWalk = true;
+    if (parts.some((part) => part.dashed && chord(part) >= 120)) solidWalk = false;
+  }
+  const now = fixes[fixes.length - 1].at;
+  const open = previewOpenJourney(points, now);
+  const cards = journeys.concat(open ? [open] : []);
+  const trip = cards.filter((journey) => journey.distanceM >= 80 && (journey.endedAt - journey.startedAt) < 30 * 60 * 1000);
+  const stops = visits;
+  const homeStops = stops.filter((stop) => meters(home, stop) < 50);
+  assert.equal(sawMoving, true);
+  assert.equal(relabeled, true);
+  assert.equal(solidWalk, true);
+  assert.ok(trip.length >= 1, `journeys ${cards.map((journey) => `${journey.distanceM}m/${Math.round((journey.endedAt - journey.startedAt) / 1000)}s`).join(',')}`);
+  assert.ok(stops.length >= 2 && (homeStops.length >= 2 || stops.some((stop) => meters(home, stop) >= 50)), `stops ${stops.length} home ${homeStops.length}`);
+  assert.equal(cards.some((journey) => (journey.endedAt - journey.startedAt) > 30 * 60 * 1000), false);
 });
 
 test('three bubbles at one spot stay apart on screen', () => {
