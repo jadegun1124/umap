@@ -499,9 +499,17 @@ test('reverse geocode of the 105동 west edge does not keep 노원소방서', as
         namedetails: { name: '노원소방서' },
       });
     }
+    if (target.includes('kakao.com')) {
+      return jsonResponse({
+        documents: [{
+          road_address: { building_name: '다른아파트', road_name: '하계로', main_building_no: '9', region_3depth_name: '하계동' },
+          address: { region_3depth_name: '하계동' },
+        }],
+      });
+    }
     return jsonResponse({ elements: [] });
   };
-  const label = await reverseGeocode(pin.lat, pin.lng, { fetch: fetchImpl, key: 'test-key', pace: false });
+  const label = await reverseGeocode(pin.lat, pin.lng, { fetch: fetchImpl, key: 'test-key', kakaoKey: 'kakao', pace: false });
   assert.equal(label, '하계1차청구아파트 105동');
 });
 

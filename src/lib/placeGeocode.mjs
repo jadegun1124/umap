@@ -808,8 +808,11 @@ async function lookupPlace(lat, lng, options = {}) {
   if (kakaoKey) {
     try {
       const fromKakao = await fetchKakao(fetchImpl, lat, lng, kakaoKey);
-      if (fromKakao && RESIDENTIAL_NAME.test(fromKakao)) return finish(fromKakao, true);
       rememberRoad(fromKakao);
+      if (fromKakao && RESIDENTIAL_NAME.test(fromKakao) && !buildingName && !choosePlaceLabel(candidates, point)) {
+        residentialKnown = true;
+        buildingName = fromKakao;
+      }
     } catch {
       /* Nominatim으로 넘어간다 */
     }
