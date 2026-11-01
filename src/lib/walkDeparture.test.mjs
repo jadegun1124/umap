@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { carryPlace } from './memberPlace.mjs';
-import { appendLiveTip, buildDayRecord, displayLivePoints, liveMotionLabel, mergeVisitStops, previewOpenJourney, settleTrailPoint, storedTrackAfterArchive, trailDrawParts, walkLeavesStay } from './tracking.mjs';
+import { appendLiveTip, buildDayRecord, displayLivePoints, hasDirectedWalk, liveMotionLabel, mergeVisitStops, previewOpenJourney, settleTrailPoint, storedTrackAfterArchive, trailDrawParts, walkLeavesStay } from './tracking.mjs';
 import { spreadPinPositions } from './mapPinSpread.mjs';
 
 function eastOf(lat, lng, metersEast) {
@@ -227,6 +227,17 @@ test('the recorded walk is on the map once it is about 40m out, before the silen
   const drawn = displayLivePoints(points, endAt).filter((point) => !point.stayEnd);
   const far = drawn.reduce((max, point) => Math.max(max, meters(origin, point)), 0);
   assert.ok(far > Math.hypot(end.n, end.e) - 40, `trail ends ${Math.round(far)}m short of the pin`);
+});
+
+test('a sub-second spike does not erase a directed walk', () => {
+  const t = Date.parse('2026-11-01T00:00:00Z');
+  const points = [];
+  for (let index = 0; index <= 16; index += 1) {
+    points.push({ ...eastOf(37.55, 127.05, index * 3), at: t + index * 2_500, accuracyM: 8, speedMps: 1.2 });
+  }
+  const spike = { ...eastOf(37.55, 127.05, 24), lat: 37.55 + 20 / 110540, at: t + 8 * 2_500 + 200, accuracyM: 8, speedMps: 1.2 };
+  points.splice(9, 0, spike);
+  assert.equal(hasDirectedWalk(points), true);
 });
 
 test('three bubbles at one spot stay apart on screen', () => {
