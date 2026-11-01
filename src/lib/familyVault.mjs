@@ -94,7 +94,8 @@ export async function prepareBackup(snapshot, storage, recoveryCode) {
   // empty list replaces the server's sealedHistory. Keep what is already there.
   if (snapshotHistoryEmpty(snapshot)) {
     const kept = keepStoredHistory(snapshot);
-    if (snapshot.home) kept.home = snapshot.home;
+    kept.home = snapshot.home || null;
+    kept.clearHome = !snapshot.home;
     return kept;
   }
   const code = normalizeRecoveryCode(recoveryCode);
@@ -150,7 +151,7 @@ export async function openAccountSecrets(account, storage, typedCode = '') {
     if (opened && typeof opened === 'object') {
       journeys = Array.isArray(opened.journeys) ? opened.journeys : [];
       visits = Array.isArray(opened.visits) ? opened.visits : [];
-      home = account.home || opened.home || null;
+      home = account.clearHome ? null : (account.home || opened.home || null);
     } else if (!Array.isArray(account.journeys) || account.journeys.length === 0) {
       historyLocked = true;
     }

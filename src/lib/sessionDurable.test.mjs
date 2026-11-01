@@ -220,6 +220,7 @@ test('an empty journey list still uploads a home', async () => {
   assert.equal(saved.keepHistory, true);
   assert.equal(saved.sealedHistory, undefined);
   assert.equal(saved.home.label, '우리 집');
+  assert.equal(saved.clearHome, false);
 });
 
 test('an empty backup keeps server history instead of sealing an empty list', async () => {
@@ -235,6 +236,8 @@ test('an empty backup keeps server history instead of sealing an empty list', as
   assert.equal(empty.sealedHistory, undefined);
   assert.equal(empty.journeys, undefined);
   assert.equal(empty.visits, undefined);
+  assert.equal(empty.home, null);
+  assert.equal(empty.clearHome, true);
 });
 
 test('server history can fill an empty phone without a profile wipe', () => {
