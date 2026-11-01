@@ -23,4 +23,8 @@ test('a moved pin does not keep the previous neighborhood', () => {
   assert.equal(carryPlace(previous, 37.6401, 127.0101), '강북구 수유동');
   assert.equal(carryPlace(previous, 37.55, 127.01), '');
   assert.equal(carryPlace({ lat: 37.64, lng: 127.01, place: '근처' }, 37.64, 127.01), '');
+  const home = { lat: 37.6372, lng: 127.07085, place: '하계1차청구아파트 105동' };
+  const indoor = { lat: home.lat, lng: home.lng + 100 / (111_320 * Math.cos((home.lat * Math.PI) / 180)) };
+  assert.equal(carryPlace(home, indoor.lat, indoor.lng), '하계1차청구아파트 105동');
+  assert.equal(['하계1차청구아파트 105동', '머무름'].filter(Boolean).join(' · '), '하계1차청구아파트 105동 · 머무름');
 });

@@ -1489,6 +1489,73 @@ test('a walk home then 30 minutes of indoor spikes ends the live line and is not
   }
 });
 
+test('accurate still jumps between nearby buildings do not stay on the main line', () => {
+  const t = Date.UTC(2026, 10, 1, 5, 0, 0);
+  const origin = { lat: 37.6372, lng: 127.0709, at: t, accuracyM: 12, speedMps: 1.3, staying: false };
+  let points = [origin];
+  for (let index = 1; index <= 30; index += 1) {
+    const step = { ...offset(origin, 0, index * 4, t + index * 2_500), accuracyM: 12, speedMps: 1.3, staying: false };
+    points = settleTrailPoint(points, step, step.at).points;
+  }
+  const home = points[points.length - 1];
+  const arrived = home.at;
+  for (let minute = 1; minute <= 8; minute += 1) {
+    const east = minute % 2 === 0 ? 80 : 0;
+    const jump = { ...offset(home, 0, east, arrived + minute * 60_000), accuracyM: 12, speedMps: 0, staying: true };
+    const settled = settleTrailPoint(points, jump, jump.at);
+    assert.equal(settled.decision, 'snap', `still jump minute ${minute} was ${settled.decision}`);
+    points = settled.points;
+  }
+  const early = arrived + 2 * 60_000;
+  const earlyDrawn = trailDrawParts(points.filter((point) => point.at <= early));
+  const limit = (home.lng - origin.lng) * 111_320 * Math.cos((origin.lat * Math.PI) / 180) + 50;
+  for (const part of earlyDrawn) {
+    for (const point of part.points) {
+      const east = (point.lng - origin.lng) * 111_320 * Math.cos((origin.lat * Math.PI) / 180);
+      assert.ok(east < limit, `spike drawn early at ${east.toFixed(0)}m`);
+    }
+  }
+  const now = arrived + 8 * 60_000;
+  assert.equal(liveMotionLabel({
+    located: true,
+    moving: false,
+    points,
+    now,
+    pin: { ...home, at: now, speedMps: 0, staying: true },
+  }), '머무름');
+  assert.ok(splitClosedJourneys(points, now).journeys.length >= 1);
+  const live = displayLivePoints(points, now);
+  assert.equal(live.length, 0);
+  assert.equal(trailDrawParts(live).some((part) => part.points.length >= 2), false);
+});
+
+test('a stored indoor loop that outlasts the stay wait leaves the main line', () => {
+  const t = Date.UTC(2026, 10, 1, 5, 20, 0);
+  const origin = { lat: 37.6372, lng: 127.0709, at: t, accuracyM: 12, speedMps: 1.3, staying: false };
+  const points = [origin];
+  for (let index = 1; index <= 30; index += 1) {
+    points.push({ ...offset(origin, 0, index * 4, t + index * 2_500), accuracyM: 12, speedMps: 1.3, staying: false });
+  }
+  const home = points[points.length - 1];
+  for (let minute = 1; minute <= 8; minute += 1) {
+    points.push({
+      ...offset(home, 0, minute % 2 === 0 ? 80 : 0, home.at + minute * 60_000),
+      accuracyM: 12,
+      speedMps: 0,
+      staying: true,
+    });
+  }
+  const now = home.at + 10 * 60_000;
+  assert.equal(liveMotionLabel({
+    located: true,
+    moving: false,
+    points,
+    now,
+    pin: { ...home, at: now, speedMps: 0, staying: true },
+  }), '머무름');
+  assert.equal(displayLivePoints(points, now).length, 0);
+});
+
 test('a stay-to-stay hole adds nothing to the trip distance', () => {
   const start = Date.UTC(2026, 9, 28, 0, 20, 0);
   const end = start + 89 * 60 * 1000;

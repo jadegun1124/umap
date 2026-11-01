@@ -9,7 +9,7 @@
 import { APP_VERSION_NAME } from './appRelease.mjs';
 
 const NOMINATIM_UA = `Kinnex/${APP_VERSION_NAME} (family location; https://github.com/jadegun1124/umap)`;
-const CACHE_KEY = 'umap_geocode_cache_v8';
+const CACHE_KEY = 'umap_geocode_cache_v9';
 const PLACE_LIMIT = 56;
 /** Farther than this, a place is not the nearest label. Inside a polygon, distance is 0. */
 export const NEAREST_PLACE_M = 80;
@@ -207,9 +207,12 @@ export function isResidentialPlace(candidate) {
 }
 
 function candidateLabel(candidate) {
-  const name = cleanToken(candidate.name || candidate.building);
+  const parsed = buildingFromText(`${candidate?.name || candidate?.building || ''} ${candidate?.unit || ''}`);
+  const unit = formatUnit(candidate?.unit) || parsed.unit;
+  const name = parsed.building || (unit && isUnitLabel(candidate?.name || candidate?.building) ? '' : cleanToken(candidate?.name || candidate?.building));
+  if (!name && unit) return unit;
   if (!name || isDong(name)) return '';
-  if (isResidentialPlace(candidate)) return formatPrecisePlace({ building: name, unit: candidate.unit });
+  if (isResidentialPlace(candidate) || unit) return formatPrecisePlace({ building: name, unit });
   return formatPrecisePlace({ poi: name }) || name;
 }
 
@@ -259,13 +262,17 @@ export function choosePlaceLabel(candidates, point) {
     const label = candidateLabel(candidate);
     if (!label) continue;
     const geometry = candidate.geometry || (Number.isFinite(candidate.lat) && Number.isFinite(candidate.lng) ? candidate : null);
-    const unit = formatUnit(candidate.unit);
-    const residential = isResidentialPlace(candidate);
+    const parsed = buildingFromText(`${candidate.name || candidate.building || ''} ${candidate.unit || ''}`);
+    const unit = formatUnit(candidate.unit) || parsed.unit;
+    const residential = isResidentialPlace(candidate) || Boolean(unit);
+    const bareUnit = isUnitLabel(candidate.name || candidate.building);
+    let rawName = bareUnit ? '' : cleanToken(candidate.name || candidate.building);
+    if (unit && rawName.endsWith(unit)) rawName = cleanToken(rawName.slice(0, -unit.length));
     const areaM2 = geometryAreaM2(geometry);
     const footprint = geometryRings(geometry).some((ring) => ring.length >= 3);
     scored.push({
       label,
-      rawName: cleanToken(candidate.name || candidate.building),
+      rawName,
       unit,
       inside: footprint && polygonCovers(origin, geometry),
       residential,
@@ -294,18 +301,25 @@ export function choosePlaceLabel(candidates, point) {
       .sort((left, right) => left.distanceM - right.distanceM)[0]
     : null;
   const chosen = nearDong || winner;
+  const complexes = inRange.filter((item) => item.rawName && !isUnitLabel(item.rawName) && (item.residential || RESIDENTIAL_NAME.test(item.rawName)));
   let name = chosen.rawName;
-  // 「하계청구아파트」 and 「하계1차청구아파트」 are the same complex. 1차 sits in the middle, so a plain includes() misses it.
-  if (chosen.dongBuilding || chosen.landuseShell) {
-    const fold = (value) => String(value || '').replace(/\s+/g, '').replace(/\d+차/g, '');
-    for (const item of inRange) {
+  if (chosen.unit && !name) {
+    const nearest = complexes.slice().sort((left, right) => left.distanceM - right.distanceM || right.rawName.length - left.rawName.length)[0];
+    name = nearest ? nearest.rawName : '';
+  }
+  // A short register name and the same complex with one N차 in the middle are one place.
+  // 1차 and 2차 stay apart.
+  if (chosen.dongBuilding || chosen.landuseShell || chosen.unit) {
+    for (const item of complexes) {
       if (!item.rawName || item.rawName === name) continue;
-      const contained = item.rawName.includes(name) || name.includes(item.rawName);
-      const sameComplex = fold(item.rawName) && fold(item.rawName) === fold(name);
-      if ((contained || sameComplex) && item.rawName.length > name.length) name = item.rawName;
+      const contained = name && (item.rawName.includes(name) || name.includes(item.rawName));
+      if ((contained || sameComplexName(name, item.rawName)) && item.rawName.length > name.length) name = item.rawName;
     }
   }
-  if (chosen.unit) return formatPrecisePlace({ building: name, unit: chosen.unit });
+  if (chosen.unit) {
+    const precise = formatPrecisePlace({ building: name, unit: chosen.unit });
+    return precise || chosen.unit;
+  }
   return chosen.label;
 }
 
@@ -329,8 +343,32 @@ function addressValues(address, keys) {
   return values;
 }
 
+function isUnitLabel(value) {
+  return /^\d+동$/.test(cleanToken(value).replace(/\s+/g, ''));
+}
+
+function complexPhase(value) {
+  return [...String(value || '').replace(/\s+/g, '').matchAll(/(\d+)차/g)].map((match) => match[1]);
+}
+
+/** 「하계청구아파트」 and 「하계 1차청구아파트」 match. 「하계1차」 and 「하계2차」 do not. */
+function sameComplexName(left, right) {
+  const a = String(left || '').replace(/\s+/g, '');
+  const b = String(right || '').replace(/\s+/g, '');
+  if (!a || !b || a === b) return false;
+  if (a.replace(/\d+차/g, '') !== b.replace(/\d+차/g, '')) return false;
+  const an = complexPhase(a);
+  const bn = complexPhase(b);
+  if (an.length === 0 || bn.length === 0) return an.length + bn.length <= 1;
+  return an.length === bn.length && an.every((num, index) => num === bn[index]);
+}
+
+/** 하계동·월계3동. A building unit such as 105동, or a complex name ending in that unit, is not one. */
 function isDong(value) {
-  return /(?:동|읍|면|리|가)$/.test(value);
+  const text = cleanToken(value);
+  if (!text || isUnitLabel(text)) return false;
+  if (/(?:아파트|빌라|맨션|오피스텔|타운|하우스|단지)/.test(text)) return false;
+  return /(?:동|읍|면|리|가)$/.test(text);
 }
 
 function isRoadName(value) {
@@ -519,10 +557,16 @@ function buildingFromText(text) {
   let building = '';
   let poi = '';
   let unit = '';
-  for (const part of parts) {
+  for (let index = 0; index < parts.length; index += 1) {
+    const part = parts[index];
     if (!unit && /^\d+동$/.test(part)) unit = part;
-    if (!building && /(?:아파트|빌라|맨션|오피스텔|타운|하우스|단지)/.test(part)) building = part;
-    else if (!poi && /(?:마트|백화점|슈퍼|편의점|학교|병원|의원|약국|공원|회관|센터|교회|성당|사찰)/.test(part) && !isDong(part)) poi = part;
+    if (!building && /(?:아파트|빌라|맨션|오피스텔|타운|하우스|단지)/.test(part)) {
+      const previous = parts[index - 1];
+      const prefix = previous && !isUnitLabel(previous) && !isDong(previous) && !isRoadName(previous) && !/(?:시|군|구)$/.test(previous)
+        ? previous
+        : '';
+      building = prefix ? `${prefix} ${part}` : part;
+    } else if (!poi && /(?:마트|백화점|슈퍼|편의점|학교|병원|의원|약국|공원|회관|센터|교회|성당|사찰)/.test(part) && !isDong(part)) poi = part;
   }
   return { building, unit, poi };
 }
@@ -753,7 +797,7 @@ function overpassCandidates(body, lat, lng) {
     const tags = element && element.tags;
     if (!tags || typeof tags.name !== 'string') continue;
     const name = cleanToken(tags.name);
-    if (!name || name === '근처' || isDong(name)) continue;
+    if (!name || name === '근처' || (isDong(name) && !isUnitLabel(name))) continue;
     const residential = RESIDENTIAL_NAME.test(name)
       || RESIDENTIAL_BUILDING.test(String(tags.building || ''))
       || RESIDENTIAL_LANDUSE.test(String(tags.landuse || ''));
