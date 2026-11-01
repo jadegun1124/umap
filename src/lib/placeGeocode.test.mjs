@@ -435,6 +435,33 @@ test('a point beside a church on a 길 uses the place or the road, not 구·동'
   const road = await reverseGeocode(pin.lat, pin.lng, { fetch: roadOnly, key: 'test-key', pace: false });
   assert.equal(road, '마들로3길 15');
   assert.equal(road.includes('월계3동'), false);
+  const farComplex = async (url) => {
+    const target = String(url);
+    if (target.includes('LT_C_BLDGINFO')) {
+      return jsonResponse({
+        response: {
+          result: {
+            featureCollection: {
+              features: [{
+                properties: { buld_nm: '하계1차청구아파트', dong_nm: '101동' },
+                geometry: { type: 'Point', coordinates: [127.0672, 37.6314] },
+              }],
+            },
+          },
+        },
+      });
+    }
+    if (target.includes('nominatim')) {
+      return jsonResponse({
+        display_name: '마들로3길, 월계3동, 노원구',
+        address: { road: '마들로3길', suburb: '월계3동', borough: '노원구' },
+      });
+    }
+    if (target.includes('overpass')) return jsonResponse({ elements: [] });
+    return fetchImpl(url);
+  };
+  const keptNumber = await reverseGeocode(pin.lat, pin.lng, { fetch: farComplex, key: 'test-key', pace: false });
+  assert.equal(keptNumber, '마들로3길 15');
 });
 
 test('reverse geocode of the 105동 west edge does not keep 노원소방서', async () => {

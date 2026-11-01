@@ -617,13 +617,9 @@ async function fetchVworld(fetchImpl, lat, lng, key) {
   } catch {
     picked = '';
   }
-  const named = formatPrecisePlace({
-    dong: parts.dong,
-    building: building.building || parts.building,
-    unit: building.unit || parts.unit,
-    poi: '',
-  });
   const road = parts.road || extractRoadAddress(parts.text);
+  const unlocated = (Array.isArray(building.candidates) ? building.candidates : []).find((item) => !item.geometry && item.kind === 'residential');
+  const named = unlocated ? formatPrecisePlace({ building: unlocated.name, unit: unlocated.unit }) : '';
   const label = picked || named || road || presentPlace(parts.text) || [parts.district, parts.dong].filter(Boolean).join(' ');
   return { label, candidates: layer, road };
 }
@@ -787,24 +783,24 @@ async function lookupPlace(lat, lng, options = {}) {
   const candidates = Array.isArray(options.candidates) ? [...options.candidates] : [];
   let coarse = '';
   let road = '';
+  let buildingName = '';
   let residentialKnown = false;
   const finish = (label, settled = true) => settledLabel(label, residentialKnown, settled);
   const rememberRoad = (value) => {
     const next = extractRoadAddress(value);
-    if (next) road = next;
+    if (!next) return;
+    const numbered = (label) => /\s\d+(?:-\d+)?$/.test(label);
+    if (!road || (numbered(next) && !numbered(road))) road = next;
   };
   if (key) {
     try {
       const fromVworld = await fetchVworld(fetchImpl, lat, lng, key);
       candidates.push(...(fromVworld.candidates || []));
-      rememberRoad(fromVworld.road || fromVworld.label);
-      if (fromVworld.label && isPrecisePlace(fromVworld.label) && RESIDENTIAL_NAME.test(fromVworld.label)) {
-        const agreed = choosePlaceLabel(candidates, point);
+      rememberRoad(fromVworld.road);
+      if (fromVworld.label && RESIDENTIAL_NAME.test(fromVworld.label)) {
         residentialKnown = true;
-        if (agreed && RESIDENTIAL_NAME.test(agreed)) return finish(agreed, true);
-        return finish(fromVworld.label, true);
-      }
-      if (fromVworld.label && !isPrecisePlace(fromVworld.label)) coarse = fromVworld.label;
+        if (!choosePlaceLabel(candidates, point)) buildingName = fromVworld.label;
+      } else if (fromVworld.label && !isPrecisePlace(fromVworld.label)) coarse = fromVworld.label;
     } catch {
       /* Kakao·Nominatim으로 넘어간다 */
     }
@@ -836,6 +832,7 @@ async function lookupPlace(lat, lng, options = {}) {
     const picked = choosePlaceLabel(candidates, point);
     if (picked) return finish(picked);
     if (road) return finish(road);
+    if (buildingName) return finish(buildingName, true);
     if (fromNominatim.label && isPrecisePlace(fromNominatim.label) && RESIDENTIAL_NAME.test(fromNominatim.label)) {
       return finish(fromNominatim.label, true);
     }
@@ -844,10 +841,13 @@ async function lookupPlace(lat, lng, options = {}) {
   } catch {
     const picked = choosePlaceLabel(candidates, point);
     if (picked) return finish(picked);
+    if (road) return finish(road);
+    if (buildingName) return finish(buildingName, true);
   }
   const leftover = choosePlaceLabel(candidates, point);
   if (leftover) return finish(leftover);
   if (road) return finish(road);
+  if (buildingName) return finish(buildingName, true);
   return coarse ? finish(coarse) : finish('', false);
 }
 
