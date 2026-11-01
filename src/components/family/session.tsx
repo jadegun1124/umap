@@ -1503,6 +1503,7 @@ function reduceSession(state: Session, action: Action): Session {
         journeys: state.journeys?.self ? { self: state.journeys.self } : {},
         guardians: [],
         home: null,
+        homeCleared: true,
         inviteCode: next.inviteCode,
         syncWriteKey: next.syncWriteKey,
         syncReadKey: next.syncReadKey,
