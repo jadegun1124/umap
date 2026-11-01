@@ -392,6 +392,14 @@ test('a pin beside 105동 ranks the building edge ahead of a southern fire stati
   };
   assert.equal(choosePlaceLabel([centroid, station], pin), '노원소방서');
   assert.equal(choosePlaceLabel([centroid, station, dong104, dong105], pin), '하계1차청구아파트 105동');
+  const shortDong = { ...dong105, name: '하계청구아파트' };
+  const longerShell = {
+    name: '하계1차청구아파트',
+    kind: 'residential',
+    landuse: 'residential',
+    geometry: box(127.0707, 37.6366, 127.0716, 37.6376),
+  };
+  assert.equal(choosePlaceLabel([centroid, station, shortDong, longerShell], pin), '하계1차청구아파트 105동');
 });
 
 test('a point beside a church on a 길 uses the place or the road, not 구·동', async () => {

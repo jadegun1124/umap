@@ -265,6 +265,8 @@ export function choosePlaceLabel(candidates, point) {
     const footprint = geometryRings(geometry).some((ring) => ring.length >= 3);
     scored.push({
       label,
+      rawName: cleanToken(candidate.name || candidate.building),
+      unit,
       inside: footprint && polygonCovers(origin, geometry),
       dongBuilding: residential && Boolean(unit),
       landuseShell: residential && !unit && (RESIDENTIAL_LANDUSE.test(String(candidate.landuse || '')) || (footprint && areaM2 > 20_000)),
@@ -281,7 +283,25 @@ export function choosePlaceLabel(candidates, point) {
     ? inRange.filter((item) => item.dongBuilding || !item.landuseShell)
     : inRange;
   pool.sort((left, right) => left.distanceM - right.distanceM || left.areaM2 - right.areaM2);
-  return pool[0] ? pool[0].label : '';
+  const winner = pool[0];
+  if (!winner) return '';
+  const nearDong = pool
+    .filter((item) => item.dongBuilding && item.distanceM <= winner.distanceM + 30)
+    .sort((left, right) => left.distanceM - right.distanceM)[0];
+  const chosen = nearDong || winner;
+  let name = chosen.rawName;
+  // 「하계청구아파트」 and 「하계1차청구아파트」 are the same complex. 1차 sits in the middle, so a plain includes() misses it.
+  if (chosen.dongBuilding || chosen.landuseShell) {
+    const fold = (value) => String(value || '').replace(/\s+/g, '').replace(/\d+차/g, '');
+    for (const item of inRange) {
+      if (!item.rawName || item.rawName === name) continue;
+      const contained = item.rawName.includes(name) || name.includes(item.rawName);
+      const sameComplex = fold(item.rawName) && fold(item.rawName) === fold(name);
+      if ((contained || sameComplex) && item.rawName.length > name.length) name = item.rawName;
+    }
+  }
+  if (chosen.unit) return formatPrecisePlace({ building: name, unit: chosen.unit });
+  return chosen.label;
 }
 
 /** Keep a building, a named place, or a road number. A bare 구·동 is only the last resort. */

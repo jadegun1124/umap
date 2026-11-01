@@ -48,6 +48,7 @@ import {
   trailSegmentDashed,
   JOURNEY_STAY_MS,
   splitClosedJourneys,
+  displayLivePoints,
   storedTrackAfterArchive,
   trimJourneyList,
   liveTrailPoints,
@@ -1451,6 +1452,41 @@ test('one short GPS spike does not turn a walk into a vehicle', () => {
   const points = [...walk, spike, back];
   const distance = journeyPathDistance(points);
   assert.equal(classifyJourneyMode(points, distance, back.at - walk[0].at), 'walk');
+});
+
+test('a walk home then 30 minutes of indoor spikes ends the live line and is not drawn', () => {
+  const t = Date.UTC(2026, 10, 1, 2, 24, 0);
+  const origin = { lat: 37.6372, lng: 127.0709, at: t, accuracyM: 12, speedMps: 1.3, staying: false };
+  let points = [origin];
+  for (let index = 1; index <= 30; index += 1) {
+    const step = { ...offset(origin, 0, index * 4, t + index * 2_500), accuracyM: 12, speedMps: 1.3, staying: false };
+    points = settleTrailPoint(points, step, step.at).points;
+  }
+  const home = points[points.length - 1];
+  const arrived = home.at;
+  for (let minute = 1; minute <= 30; minute += 1) {
+    const quiet = { ...home, at: arrived + minute * 60_000, accuracyM: 18, speedMps: 0, staying: true };
+    points = settleTrailPoint(points, quiet, quiet.at).points;
+    if (minute % 4 === 0) {
+      const spike = { ...offset(home, 0, 100, quiet.at + 5_000), accuracyM: 65, speedMps: 0, staying: true };
+      const back = { ...home, at: quiet.at + 12_000, accuracyM: 20, speedMps: 0, staying: true };
+      const spiked = settleTrailPoint(points, spike, spike.at);
+      assert.equal(spiked.decision, 'snap', `indoor spike minute ${minute} was ${spiked.decision}`);
+      points = settleTrailPoint(spiked.points, back, back.at).points;
+    }
+  }
+  const now = arrived + 30 * 60_000;
+  const split = splitClosedJourneys(points, now);
+  assert.ok(split.journeys.length >= 1, 'the walk home is a finished journey');
+  assert.equal(displayLivePoints(points, now).length, 0);
+  const drawn = trailDrawParts(points);
+  const spikeEast = (home.lng - origin.lng) * 111_320 * Math.cos((origin.lat * Math.PI) / 180) + 80;
+  for (const part of drawn) {
+    for (const point of part.points) {
+      const east = (point.lng - origin.lng) * 111_320 * Math.cos((origin.lat * Math.PI) / 180);
+      assert.ok(east < spikeEast, `spike drawn at ${east.toFixed(0)}m`);
+    }
+  }
 });
 
 test('a stay-to-stay hole adds nothing to the trip distance', () => {

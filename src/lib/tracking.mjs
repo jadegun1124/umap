@@ -539,6 +539,8 @@ export function isVehicleStep(last, point) {
   // Under 8s or 60m is the courtyard leap, not a city sample.
   if (!pace || pace.speed < 8 || pace.speed > 45) return false;
   if (pace.dt < 8_000 || pace.moved < 60) return false;
+  const accuracy = positiveMeters(point?.accuracyM);
+  if (accuracy > TRAIL_POOR_ACCURACY_M && (reported == null || reported < TRAIL_RIDE_MIN_MPS)) return false;
   return !isImpossibleJump(last, point);
 }
 
@@ -643,11 +645,14 @@ function continuesStillWalk(points, point) {
 function indoorStayDrift(points, point) {
   if (!point || point.stayEnd || !stationarySample(point)) return false;
   const anchor = drawnAnchor(points);
-  if (!anchor || isVehicleStep(anchor, point)) return false;
+  const accurateRide = isVehicleStep(anchor, point)
+    && positiveMeters(point.accuracyM) > 0
+    && positiveMeters(point.accuracyM) <= TRAIL_POOR_ACCURACY_M;
+  if (!anchor || accurateRide || isRideStep(anchor, point)) return false;
   const moved = haversineMeters(anchor, point);
   if (!Number.isFinite(moved) || moved > INDOOR_STAY_RADIUS_M) return false;
-  // Past the 1.12 relocation bubble this is a real step, not building jitter.
-  if (moved > TRAIL_RELOCATION_M) return false;
+  // An accurate step past 120m is a real relocation. A poor fix in that range is indoor multipath.
+  if (moved > TRAIL_RELOCATION_M && !(positiveMeters(point.accuracyM) > TRAIL_POOR_ACCURACY_M)) return false;
   if (continuesStillWalk(points, point)) return false;
   if (positiveMeters(point.accuracyM) >= 30 && moved >= TRAIL_WALK_VERTEX_M) return true;
   if (moved >= INDOOR_LEAP_M) return true;
@@ -724,6 +729,9 @@ function trailingSpur(points, point) {
   const prev = previousVertex(points);
   if (!tip || !prev || !point || tip === point) return false;
   if (spikeDeviation(prev, tip, point) > 0) return true;
+  // A stored walk often has no speed. Only an explicit still reading (stay flag or ~0 m/s) is a spike.
+  const tipStill = tip.staying === true || (pointSpeed(tip) != null && pointSpeed(tip) < TRAIL_STAY_SPEED_MPS);
+  if (tipStill && haversineMeters(prev, point) <= STOP_RADIUS_M && haversineMeters(prev, tip) >= INDOOR_LEAP_M) return true;
   if (isVehicleStep(prev, tip) || isVehicleStep(tip, point)) return false;
   if (speedShowsMoving(point) && point.staying !== true) return false;
   if (!stillSample(point) && point.staying !== true) return false;
@@ -993,8 +1001,27 @@ export function collapseIndoorStayDisplay(points) {
   return output;
 }
 
+function dropReturnSpikes(points) {
+  if (!Array.isArray(points) || points.length < 3) return points;
+  const kept = [points[0]];
+  for (let index = 1; index < points.length - 1; index += 1) {
+    const prev = kept[kept.length - 1];
+    const point = points[index];
+    const next = points[index + 1];
+    const out = haversineMeters(prev, point);
+    const back = haversineMeters(point, next);
+    const span = haversineMeters(prev, next);
+    const quiet = point?.staying === true || (pointSpeed(point) != null && pointSpeed(point) < TRAIL_STAY_SPEED_MPS);
+    const poor = positiveMeters(point?.accuracyM) > TRAIL_POOR_ACCURACY_M;
+    if ((quiet || poor) && out >= INDOOR_LEAP_M && back >= INDOOR_LEAP_M && span <= STOP_RADIUS_M && !isRideStep(prev, point)) continue;
+    kept.push(point);
+  }
+  kept.push(points[points.length - 1]);
+  return kept.length === points.length ? points : kept;
+}
+
 function sampledTrail(points) {
-  const collapsed = collapseIndoorStayDisplay(collapseStayTrail(points));
+  const collapsed = dropReturnSpikes(collapseIndoorStayDisplay(collapseStayTrail(points)));
   const drawn = [];
   for (const point of collapsed) {
     if (!point || point.stayEnd) continue;
@@ -2092,8 +2119,12 @@ export function displayLivePoints(points, now) {
   const remainFrom = closing[closing.length - 1].startAt;
   let cut = 0;
   while (cut < sorted.length && sorted[cut].at < remainFrom) cut += 1;
-  if (cut <= 0) return sorted.length === source.length ? source : sorted;
-  return sorted.slice(cut);
+  const tail = cut <= 0 ? (sorted.length === source.length ? source : sorted) : sorted.slice(cut);
+  const stayed = tail.filter((point) => point && !point.stayEnd);
+  const anchor = stayed[0];
+  const stillThere = !anchor || stayed.every((point) => haversineMeters(anchor, point) <= STOP_RADIUS_M);
+  if (stillThere || !hasRealTravel(stayed)) return [];
+  return tail;
 }
 
 /** The open segment still has a line. A stay cluster and courtyard jitter do not. */
