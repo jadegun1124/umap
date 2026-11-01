@@ -591,14 +591,21 @@ export function useFamilyTracking(onFirstFix: (lat: number, lng: number) => void
 
   const placeKeys = useRef<Record<string, string>>({});
   const placeJobs = useRef<Record<string, string>>({});
+  const placeTimers = useRef<Record<string, number>>({});
   const memberPlaceKey = state.members
     .filter((member) => hasLocation(member))
     .map((member) => `${member.id}:${member.lat == null || member.lng == null ? '' : placeGridKey(member.lat, member.lng)}:${member.place ?? ''}`)
     .join('|');
   useEffect(() => {
-    if (state.stage !== 'map') return;
+    if (state.stage !== 'map') {
+      for (const timer of Object.values(placeTimers.current)) window.clearTimeout(timer);
+      placeTimers.current = {};
+      placeJobs.current = {};
+      return undefined;
+    }
     const current = familyRef.current.state;
     const home = current.home;
+    const retries: string[] = [];
     for (const member of current.members) {
       if (!hasLocation(member) || member.role === 'guardian' || member.lat == null || member.lng == null) continue;
       const here = { lat: member.lat, lng: member.lng };
@@ -615,14 +622,22 @@ export function useFamilyTracking(onFirstFix: (lat: number, lng: number) => void
           delete placeJobs.current[id];
           return;
         }
-        if (settled) placeKeys.current[id] = key;
+        if (settled) {
+          placeKeys.current[id] = key;
+          window.clearTimeout(placeTimers.current[id]);
+          delete placeTimers.current[id];
+        }
         const latest = familyRef.current.state.members.find((item) => item.id === id);
         if (latest && cleanPlace(latest.place) !== short) familyRef.current.setMemberPlace(id, short);
         if (!settled && attempt < 2) {
-          window.setTimeout(() => {
+          window.clearTimeout(placeTimers.current[id]);
+          const timer = window.setTimeout(() => {
+            delete placeTimers.current[id];
             if (placeJobs.current[id] !== job) return;
             void reverseGeocodeCached(here.lat, here.lng).then((found) => apply(found.label, found.settled, attempt + 1));
           }, 60_000);
+          placeTimers.current[id] = timer;
+          retries.push(id);
         }
       };
       if (home && id === 'self' && haversineMeters(here, home) <= home.radiusM) {
@@ -636,6 +651,13 @@ export function useFamilyTracking(onFirstFix: (lat: number, lng: number) => void
       }
       void reverseGeocodeCached(here.lat, here.lng).then((found) => apply(found.label, found.settled));
     }
+    return () => {
+      for (const id of retries) {
+        window.clearTimeout(placeTimers.current[id]);
+        delete placeTimers.current[id];
+        if (placeJobs.current[id] !== `${id}:${placeKeys.current[id] ?? ''}`) delete placeJobs.current[id];
+      }
+    };
   }, [memberPlaceKey, state.home, state.stage]);
 
   return { waiting, familyShareNote, native: umapLocationNative(), openSettings: openAlwaysLocation };
