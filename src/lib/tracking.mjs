@@ -1954,7 +1954,7 @@ export function journeyPathDistance(points) {
     }
     const pace = stepPace(prev, point);
     if (!pace || pace.speed > 45 || pace.dt < 800) continue;
-    if (pace.speed >= 0.7 && pace.moved >= TRAIL_WALK_VERTEX_M) distance += pace.moved;
+    if (pace.speed >= 0.7 && pace.speed <= 3 && pace.moved >= 0.2) distance += pace.moved;
   }
   return distance;
 }
@@ -2555,7 +2555,7 @@ export function playbackAnchor(points, ratio) {
   for (let index = 1; index < list.length; index += 1) {
     const prev = run[run.length - 1];
     const point = list[index];
-    if ((!isVehicleStep(prev, point) && trailSegmentDashed(prev, point)) || isImpossibleJump(prev, point)) {
+    if (isImpossibleJump(prev, point)) {
       if (run.length >= 2) runs.push(run);
       run = [point];
     } else {
