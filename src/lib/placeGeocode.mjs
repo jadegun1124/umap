@@ -263,7 +263,9 @@ export function choosePlaceLabel(candidates, point) {
     if (!label) continue;
     const geometry = candidate.geometry || (Number.isFinite(candidate.lat) && Number.isFinite(candidate.lng) ? candidate : null);
     const parsed = buildingFromText(`${candidate.name || candidate.building || ''} ${candidate.unit || ''}`);
-    const residential = isResidentialPlace(candidate) || RESIDENTIAL_BUILDING.test(String(candidate.buildingType || ''));
+    const residential = isResidentialPlace(candidate)
+      || RESIDENTIAL_BUILDING.test(String(candidate.buildingType || ''))
+      || Boolean(formatUnit(candidate.unit) || buildingFromText(`${candidate.name || ''} ${candidate.unit || ''}`).unit);
     const fromNumber = residential ? numberedUnit(candidate.name || candidate.building) : '';
     const unit = formatUnit(candidate.unit) || parsed.unit || fromNumber;
     const bareUnit = isUnitLabel(candidate.name || candidate.building) || Boolean(fromNumber);
@@ -583,10 +585,10 @@ function featureName(properties) {
   const building = firstText(properties, ['buld_nm', 'bld_nm', 'bldnm', 'buldNm', 'building_name', 'bldg_nm']);
   const unit = firstText(properties, ['dong_nm', 'buld_dong', 'dongNm']);
   const named = buildingFromText(`${building} ${unit}`);
-  const fromNumber = numberedUnit(building) || numberedUnit(unit);
+  const fromBuilding = numberedUnit(building);
   return {
-    building: fromNumber ? '' : (named.building || (building && !isDong(building) ? building : '')),
-    unit: named.unit || formatUnit(unit) || fromNumber,
+    building: fromBuilding ? '' : (named.building || (building && !isDong(building) ? building : '')),
+    unit: named.unit || formatUnit(unit) || fromBuilding || numberedUnit(unit),
     poi: named.poi,
   };
 }
@@ -607,9 +609,9 @@ function vworldBuilding(body) {
   const candidates = [];
   for (const feature of features) {
     const named = featureName(feature && feature.properties);
-    const name = named.building || named.poi;
-    if (!name) continue;
-    const kind = placeKind(name);
+    const name = named.building || named.poi || '';
+    if (!name && !named.unit) continue;
+    const kind = name ? placeKind(name) : 'residential';
     candidates.push({
       name,
       unit: named.unit,
@@ -833,10 +835,17 @@ async function fetchOverpass(fetchImpl, lat, lng) {
   let last = null;
   for (const url of urls) {
     try {
-      const response = await fetchImpl(url, {
-        headers: { 'User-Agent': NOMINATIM_UA },
-        signal: timeoutSignal(12000),
-      });
+      let response;
+      try {
+        response = await fetchImpl(url, {
+          headers: { 'User-Agent': NOMINATIM_UA },
+          signal: timeoutSignal(12000),
+        });
+      } catch (error) {
+        const message = error && error.message ? String(error.message) : '';
+        if (!(error instanceof TypeError) || !/unsafe header|User-Agent/i.test(message)) throw error;
+        response = await fetchImpl(url, { signal: timeoutSignal(12000) });
+      }
       const body = await readJson(response);
       const candidates = overpassCandidates(body, lat, lng);
       if (candidates.length || (response && response.ok !== false && body)) return candidates;
