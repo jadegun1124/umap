@@ -438,6 +438,8 @@ test('a pin beside 105동 ranks the building edge ahead of a southern fire stati
   assert.equal(choosePlaceLabel([shell, station, onlyNumber104, onlyNumber105], pin), '하계청구아파트 105동');
   const poiDong = { name: '105동', kind: 'poi', buildingType: 'yes', geometry: dong105.geometry };
   assert.equal(choosePlaceLabel([shell, poiDong], pin), '하계청구아파트 105동');
+  const shop = { name: '한글비석로1길', kind: 'poi', unit: '15', lat: pin.lat, lng: pin.lng };
+  assert.equal(choosePlaceLabel([shell, shop], pin), '하계청구아파트');
 });
 
 test('a previous cache generation does not keep the short complex name', async () => {

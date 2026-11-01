@@ -263,12 +263,13 @@ export function choosePlaceLabel(candidates, point) {
     if (!label) continue;
     const geometry = candidate.geometry || (Number.isFinite(candidate.lat) && Number.isFinite(candidate.lng) ? candidate : null);
     const parsed = buildingFromText(`${candidate.name || candidate.building || ''} ${candidate.unit || ''}`);
-    const residential = isResidentialPlace(candidate)
-      || RESIDENTIAL_BUILDING.test(String(candidate.buildingType || ''))
-      || Boolean(formatUnit(candidate.unit) || buildingFromText(`${candidate.name || ''} ${candidate.unit || ''}`).unit);
-    const fromNumber = residential ? numberedUnit(candidate.name || candidate.building) : '';
-    const unit = formatUnit(candidate.unit) || parsed.unit || fromNumber;
-    const bareUnit = isUnitLabel(candidate.name || candidate.building) || Boolean(fromNumber);
+    const apartment = isResidentialPlace(candidate) || RESIDENTIAL_BUILDING.test(String(candidate.buildingType || ''));
+    const namedUnit = isUnitLabel(candidate.name || candidate.building) ? formatUnit(candidate.name || candidate.building) : '';
+    const fromNumber = apartment ? numberedUnit(candidate.name || candidate.building) : '';
+    // A shop or bus ref is not a 동. Only an apartment, or a name that is itself the 동, is.
+    const unit = namedUnit || fromNumber || (apartment ? (formatUnit(candidate.unit) || parsed.unit) : '');
+    const residential = apartment || Boolean(namedUnit || fromNumber);
+    const bareUnit = Boolean(namedUnit || fromNumber);
     let rawName = bareUnit ? '' : cleanToken(candidate.name || candidate.building);
     if (unit && rawName.endsWith(unit)) rawName = cleanToken(rawName.slice(0, -unit.length));
     const areaM2 = geometryAreaM2(geometry);
@@ -815,7 +816,7 @@ function overpassCandidates(body, lat, lng) {
     const geometry = Array.isArray(element.geometry) ? element.geometry : (Number.isFinite(element.lat) ? { lat: element.lat, lng: element.lon } : { lat, lng });
     candidates.push({
       name: fromNumber ? '' : name,
-      unit: formatUnit(tags['addr:unit'] || tags.ref || '') || fromNumber,
+      unit: residential ? (formatUnit(tags['addr:unit'] || tags.ref || '') || fromNumber) : '',
       kind: residential ? 'residential' : 'poi',
       buildingType: tags.building,
       landuse: tags.landuse,
