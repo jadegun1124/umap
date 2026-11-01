@@ -18,6 +18,14 @@ test('member status uses the nearest address and never says nearby', () => {
   assert.equal(card('근처 근처', '머무름'), '머무름');
 });
 
+test('a saved home name applies to every member inside it', () => {
+  const home = { place: '하계청구아파트', located: true, atHome: true, homeLabel: '우리 집' };
+  assert.equal(memberPlaceLabel(home), '우리 집');
+  assert.equal(memberPlaceLabel({ place: '', located: true, atHome: true, homeLabel: '우리 집' }), memberPlaceLabel(home));
+  assert.equal(memberPlaceLabel({ place: '하계청구아파트', located: true, atHome: true, homeLabel: '엄마네' }), '엄마네');
+  assert.equal(memberPlaceLabel({ place: '하계청구아파트', located: true, atHome: false }), '하계청구아파트');
+});
+
 test('a moved pin does not keep the previous neighborhood', () => {
   const previous = { lat: 37.64, lng: 127.01, place: '강북구 수유동' };
   assert.equal(carryPlace(previous, 37.6401, 127.0101), '강북구 수유동');

@@ -3,7 +3,8 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { noteDiag } from '../../lib/diagLog.mjs';
 import { hasLocation } from '../../lib/geo';
-import { spreadPinPositions } from '../../lib/mapPinSpread.mjs';
+import { memberCalloutHtml, spreadPinPositions } from '../../lib/mapPinSpread.mjs';
+import { savedPlaceLabel } from '../../lib/memberPlace.mjs';
 import { memberIsStale, memberPresence } from '../../lib/memberPresence.mjs';
 import { appendLiveTip, trailDrawParts } from '../../lib/tracking.mjs';
 import { VWORLD_ATTRIBUTION, vworldApiKey, vworldBaseTileUrl } from '../../services/vworld';
@@ -268,7 +269,8 @@ export const StreetMap = forwardRef<StreetMapHandle, {
       const color = '#0084FF';
       const self = member.role === 'self';
       const label = escapeHtml(self ? '나' : member.name);
-      const placeText = typeof member.place === 'string' ? member.place.trim() : '';
+      const savedPlace = savedPlaceLabel(member.lat, member.lng, home);
+      const placeText = savedPlace || (typeof member.place === 'string' ? member.place.trim() : '');
       const place = placeText && placeText !== '근처' ? escapeHtml(placeText) : '';
       const initial = escapeHtml(self ? '나' : member.name.slice(0, 1));
       const battery = batteryMarkup(member, selected);
@@ -282,10 +284,14 @@ export const StreetMap = forwardRef<StreetMapHandle, {
         zIndexOffset: selected ? 800 : 400,
         icon: L.divIcon({
           className: 'umap-member-pin',
-          html: `<div style="display:flex;flex-direction:column;align-items:center;transform:translate(calc(-50% + ${at.dx || 0}px), calc(-100% + ${at.dy || 0}px));opacity:${dimmed ? '0.55' : '1'}">
-            <span style="display:inline-flex;flex-direction:column;align-items:center;margin-bottom:4px;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:700;max-width:180px;box-shadow:0 1px 4px rgba(15,23,42,.16);background:${selected ? '#0084FF' : '#fff'};color:${selected ? '#fff' : '#0f172a'}"><span style="display:inline-flex;align-items:center;white-space:nowrap">${label}${battery}</span>${place ? `<span style="display:block;max-width:164px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;font-weight:600;opacity:.85">${place}</span>` : ''}</span>
-            ${face}
-          </div>`,
+          html: memberCalloutHtml({
+            dx: at.dx,
+            dy: at.dy,
+            dimmed,
+            tailColor: selected ? '#0084FF' : '#fff',
+            labelHtml: `<span data-label style="display:inline-flex;flex-direction:column;align-items:center;margin-bottom:4px;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:700;max-width:180px;box-shadow:0 1px 4px rgba(15,23,42,.16);background:${selected ? '#0084FF' : '#fff'};color:${selected ? '#fff' : '#0f172a'}"><span style="display:inline-flex;align-items:center;white-space:nowrap">${label}${battery}</span>${place ? `<span style="display:block;max-width:164px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;font-weight:600;opacity:.85">${place}</span>` : ''}</span>`,
+            faceHtml: face,
+          }),
           iconSize: [0, 0],
           iconAnchor: [0, 0],
         }),

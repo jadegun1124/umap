@@ -547,6 +547,76 @@ export function isVehicleStep(last, point) {
 }
 
 /**
+ * A walking step whose speed badge is 0 or missing.
+ * Ground pace 0.5–3 m/s, at most 8m, good accuracy. Shorter than the 2.5m
+ * moving gate and the 22m still-phone gate, so a 1m sample stays a vertex.
+ * A courtyard hop is faster or longer than this and still snaps.
+ */
+function consistentQuietWalk(last, point) {
+  if (!last || !point) return false;
+  const reported = pointSpeed(point);
+  if (reported != null && reported !== 0) return false;
+  const accuracy = positiveMeters(point.accuracyM);
+  if (!(accuracy > 0) || accuracy > 25) return false;
+  const pace = stepPace(last, point);
+  if (!pace || pace.dt < 800 || pace.moved < 0.2 || pace.moved > 8) return false;
+  if (isImpossibleJump(last, point)) return false;
+  return pace.speed >= 0.5 && pace.speed <= 3;
+}
+
+/** Walking samples stay on the drawn line. Vehicle corners may still simplify. */
+function isWalkingDrawStep(prev, next) {
+  if (!prev || !next || isImpossibleJump(prev, next) || isVehicleStep(prev, next)) return false;
+  if (consistentQuietWalk(prev, next)) return true;
+  const reported = pointSpeed(next);
+  if (reported == null || reported < 0.7 || reported > 2.6) return false;
+  const pace = stepPace(prev, next);
+  return !!(pace && pace.moved >= 0.2 && pace.dt >= 800 && pace.speed >= 0.4 && pace.speed <= 3);
+}
+
+function splitDrawPieces(points) {
+  if (!Array.isArray(points) || points.length === 0) return [];
+  if (points.length === 1) return [{ walking: false, points }];
+  const pieces = [];
+  let batch = [points[0]];
+  let walking = isWalkingDrawStep(points[0], points[1]);
+  for (let index = 1; index < points.length; index += 1) {
+    const step = isWalkingDrawStep(points[index - 1], points[index]);
+    if (batch.length === 1 || step === walking) {
+      if (batch.length === 1) walking = step;
+      batch.push(points[index]);
+      continue;
+    }
+    pieces.push({ walking, points: batch });
+    batch = [points[index - 1], points[index]];
+    walking = step;
+  }
+  pieces.push({ walking, points: batch });
+  return pieces;
+}
+
+function paintDrawn(points, round) {
+  const pieces = splitDrawPieces(points);
+  const output = [];
+  for (const piece of pieces) {
+    let next = piece.points;
+    if (!piece.walking && next.length >= 3) {
+      next = smoothShallowBends(restoreWalkVertices(piece.points, douglasPeucker(piece.points, displaySimplifyMeters())));
+      if (round) next = roundWalk(next);
+    } else {
+      next = smoothShallowBends(next);
+    }
+    if (output.length && next.length) {
+      const last = output[output.length - 1];
+      const first = next[0];
+      if (last === first || (last && first && last.lat === first.lat && last.lng === first.lng && last.at === first.at)) next = next.slice(1);
+    }
+    output.push(...next);
+  }
+  return output.length ? output : points;
+}
+
+/**
  * keep: the coordinate extends the walked line, or a relocation past courtyard multipath.
  * snap: inside the step gate, or a still-phone spike. Not a live-pin hold by itself.
  * drop: the sample is too poor to use, or it is an impossible jump.
@@ -570,9 +640,10 @@ export function trailDecision(last, point) {
   const reported = pointSpeed(point);
   // A good walking GPS fix is a vertex even when the phone samples every second.
   // The 2.5m gate was dropping those ~1m steps, so the walked line stayed short.
+  // Speed 0 or a missing speed is the same walk when the ground pace is consistent.
   const groundWalk = implied >= 0.5 && implied <= 3;
   const reportedWalk = reported != null && reported >= 0.7 && reported <= 2.6 && accuracy > 0 && accuracy <= 25 && moved >= 0.2 && (moved <= 8 || groundWalk);
-  if (reportedWalk) return 'keep';
+  if (reportedWalk || consistentQuietWalk(last, point)) return 'keep';
   // Bike and vehicle fixes are kept on the GPS clock. A stay flag, or a reported
   // 0, must not snap a city-speed step. Walk jitter still snaps below.
   if (isVehicleStep(last, point)) return 'keep';
@@ -678,6 +749,7 @@ function continuesStillWalk(points, point) {
 function indoorStayDrift(points, point) {
   if (!point || point.stayEnd || !stationarySample(point)) return false;
   const anchor = drawnAnchor(points);
+  if (consistentQuietWalk(anchor, point)) return false;
   const accurateRide = isVehicleStep(anchor, point)
     && positiveMeters(point.accuracyM) > 0
     && positiveMeters(point.accuracyM) <= TRAIL_POOR_ACCURACY_M;
@@ -1143,8 +1215,7 @@ function sampledTrail(points) {
 
 function simplifyDrawn(drawn) {
   if (!Array.isArray(drawn) || drawn.length < 3) return drawn;
-  const simplified = douglasPeucker(drawn, displaySimplifyMeters());
-  return smoothShallowBends(restoreWalkVertices(drawn, simplified));
+  return paintDrawn(drawn, false);
 }
 
 /**
@@ -1243,10 +1314,8 @@ export function appendLiveTip(parts, trailEnd) {
 }
 
 /**
- * Solid runs are sampled walks, simplified only under TRAIL_SIMPLIFY_M.
- * A walk hole (48m and 20s) is the raw dashed chord, the same split as 1.12.
- * A vehicle step stays inside the solid run, so a car is not a dashed gap and
- * Douglas–Peucker does not replace a sampled corner with a longer chord.
+ * Solid runs are sampled walks. Walking pieces are not Douglas–Peucker'd,
+ * so a straight 1m sample stays a vertex. Vehicle corners may still simplify.
  * An impossible jump is not drawn. No road geometry is added.
  */
 export function trailDrawParts(points) {
@@ -1255,7 +1324,7 @@ export function trailDrawParts(points) {
   const parts = [];
   let run = [sampled[0]];
   const flushRun = () => {
-    if (run.length >= 2) parts.push({ points: roundWalk(simplifyDrawn(run)), dashed: false });
+    if (run.length >= 2) parts.push({ points: paintDrawn(run, true), dashed: false });
     run = [];
   };
   for (let index = 1; index < sampled.length; index += 1) {
@@ -1849,6 +1918,7 @@ function findClosingStays(points, now) {
       const reported = pointSpeed(step);
       const accuracy = positiveMeters(step?.accuracyM);
       if (reported != null && reported >= 0.7 && reported <= 2.6 && accuracy > 0 && accuracy <= 25 && prev && haversineMeters(prev, step) >= 0.2) break;
+      if (consistentQuietWalk(prev, step)) break;
       end += 1;
     }
     const open = end === points.length - 1;
