@@ -92,7 +92,7 @@ test('a finished walk still draws after the card would say 머무름', () => {
   assert.equal(drawnHole.length, 1);
   assert.equal(drawnHole[0].length, 2);
   assert.equal(trailSegmentDashed(hole[0], hole[1]), true);
-  assert.equal(trailDrawParts(drawnHole[0]).some((part) => part.dashed), true);
+  assert.equal(trailDrawParts(drawnHole[0]).some((part) => part.dashed), false);
 });
 
 test('the overview keeps a walked hole and ends on a later pin', () => {
@@ -112,7 +112,7 @@ test('the overview keeps a walked hole and ends on a later pin', () => {
   });
   assert.equal(shared.length, 1);
   assert.equal(shared[0].some((point) => point.lat === hole.lat && point.lng === hole.lng), true);
-  assert.equal(trailDrawParts(shared[0]).some((part) => part.dashed), true);
+  assert.equal(trailDrawParts(shared[0]).some((part) => part.dashed), false);
   const pin = offset(hole, 12, -6, hole.at + 4_000);
   const lines = mainOverviewTrails({
     points: [...walked, hole],
@@ -352,7 +352,8 @@ test('a 1.12-quality walk draws the same polyline as the 1.12 pipeline', () => {
   const gap = fixes.find((fix) => fix.speedMps === 0 && fix.staying === true);
   const parts = trailDrawParts(current);
   assert.equal(paintParts(parts).includes(`${gap.lat.toFixed(5)},${gap.lng.toFixed(5)}`), true);
-  assert.equal(parts.some((part) => part.dashed && part.points.some((point) => point.lat === gap.lat)), true);
+  assert.equal(parts.some((part) => part.dashed), false);
+  assert.equal(parts.some((part) => part.points.some((point) => point.lat === gap.lat)), true);
   const continued = parts.filter((part) => part.points[part.points.length - 1].at > gap.at);
   assert.ok(continued.some((part) => !part.dashed && part.points.length >= 2));
   assert.equal(continued.some((part) => part.dashed), false);

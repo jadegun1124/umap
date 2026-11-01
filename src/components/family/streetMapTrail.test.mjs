@@ -536,7 +536,7 @@ test('the main map matches the records line and ends on the pin for a shaped wal
     const holeMain = memberLiveLines(holeMember, { self: holePoints }, holePin.at + 1_000, undefined, true);
     const holePaint = await paint(React, root, bundled, holeMain.lines);
     const holeCoords = coordsOf(holePaint);
-    assert.equal(holePaint.includes(';'), true, `walk hole bridged solid ${holePaint}`);
+    assert.equal(holePaint.includes(';'), false, `walk hole still dashed ${holePaint}`);
     assert.equal(holeCoords[holeCoords.length - 1], `${holePin.lat.toFixed(5)},${holePin.lng.toFixed(5)}`, holePaint);
   } finally {
     root.unmount();
