@@ -263,9 +263,10 @@ export function choosePlaceLabel(candidates, point) {
     if (!label) continue;
     const geometry = candidate.geometry || (Number.isFinite(candidate.lat) && Number.isFinite(candidate.lng) ? candidate : null);
     const parsed = buildingFromText(`${candidate.name || candidate.building || ''} ${candidate.unit || ''}`);
-    const unit = formatUnit(candidate.unit) || parsed.unit;
-    const residential = isResidentialPlace(candidate) || Boolean(unit);
-    const bareUnit = isUnitLabel(candidate.name || candidate.building);
+    const residential = isResidentialPlace(candidate) || RESIDENTIAL_BUILDING.test(String(candidate.buildingType || ''));
+    const fromNumber = residential ? numberedUnit(candidate.name || candidate.building) : '';
+    const unit = formatUnit(candidate.unit) || parsed.unit || fromNumber;
+    const bareUnit = isUnitLabel(candidate.name || candidate.building) || Boolean(fromNumber);
     let rawName = bareUnit ? '' : cleanToken(candidate.name || candidate.building);
     if (unit && rawName.endsWith(unit)) rawName = cleanToken(rawName.slice(0, -unit.length));
     const areaM2 = geometryAreaM2(geometry);
@@ -345,6 +346,12 @@ function addressValues(address, keys) {
 
 function isUnitLabel(value) {
   return /^\d+동$/.test(cleanToken(value).replace(/\s+/g, ''));
+}
+
+/** OSM and some building layers name a 동 with only the number, such as "105". */
+function numberedUnit(value) {
+  const text = cleanToken(value).replace(/\s+/g, '');
+  return /^\d{2,4}$/.test(text) ? `${text}동` : '';
 }
 
 function complexPhase(value) {
@@ -576,9 +583,10 @@ function featureName(properties) {
   const building = firstText(properties, ['buld_nm', 'bld_nm', 'bldnm', 'buldNm', 'building_name', 'bldg_nm']);
   const unit = firstText(properties, ['dong_nm', 'buld_dong', 'dongNm']);
   const named = buildingFromText(`${building} ${unit}`);
+  const fromNumber = numberedUnit(building) || numberedUnit(unit);
   return {
-    building: named.building || (building && !isDong(building) ? building : ''),
-    unit: named.unit || formatUnit(unit),
+    building: fromNumber ? '' : (named.building || (building && !isDong(building) ? building : '')),
+    unit: named.unit || formatUnit(unit) || fromNumber,
     poi: named.poi,
   };
 }
@@ -801,10 +809,11 @@ function overpassCandidates(body, lat, lng) {
     const residential = RESIDENTIAL_NAME.test(name)
       || RESIDENTIAL_BUILDING.test(String(tags.building || ''))
       || RESIDENTIAL_LANDUSE.test(String(tags.landuse || ''));
+    const fromNumber = residential ? numberedUnit(name) : '';
     const geometry = Array.isArray(element.geometry) ? element.geometry : (Number.isFinite(element.lat) ? { lat: element.lat, lng: element.lon } : { lat, lng });
     candidates.push({
-      name,
-      unit: formatUnit(tags['addr:unit'] || tags.ref || ''),
+      name: fromNumber ? '' : name,
+      unit: formatUnit(tags['addr:unit'] || tags.ref || '') || fromNumber,
       kind: residential ? 'residential' : 'poi',
       buildingType: tags.building,
       landuse: tags.landuse,
@@ -824,7 +833,10 @@ async function fetchOverpass(fetchImpl, lat, lng) {
   let last = null;
   for (const url of urls) {
     try {
-      const response = await fetchImpl(url, { signal: timeoutSignal(12000) });
+      const response = await fetchImpl(url, {
+        headers: { 'User-Agent': NOMINATIM_UA },
+        signal: timeoutSignal(12000),
+      });
       const body = await readJson(response);
       const candidates = overpassCandidates(body, lat, lng);
       if (candidates.length || (response && response.ok !== false && body)) return candidates;
