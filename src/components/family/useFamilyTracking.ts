@@ -626,8 +626,9 @@ export function useFamilyTracking(onFirstFix: (lat: number, lng: number) => void
         const mine = cleanPlace(member.place);
         return Boolean(theirs && mine && theirs !== mine);
       });
-      if (placeKeys.current[id] === key && cleanPlace(member.place) && !neighborDisagrees) continue;
-      const job = `${id}:${key}`;
+      const needsFresh = !cleanPlace(member.place) || neighborDisagrees;
+      if (!needsFresh && placeKeys.current[id] === key) continue;
+      const job = `${id}:${key}:${needsFresh ? 'fresh' : 'cell'}`;
       if (placeJobs.current[id] === job) continue;
       placeJobs.current[id] = job;
       const apply = (label: string | null, settled: boolean, attempt = 0) => {

@@ -111,6 +111,7 @@ export const TRAIL_GAP_M: number;
 export const TRAIL_GAP_MS: number;
 export function trailSegmentDashed(start: TrailSample | null | undefined, end: TrailSample | null | undefined): boolean;
 export function trailDrawParts(points: TrailSample[] | null | undefined): { points: TrailSample[]; dashed: boolean }[];
+export function appendLiveTip(parts: { points: TrailSample[]; dashed: boolean }[] | null | undefined, trailEnd: TrailSample | null | undefined): { points: TrailSample[]; dashed: boolean }[];
 export function visibleTrail(points: TrailSample[] | null | undefined): TrailSample[];
 export function displayCoordinate<T extends TrailSample>(points: TrailSample[] | null | undefined, point: T): T;
 export function walkLeavesStay(points: TrailSample[] | null | undefined, point: TrailSample | null | undefined): boolean;

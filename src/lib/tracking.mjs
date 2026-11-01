@@ -1221,6 +1221,24 @@ export function trailDrawDashed(start, end, prior) {
   return false;
 }
 
+/** The live pin is not always the last painted vertex. A walked pace stays solid. */
+export function appendLiveTip(parts, trailEnd) {
+  const painted = (Array.isArray(parts) ? parts : []).filter((part) => part && Array.isArray(part.points) && part.points.length >= 2);
+  const previous = painted[painted.length - 1];
+  const paintedEnd = previous ? previous.points[previous.points.length - 1] : null;
+  if (!trailEnd || !paintedEnd || !Number.isFinite(trailEnd.lat) || !Number.isFinite(trailEnd.lng)) return painted;
+  const sameTip = Math.abs(paintedEnd.lat - trailEnd.lat) < 1e-5 && Math.abs(paintedEnd.lng - trailEnd.lng) < 1e-5;
+  if (sameTip || isImpossibleJump(paintedEnd, trailEnd)) return painted;
+  const prior = previous.points.length >= 2 ? previous.points[previous.points.length - 2] : null;
+  const hole = !isVehicleStep(paintedEnd, trailEnd) && trailDrawDashed(paintedEnd, trailEnd, prior);
+  if (!hole && !previous.dashed) {
+    previous.points = previous.points.concat([trailEnd]);
+    return painted;
+  }
+  painted.push({ points: [paintedEnd, trailEnd], dashed: hole });
+  return painted;
+}
+
 /**
  * Solid runs are sampled walks, simplified only under TRAIL_SIMPLIFY_M.
  * A walk hole (48m and 20s) is the raw dashed chord, the same split as 1.12.
@@ -2008,7 +2026,7 @@ function accurateWalkStep(prev, point) {
   const reported = pointSpeed(point);
   if (reported != null && reported < 0.4) return false;
   const pace = stepPace(prev, point);
-  if (!pace || pace.moved < 8 || pace.dt < 800 || pace.dt > 90_000) return false;
+  if (!pace || pace.moved < TRAIL_WALK_VERTEX_M || pace.dt < 800 || pace.dt > 90_000) return false;
   return pace.speed >= 0.7 && pace.speed <= 2.6;
 }
 

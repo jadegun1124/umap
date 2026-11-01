@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { carryPlace } from './memberPlace.mjs';
-import { buildDayRecord, displayLivePoints, liveMotionLabel, mergeVisitStops, previewOpenJourney, settleTrailPoint, storedTrackAfterArchive, trailDrawParts, walkLeavesStay } from './tracking.mjs';
+import { appendLiveTip, buildDayRecord, displayLivePoints, liveMotionLabel, mergeVisitStops, previewOpenJourney, settleTrailPoint, storedTrackAfterArchive, trailDrawParts, walkLeavesStay } from './tracking.mjs';
 import { spreadPinPositions } from './mapPinSpread.mjs';
 
 function eastOf(lat, lng, metersEast) {
@@ -124,6 +124,56 @@ test('a 100m store run inside 300m is a short journey and splits the home visit'
   assert.ok(trip.length >= 1, `journeys ${cards.map((journey) => `${journey.distanceM}m/${Math.round((journey.endedAt - journey.startedAt) / 1000)}s`).join(',')}`);
   assert.ok(stops.length >= 2 && (homeStops.length >= 2 || stops.some((stop) => meters(home, stop) >= 50)), `stops ${stops.length} home ${homeStops.length}`);
   assert.equal(cards.some((journey) => (journey.endedAt - journey.startedAt) > 30 * 60 * 1000), false);
+});
+
+test('a dense 2.5s store run inside 300m is still a short journey', () => {
+  const home = { lat: 37.55, lng: 127.05 };
+  const t0 = Date.parse('2026-11-01T10:00:00Z');
+  const fixes = [];
+  for (let minute = 0; minute < 8; minute += 1) {
+    fixes.push({ ...home, at: t0 + minute * 60_000, speedMps: 0, accuracyM: 8, staying: true });
+  }
+  let at = t0 + 8 * 60_000;
+  const stepM = 1.25 * 2.5;
+  let east = 0;
+  while (east < 100) {
+    east = Math.min(100, east + stepM);
+    at += 2_500;
+    fixes.push({ ...eastOf(home.lat, home.lng, east), at, speedMps: null, accuracyM: 8, staying: false });
+  }
+  while (east > 0) {
+    east = Math.max(0, east - stepM);
+    at += 2_500;
+    fixes.push({ ...eastOf(home.lat, home.lng, east), at, speedMps: null, accuracyM: 8, staying: false });
+  }
+  const back = at;
+  for (let minute = 1; minute <= 8; minute += 1) {
+    fixes.push({ ...home, at: back + minute * 60_000, speedMps: 0, accuracyM: 8, staying: true });
+  }
+  let points = [];
+  let journeys = [];
+  let visits = [];
+  for (const fix of fixes) {
+    points = settleTrailPoint(points, fix, fix.at).points;
+    const archived = storedTrackAfterArchive(points, fix.at);
+    if (archived.journeys.length > 0) {
+      journeys = journeys.concat(archived.journeys);
+      points = archived.points;
+    }
+    visits = mergeVisitStops(visits, buildDayRecord(points, fix.at).stops, fix.at);
+  }
+  const trip = journeys.filter((journey) => journey.distanceM >= 80 && (journey.endedAt - journey.startedAt) < 30 * 60 * 1000);
+  assert.ok(trip.length >= 1, `journeys ${journeys.map((journey) => journey.distanceM).join(',')}`);
+  assert.ok(visits.length >= 2, `visits ${visits.length}`);
+});
+
+test('a walked pace onto the live pin stays solid', () => {
+  const start = { lat: 37.55, lng: 127.05, at: 1_000, accuracyM: 8, staying: true };
+  const mid = { ...eastOf(start.lat, start.lng, 20), at: 16_000, accuracyM: 8, staying: true };
+  const tip = { ...eastOf(start.lat, start.lng, 75), at: 50_000, accuracyM: 8, staying: true };
+  const parts = appendLiveTip([{ points: [start, mid], dashed: false }], tip);
+  assert.equal(parts.some((part) => part.dashed), false);
+  assert.ok(parts.some((part) => part.points.length >= 3));
 });
 
 test('three bubbles at one spot stay apart on screen', () => {

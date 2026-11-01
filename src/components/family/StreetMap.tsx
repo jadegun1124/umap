@@ -5,7 +5,7 @@ import { noteDiag } from '../../lib/diagLog.mjs';
 import { hasLocation } from '../../lib/geo';
 import { spreadPinPositions } from '../../lib/mapPinSpread.mjs';
 import { memberIsStale, memberPresence } from '../../lib/memberPresence.mjs';
-import { isImpossibleJump, isVehicleStep, trailDrawParts, trailSegmentDashed } from '../../lib/tracking.mjs';
+import { appendLiveTip, trailDrawParts } from '../../lib/tracking.mjs';
 import { VWORLD_ATTRIBUTION, vworldApiKey, vworldBaseTileUrl } from '../../services/vworld';
 import type { HomeZone, Member, TrackPoint } from '../../types/family';
 
@@ -307,18 +307,7 @@ export const StreetMap = forwardRef<StreetMapHandle, {
     let pointCount = 0;
     for (const trail of trails) {
       if (!trail || trail.length < 2) continue;
-      const parts = trailDrawParts(trail).filter((part) => part.points.length >= 2);
-      const trailEnd = trail[trail.length - 1];
-      const paintedEnd = parts[parts.length - 1]?.points.at(-1);
-      if (trailEnd && paintedEnd && Number.isFinite(trailEnd.lat) && Number.isFinite(trailEnd.lng)) {
-        const sameTip = Math.abs(paintedEnd.lat - trailEnd.lat) < 1e-5 && Math.abs(paintedEnd.lng - trailEnd.lng) < 1e-5;
-        if (!sameTip && !isImpossibleJump(paintedEnd, trailEnd)) {
-          const hole = !isVehicleStep(paintedEnd, trailEnd) && trailSegmentDashed(paintedEnd, trailEnd);
-          const previous = parts[parts.length - 1];
-          if (!hole && previous && !previous.dashed) previous.points = previous.points.concat([trailEnd]);
-          else parts.push({ points: [paintedEnd, trailEnd], dashed: hole });
-        }
-      }
+      const parts = appendLiveTip(trailDrawParts(trail), trail[trail.length - 1]);
       if (parts.length === 0) continue;
       for (const part of parts) {
         pointCount += part.points.length;
