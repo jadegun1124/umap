@@ -99,6 +99,7 @@ export function FamilyMapScreen() {
   const [alwaysSetup, setAlwaysSetup] = useState(false);
   const [guideBusy, setGuideBusy] = useState(false);
   const [guideHintHidden, setGuideHintHidden] = useState(() => readSessionFlag(ALWAYS_GUIDE_DISMISSED_KEY));
+  const [keepHint, setKeepHint] = useState('');
   const [profileOpen, setProfileOpen] = useState(false);
   const [recordId, setRecordId] = useState<string | null>(null);
   const [managedSettings, setManagedSettings] = useState(false);
@@ -116,6 +117,38 @@ export function FamilyMapScreen() {
     const timer = window.setInterval(() => setNow(Date.now()), 15_000);
     return () => window.clearInterval(timer);
   }, []);
+  useEffect(() => {
+    if (!umapLocationNative() || state.stage !== 'map') {
+      setKeepHint('');
+      return;
+    }
+    let cancel = false;
+    const refresh = () => {
+      void umapLocation.status().then((status) => {
+        if (cancel) return;
+        if (!status.running && !status.userStopped) {
+          setKeepHint('위치 유지가 꺼져 있어 가족에게 지금 위치가 가지 않습니다. 앱을 다시 열어 위치 유지를 켜 주세요.');
+          return;
+        }
+        if (status.running && status.batteryUnrestricted === false) {
+          setKeepHint('배터리를 최적화하면 멈춰 있는 동안 위치가 끊깁니다. 눌러서 제한 없음을 켜 주세요.');
+          return;
+        }
+        setKeepHint('');
+      }).catch(() => undefined);
+    };
+    refresh();
+    const timer = window.setInterval(refresh, 20_000);
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') refresh();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      cancel = true;
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [state.stage]);
   useEffect(() => {
     familyRef.current.closeJourneys(now);
   }, [now]);
@@ -874,6 +907,21 @@ export function FamilyMapScreen() {
             </div>
           )}
 
+          {keepHint && !placingHome && (
+            keepHint.includes('배터리') ? (
+              <button
+                type="button"
+                onClick={() => { void umapLocation.openBattery(); }}
+                className="absolute inset-x-4 top-16 z-30 rounded-2xl bg-white px-4 py-3 text-left text-sm font-semibold leading-6 text-slate-800 shadow"
+              >
+                {keepHint}
+              </button>
+            ) : (
+              <div className="absolute inset-x-4 top-16 z-30 rounded-2xl bg-white px-4 py-3 text-left text-sm font-semibold leading-6 text-slate-800 shadow">
+                {keepHint}
+              </div>
+            )
+          )}
           {state.permissions.locationMode !== 'always' && !guideHintHidden && !placingHome && (
             <AlwaysAllowMapHint
               onOpen={() => setAlwaysSetup(true)}

@@ -65,7 +65,7 @@ interface UmapLocationPlugin {
   battery(): Promise<{ pct?: number | null; charging?: boolean | null }>;
   start(options: { config: string }): Promise<{ started: boolean; reason?: string }>;
   stop(): Promise<{ stopped: boolean }>;
-  status(): Promise<{ running: boolean; userStopped: boolean; native: boolean; reason?: string }>;
+  status(): Promise<{ running: boolean; userStopped: boolean; native: boolean; reason?: string; batteryUnrestricted?: boolean }>;
   startAlertWatch(options: { config: string }): Promise<{ started: boolean; reason?: string }>;
   stopAlertWatch(): Promise<{ stopped: boolean }>;
   alertWatchStatus(): Promise<{ running: boolean; userStopped: boolean }>;

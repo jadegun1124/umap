@@ -9,7 +9,7 @@
 import { APP_VERSION_NAME } from './appRelease.mjs';
 
 const NOMINATIM_UA = `Kinnex/${APP_VERSION_NAME} (family location; https://github.com/jadegun1124/umap)`;
-const CACHE_KEY = 'umap_geocode_cache_v7';
+const CACHE_KEY = 'umap_geocode_cache_v8';
 const PLACE_LIMIT = 56;
 /** Farther than this, a place is not the nearest label. Inside a polygon, distance is 0. */
 export const NEAREST_PLACE_M = 80;
@@ -45,6 +45,8 @@ export function readKakaoKey(env = import.meta.env) {
 export function shortenAddress(text) {
   const clean = String(text || '').trim().replace(/[,，]/g, ' ').replace(/\s+/g, ' ');
   if (!clean || clean === '근처') return '';
+  const road = extractRoadAddress(clean);
+  if (road) return road;
   const parts = clean.split(' ').filter((part) => part && part !== '근처');
   const district = parts.find((part) => /(?:시|군|구)$/.test(part) && !/특별|광역|자치/.test(part));
   const dong = parts.find((part) => /(?:동|읍|면|리|가)$/.test(part));
@@ -68,7 +70,7 @@ function cleanToken(value) {
 }
 
 function isPrecisePlace(text) {
-  return PRECISE_WORD.test(text) || /\d+\s*동/.test(text);
+  return PRECISE_WORD.test(text) || /\d+\s*동/.test(text) || Boolean(extractRoadAddress(text));
 }
 
 function formatUnit(value) {
@@ -236,6 +238,16 @@ function geometryAreaM2(geometry) {
   return best;
 }
 
+function measuredDistance(origin, candidate, geometry) {
+  if (geometry) {
+    const distance = distanceToGeometry(origin, geometry);
+    if (Number.isFinite(distance)) return distance;
+  }
+  if (Number.isFinite(candidate.lat) && Number.isFinite(candidate.lng)) return metersBetween(origin, candidate);
+  if (Number.isFinite(candidate.distanceM)) return candidate.distanceM;
+  return Infinity;
+}
+
 export function choosePlaceLabel(candidates, point) {
   const origin = {
     lat: Number(point?.lat),
@@ -247,43 +259,62 @@ export function choosePlaceLabel(candidates, point) {
     const label = candidateLabel(candidate);
     if (!label) continue;
     const geometry = candidate.geometry || (Number.isFinite(candidate.lat) && Number.isFinite(candidate.lng) ? candidate : null);
-    const inside = polygonCovers(origin, geometry);
-    const distanceM = inside
-      ? 0
-      : (Number.isFinite(candidate.distanceM) ? candidate.distanceM : distanceToGeometry(origin, geometry));
+    const unit = formatUnit(candidate.unit);
+    const residential = isResidentialPlace(candidate);
+    const areaM2 = geometryAreaM2(geometry);
+    const footprint = geometryRings(geometry).some((ring) => ring.length >= 3);
     scored.push({
       label,
-      inside,
-      residential: isResidentialPlace(candidate),
-      areaM2: inside ? geometryAreaM2(geometry) : Infinity,
-      distanceM: Number.isFinite(distanceM) ? distanceM : Infinity,
+      rawName: cleanToken(candidate.name || candidate.building),
+      unit,
+      inside: footprint && polygonCovers(origin, geometry),
+      residential,
+      dongBuilding: residential && Boolean(unit),
+      landuseShell: residential && !unit && (RESIDENTIAL_LANDUSE.test(String(candidate.landuse || '')) || (footprint && areaM2 > 20_000)),
+      areaM2,
+      distanceM: measuredDistance(origin, candidate, geometry),
     });
   }
-  const residentialInside = scored.filter((item) => item.inside && item.residential);
-  if (residentialInside.length) {
-    residentialInside.sort((left, right) => left.areaM2 - right.areaM2 || left.distanceM - right.distanceM);
-    return residentialInside[0].label;
+  const inRange = scored.filter((item) => item.distanceM <= NEAREST_PLACE_M);
+  if (!inRange.length) return '';
+  const dongs = inRange.filter((item) => item.dongBuilding);
+  // A complex shell is one polygon. Its edge can sit nearer than a 동 wall
+  // while the label would drop the 동. Rank each 동 footprint against POIs.
+  const pool = dongs.length
+    ? inRange.filter((item) => item.dongBuilding || !item.landuseShell)
+    : inRange;
+  pool.sort((left, right) => left.distanceM - right.distanceM || left.areaM2 - right.areaM2);
+  const winner = pool[0];
+  if (!winner) return '';
+  // A complex point with no 동 can sit slightly closer than its own building edge.
+  // A church or station that is actually closer keeps its own name.
+  const nearDong = !winner.dongBuilding && winner.residential
+    ? pool
+      .filter((item) => item.dongBuilding && item.distanceM <= winner.distanceM + 30)
+      .sort((left, right) => left.distanceM - right.distanceM)[0]
+    : null;
+  const chosen = nearDong || winner;
+  let name = chosen.rawName;
+  // 「하계청구아파트」 and 「하계1차청구아파트」 are the same complex. 1차 sits in the middle, so a plain includes() misses it.
+  if (chosen.dongBuilding || chosen.landuseShell) {
+    const fold = (value) => String(value || '').replace(/\s+/g, '').replace(/\d+차/g, '');
+    for (const item of inRange) {
+      if (!item.rawName || item.rawName === name) continue;
+      const contained = item.rawName.includes(name) || name.includes(item.rawName);
+      const sameComplex = fold(item.rawName) && fold(item.rawName) === fold(name);
+      if ((contained || sameComplex) && item.rawName.length > name.length) name = item.rawName;
+    }
   }
-  const containing = scored.filter((item) => item.inside);
-  if (containing.length) {
-    containing.sort((left, right) => left.areaM2 - right.areaM2 || left.distanceM - right.distanceM);
-    return containing[0].label;
-  }
-  const residentialNear = scored.filter((item) => item.residential && item.distanceM <= RESIDENTIAL_NEAR_M);
-  if (residentialNear.length) {
-    residentialNear.sort((left, right) => left.distanceM - right.distanceM || left.areaM2 - right.areaM2);
-    return residentialNear[0].label;
-  }
-  const near = scored.filter((item) => item.distanceM <= NEAREST_PLACE_M);
-  if (!near.length) return '';
-  near.sort((left, right) => left.distanceM - right.distanceM);
-  return near[0].label;
+  if (chosen.unit) return formatPrecisePlace({ building: name, unit: chosen.unit });
+  return chosen.label;
 }
 
-/** Keep a building line. A plain address still becomes 시·동. */
+/** Keep a building, a named place, or a road number. A bare 구·동 is only the last resort. */
 export function presentPlace(text) {
   const clean = cleanToken(String(text || '').replace(/[,，]/g, ' '));
   if (!clean) return '';
+  const road = extractRoadAddress(clean);
+  if (road) return road.slice(0, PLACE_LIMIT);
   if (isPrecisePlace(clean)) return clean.slice(0, PLACE_LIMIT);
   return shortenAddress(clean);
 }
@@ -300,6 +331,37 @@ function addressValues(address, keys) {
 
 function isDong(value) {
   return /(?:동|읍|면|리|가)$/.test(value);
+}
+
+function isRoadName(value) {
+  return /(?:로|길)$/.test(value) && !isDong(value);
+}
+
+function houseNumber(value) {
+  const text = cleanToken(value).replace(/\s+/g, '');
+  if (!text || text === '0') return '';
+  return /^\d+(?:-\d+)?$/.test(text) ? text : '';
+}
+
+/** "마들로3길 15". A road without a number is still closer than 구·동 alone. */
+export function roadAddressLabel(road, number) {
+  const name = cleanToken(road);
+  if (!name || !isRoadName(name)) return '';
+  const num = houseNumber(number);
+  return num ? `${name} ${num}` : name;
+}
+
+export function extractRoadAddress(text) {
+  const parts = cleanToken(String(text || '').replace(/[,，]/g, ' ')).split(' ').filter(Boolean);
+  for (let index = 0; index < parts.length; index += 1) {
+    if (!isRoadName(parts[index])) continue;
+    const next = houseNumber(parts[index + 1]);
+    if (next) return `${parts[index]} ${next}`;
+    const prev = houseNumber(parts[index - 1]);
+    if (prev) return `${parts[index]} ${prev}`;
+    return parts[index];
+  }
+  return '';
 }
 
 function namedFromAddress(address, namedetails) {
@@ -332,6 +394,9 @@ export function nominatimAddress(body) {
   const named = namedFromAddress(address, body && body.namedetails);
   const precise = formatPrecisePlace({ dong, building: named.building, poi: named.poi });
   if (precise) return precise;
+  const road = roadAddressLabel(address && address.road, address && address.house_number)
+    || extractRoadAddress(body && typeof body.display_name === 'string' ? body.display_name : '');
+  if (road) return road;
   const structured = shortenAddress([district, dong].filter(Boolean).join(' '));
   const display = shortenAddress(body && typeof body.display_name === 'string' ? body.display_name : '');
   const hasDong = (label) => isDong((label || '').split(' ').at(-1) || '');
@@ -429,11 +494,15 @@ function vworldStructure(body) {
   const item = body && body.response && Array.isArray(body.response.result) ? body.response.result[0] : null;
   const structure = item && item.structure && typeof item.structure === 'object' ? item.structure : {};
   const text = item && typeof item.text === 'string' ? item.text : '';
-  const dong = [structure.level4L, structure.level4A, structure.level3].map(cleanToken).find(isDong) || '';
+  const level4L = cleanToken(structure.level4L);
+  const dong = [structure.level4A, structure.level4L, structure.level3].map(cleanToken).find(isDong) || '';
   const district = [structure.level2, structure.level3].map(cleanToken).find((value) => /(?:시|군|구)$/.test(value) && !/특별|광역|자치/.test(value)) || '';
   const fromText = buildingFromText(text);
   const detail = cleanToken(structure.detail);
   const detailBuilding = buildingFromText(detail);
+  const road = roadAddressLabel(isRoadName(level4L) ? level4L : '', structure.level5)
+    || extractRoadAddress(text)
+    || extractRoadAddress(detail);
   return {
     text,
     dong,
@@ -441,6 +510,7 @@ function vworldStructure(body) {
     building: fromText.building || detailBuilding.building,
     unit: fromText.unit || detailBuilding.unit,
     poi: fromText.poi || detailBuilding.poi,
+    road,
   };
 }
 
@@ -452,7 +522,7 @@ function buildingFromText(text) {
   for (const part of parts) {
     if (!unit && /^\d+동$/.test(part)) unit = part;
     if (!building && /(?:아파트|빌라|맨션|오피스텔|타운|하우스|단지)/.test(part)) building = part;
-    else if (!poi && /(?:마트|백화점|슈퍼|편의점|학교|병원|의원|약국|공원|회관|센터)/.test(part) && !isDong(part)) poi = part;
+    else if (!poi && /(?:마트|백화점|슈퍼|편의점|학교|병원|의원|약국|공원|회관|센터|교회|성당|사찰)/.test(part) && !isDong(part)) poi = part;
   }
   return { building, unit, poi };
 }
@@ -527,11 +597,12 @@ function mergeVworldParts(primary, extra) {
     building: primary.building || extra.building,
     unit: primary.unit || extra.unit,
     poi: primary.poi || extra.poi,
+    road: primary.road || extra.road,
   };
 }
 
 async function fetchVworld(fetchImpl, lat, lng, key) {
-  let parts = { text: '', dong: '', district: '', building: '', unit: '', poi: '' };
+  let parts = { text: '', dong: '', district: '', building: '', unit: '', poi: '', road: '' };
   try {
     parts = mergeVworldParts(parts, await fetchVworldAddress(fetchImpl, lat, lng, key, 'ROAD'));
   } catch {
@@ -552,8 +623,8 @@ async function fetchVworld(fetchImpl, lat, lng, key) {
     dataUrl.searchParams.set('format', 'json');
     dataUrl.searchParams.set('crs', 'EPSG:4326');
     dataUrl.searchParams.set('geomFilter', `POINT(${lng} ${lat})`);
-    dataUrl.searchParams.set('buffer', '120');
-    dataUrl.searchParams.set('size', '20');
+    dataUrl.searchParams.set('buffer', '220');
+    dataUrl.searchParams.set('size', '40');
     dataUrl.searchParams.set('geometry', 'true');
     const buildingResponse = await fetchImpl(dataUrl.toString(), { signal: timeoutSignal(8000) });
     building = vworldBuilding(await readJson(buildingResponse));
@@ -566,45 +637,58 @@ async function fetchVworld(fetchImpl, lat, lng, key) {
   try {
     picked = choosePlaceLabel([
       ...layer,
-      ...(parts.building ? [{ name: parts.building, unit: parts.unit, kind: 'residential', lat, lng }] : []),
-      ...(parts.poi ? [{ name: parts.poi, kind: 'poi' }] : []),
+      ...(parts.building ? [{ name: parts.building, unit: parts.unit, kind: 'residential' }] : []),
     ], point);
   } catch {
     picked = '';
   }
-  const named = formatPrecisePlace({
-    dong: parts.dong,
-    building: building.building || parts.building,
-    unit: building.unit || parts.unit,
-    poi: '',
-  });
-  const label = picked || named || presentPlace(parts.text) || [parts.district, parts.dong].filter(Boolean).join(' ');
-  return { label, candidates: layer };
+  const road = parts.road || extractRoadAddress(parts.text);
+  const unlocated = (Array.isArray(building.candidates) ? building.candidates : []).find((item) => !item.geometry && item.kind === 'residential');
+  const named = unlocated ? formatPrecisePlace({ building: unlocated.name, unit: unlocated.unit }) : '';
+  const label = picked || named || road || presentPlace(parts.text) || [parts.district, parts.dong].filter(Boolean).join(' ');
+  return { label, candidates: layer, road };
 }
 
-function nominatimCandidates(body, lat, lng) {
+function featureLocation(body) {
+  const lat = Number(body && (body.lat ?? body.latitude));
+  const lng = Number(body && (body.lon ?? body.lng));
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  return { lat, lng };
+}
+
+function nominatimCandidates(body) {
   const address = body && typeof body === 'object' ? body.address : null;
   const named = namedFromAddress(address, body && body.namedetails);
   const geometry = body && body.geojson && geometryRings(body.geojson).length ? body.geojson : null;
+  const feature = featureLocation(body);
   const candidates = [];
   if (named.building) {
-    candidates.push({
-      name: named.building,
-      kind: 'residential',
-      ...(geometry ? { geometry } : { lat, lng }),
-    });
+    const located = geometry ? { geometry } : feature;
+    if (located) {
+      candidates.push({
+        name: named.building,
+        kind: 'residential',
+        ...located,
+      });
+    }
   }
   if (named.poi) {
     const kind = POI_NAME.test(named.poi) || !RESIDENTIAL_NAME.test(named.poi) ? 'poi' : 'residential';
-    // A reverse hit is one feature. Its polygon belongs to that feature, not to the query point.
+    // The reverse hit names one feature. Keep that feature's own polygon or
+    // its published coordinate. The query pin is not the feature.
     const ownsGeometry = !named.building;
-    candidates.push({
-      name: named.poi,
-      kind,
-      ...(ownsGeometry && geometry ? { geometry } : { lat, lng }),
-    });
+    const located = ownsGeometry && geometry ? { geometry } : feature;
+    if (located) {
+      candidates.push({
+        name: named.poi,
+        kind,
+        ...located,
+      });
+    }
   }
-  return { label: nominatimAddress(body), candidates };
+  const road = roadAddressLabel(address && address.road, address && address.house_number)
+    || extractRoadAddress(body && typeof body.display_name === 'string' ? body.display_name : '');
+  return { label: nominatimAddress(body), candidates, road };
 }
 
 async function fetchNominatim(fetchImpl, lat, lng) {
@@ -629,7 +713,7 @@ async function fetchNominatim(fetchImpl, lat, lng) {
     if (!(error instanceof TypeError) || !/unsafe header|User-Agent/i.test(message)) throw error;
     response = await fetchImpl(url.toString(), { signal: timeoutSignal(8000) });
   }
-  return nominatimCandidates(await readJson(response), lat, lng);
+  return nominatimCandidates(await readJson(response));
 }
 
 async function fetchKakao(fetchImpl, lat, lng, key) {
@@ -648,12 +732,18 @@ async function fetchKakao(fetchImpl, lat, lng, key) {
   const dong = cleanToken(parcel.region_3depth_name || road.region_3depth_name);
   const building = cleanToken(road.building_name);
   const parsed = buildingFromText(building);
-  return formatPrecisePlace({
+  const precise = formatPrecisePlace({
     dong,
-    building: parsed.building || building,
+    building: parsed.building || (RESIDENTIAL_NAME.test(building) ? building : ''),
     unit: parsed.unit,
     poi: parsed.poi,
   });
+  const main = houseNumber(road.main_building_no);
+  const sub = houseNumber(road.sub_building_no);
+  const street = roadAddressLabel(road.road_name, main && sub ? `${main}-${sub}` : main);
+  if (precise && RESIDENTIAL_NAME.test(precise)) return precise;
+  if (parsed.poi) return parsed.poi;
+  return street || precise;
 }
 
 function overpassCandidates(body, lat, lng) {
@@ -717,19 +807,25 @@ async function lookupPlace(lat, lng, options = {}) {
   const point = { lat: Number(lat), lng: Number(lng) };
   const candidates = Array.isArray(options.candidates) ? [...options.candidates] : [];
   let coarse = '';
+  let road = '';
+  let buildingName = '';
   let residentialKnown = false;
   const finish = (label, settled = true) => settledLabel(label, residentialKnown, settled);
+  const rememberRoad = (value) => {
+    const next = extractRoadAddress(value);
+    if (!next) return;
+    const numbered = (label) => /\s\d+(?:-\d+)?$/.test(label);
+    if (!road || (numbered(next) && !numbered(road))) road = next;
+  };
   if (key) {
     try {
       const fromVworld = await fetchVworld(fetchImpl, lat, lng, key);
       candidates.push(...(fromVworld.candidates || []));
-      if (fromVworld.label && isPrecisePlace(fromVworld.label) && RESIDENTIAL_NAME.test(fromVworld.label)) {
-        const agreed = choosePlaceLabel(candidates, point);
+      rememberRoad(fromVworld.road);
+      if (fromVworld.label && RESIDENTIAL_NAME.test(fromVworld.label)) {
         residentialKnown = true;
-        if (agreed && RESIDENTIAL_NAME.test(agreed)) return finish(agreed, true);
-        return finish(fromVworld.label, true);
-      }
-      if (fromVworld.label && !isPrecisePlace(fromVworld.label)) coarse = fromVworld.label;
+        if (!choosePlaceLabel(candidates, point)) buildingName = fromVworld.label;
+      } else if (fromVworld.label && !isPrecisePlace(fromVworld.label)) coarse = fromVworld.label;
     } catch {
       /* Kakao·Nominatim으로 넘어간다 */
     }
@@ -737,8 +833,11 @@ async function lookupPlace(lat, lng, options = {}) {
   if (kakaoKey) {
     try {
       const fromKakao = await fetchKakao(fetchImpl, lat, lng, kakaoKey);
-      if (fromKakao && RESIDENTIAL_NAME.test(fromKakao)) return finish(fromKakao, true);
-      if (fromKakao) candidates.push({ name: fromKakao, kind: 'poi', lat, lng });
+      rememberRoad(fromKakao);
+      if (fromKakao && RESIDENTIAL_NAME.test(fromKakao) && !buildingName && !choosePlaceLabel(candidates, point)) {
+        residentialKnown = true;
+        buildingName = fromKakao;
+      }
     } catch {
       /* Nominatim으로 넘어간다 */
     }
@@ -747,6 +846,7 @@ async function lookupPlace(lat, lng, options = {}) {
     if (options.pace !== false) await paceNominatim();
     const fromNominatim = await fetchNominatim(fetchImpl, lat, lng);
     candidates.push(...fromNominatim.candidates);
+    rememberRoad(fromNominatim.road || fromNominatim.label);
     if (candidates.some((item) => isResidentialPlace(item) && geometryRings(item.geometry).some((ring) => ring.length >= 3))) {
       residentialKnown = true;
     }
@@ -755,20 +855,27 @@ async function lookupPlace(lat, lng, options = {}) {
       candidates.push(...area);
       if (area.some((item) => isResidentialPlace(item))) residentialKnown = true;
     } catch {
-      /* 동네 표기를 유지한다 */
+      /* 도로·장소가 있으면 구·동으로 내려가지 않는다 */
     }
     const picked = choosePlaceLabel(candidates, point);
     if (picked) return finish(picked);
+    if (road) return finish(road);
+    if (buildingName) return finish(buildingName, true);
     if (fromNominatim.label && isPrecisePlace(fromNominatim.label) && RESIDENTIAL_NAME.test(fromNominatim.label)) {
       return finish(fromNominatim.label, true);
     }
-    if (fromNominatim.label) return finish(fromNominatim.label);
+    if (fromNominatim.label && isPrecisePlace(fromNominatim.label)) return finish(fromNominatim.label);
+    if (fromNominatim.label && !road) return finish(fromNominatim.label);
   } catch {
     const picked = choosePlaceLabel(candidates, point);
     if (picked) return finish(picked);
+    if (road) return finish(road);
+    if (buildingName) return finish(buildingName, true);
   }
   const leftover = choosePlaceLabel(candidates, point);
   if (leftover) return finish(leftover);
+  if (road) return finish(road);
+  if (buildingName) return finish(buildingName, true);
   return coarse ? finish(coarse) : finish('', false);
 }
 

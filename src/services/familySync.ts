@@ -483,7 +483,7 @@ async function revealPlace(place: SharedPlace): Promise<SharedPlace | null> {
   const seal = (place as SharedPlace & { seal?: unknown }).seal;
   if (!seal) {
     if (typeof place.lat !== 'number' || typeof place.lng !== 'number') return null;
-    return { ...place, legacyClient: true };
+    return { ...place, legacyClient: false };
   }
   const record = typeof localStorage === 'undefined' ? null : familyKeyRecord(localStorage, place.code);
   if (!record) return null;

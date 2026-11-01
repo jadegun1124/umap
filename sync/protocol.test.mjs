@@ -230,6 +230,37 @@ test('health and dev server move a place between two clients', async () => {
   }
 });
 
+test('a previous-version plaintext place is accepted and shown to the family', async () => {
+  const store = createMemoryStore();
+  const code = '39001';
+  const writeKey = randomKey();
+  const readKey = randomKey();
+  const token = await syncTokenFor(writeKey, readKey);
+  const at = Date.now();
+  const previous = {
+    code,
+    name: '쿤',
+    lat: 37.6314,
+    lng: 127.0651,
+    accuracyM: 18,
+    at,
+    sharing: true,
+    audience: 'family',
+    batteryPct: 93,
+    charging: false,
+  };
+  const published = await call(store, 'PUT', `/v1/rooms/${code}/place`, { token, body: previous });
+  assert.equal(published.status, 200);
+  const seen = await call(store, 'GET', `/v1/rooms/${code}`, { token, readKey });
+  assert.equal(seen.status, 200);
+  const place = seen.body.places.find((item) => item.name === '쿤');
+  assert.ok(place);
+  assert.equal(place.lat, previous.lat);
+  assert.equal(place.lng, previous.lng);
+  assert.equal(place.at, at);
+  assert.equal(place.seal, undefined);
+});
+
 test('same coordinates with a newer timestamp refresh the day, and an older replay does not', () => {
   const room = emptyRoom();
   const yesterday = Date.UTC(2026, 9, 26, 10, 0);
