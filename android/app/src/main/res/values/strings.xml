@@ -2,7 +2,7 @@
 <resources>
     <string name="app_name">Kinnex</string>
     <string name="title_activity_main">Kinnex</string>
-    <string name="version_name">1.41.0</string>
+    <string name="version_name">1.42.0</string>
     <string name="package_name">kr.co.umap.tracker</string>
     <string name="custom_url_scheme">kr.co.umap.tracker</string>
 </resources>
