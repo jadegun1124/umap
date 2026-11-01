@@ -1603,6 +1603,15 @@ export function FamilyProvider({ children }: { children: React.ReactNode }) {
   const [state, dispatch] = useReducer(reducer, undefined, load);
   const [deviceReady, setDeviceReady] = useState(() => !pendingDeviceSeal);
   const restoreOnce = useRef(false);
+  const [historyPulse, setHistoryPulse] = useState(0);
+  useEffect(() => {
+    const onKeys = () => {
+      restoreOnce.current = false;
+      setHistoryPulse((value) => value + 1);
+    };
+    window.addEventListener('umap-family-keys', onKeys);
+    return () => window.removeEventListener('umap-family-keys', onKeys);
+  }, []);
 
   useEffect(() => {
     if (state.profile || restoringDeviceSeal || !sealOpened) return;
@@ -1735,7 +1744,7 @@ export function FamilyProvider({ children }: { children: React.ReactNode }) {
     return () => {
       cancel = true;
     };
-  }, [deviceReady, state.journeys, state.visits]);
+  }, [deviceReady, historyPulse, state.journeys, state.visits]);
 
   const api: FamilyApi = {
     state,

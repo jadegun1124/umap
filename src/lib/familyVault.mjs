@@ -9,9 +9,14 @@ import {
   mintDeviceKey,
   openJson,
   sealJson,
+  unwrapFamilyKey,
   unwrapVault,
+  wrapFamilyKey,
   wrapVault,
 } from './familySeal.mjs';
+
+export const HISTORY_SHARE_KID = 'umap-history-key1';
+const HISTORY_SHARE_STORAGE = 'umap_history_share_v1';
 
 export const DEVICE_STORAGE = 'umap_seal_device_v1';
 export const FAMILY_KEY_STORAGE = 'umap_family_keys_v1';
@@ -111,7 +116,8 @@ export async function prepareBackup(snapshot, storage, recoveryCode) {
     })
     : null;
   if (!vault || !sealedHistory) return { ...snapshot, keepHistory: true };
-  return {
+  const historyShares = await historySharesFor(content, snapshot.historyPeers);
+  const packed = {
     ...snapshot,
     vault,
     sealedHistory,
@@ -121,6 +127,41 @@ export async function prepareBackup(snapshot, storage, recoveryCode) {
     visits: [],
     home: null,
   };
+  delete packed.historyPeers;
+  if (historyShares && Object.keys(historyShares).length) packed.historyShares = historyShares;
+  return packed;
+}
+
+export async function historySharesFor(contentKey, peers) {
+  const raw = contentKey instanceof Uint8Array ? contentKey : base64UrlToBytes(contentKey);
+  const shares = {};
+  if (!raw || raw.length !== 32) return shares;
+  for (const peer of Array.isArray(peers) ? peers : []) {
+    if (!peer || typeof peer.memberId !== 'string' || typeof peer.publicKey !== 'string') continue;
+    const wrap = await wrapFamilyKey(peer.publicKey, raw, HISTORY_SHARE_KID);
+    if (wrap) shares[peer.memberId] = wrap;
+  }
+  return shares;
+}
+
+export async function rewrapHistoryShares({ history, pubs, holderId, holderPrivate }) {
+  const next = {};
+  const book = history && typeof history === 'object' ? history : {};
+  for (const [ownerId, shares] of Object.entries(book)) {
+    next[ownerId] = shares && typeof shares === 'object' ? { ...shares } : {};
+  }
+  for (const shares of Object.values(next)) {
+    const mine = shares[holderId];
+    if (!mine) continue;
+    const key = await unwrapFamilyKey(holderPrivate, mine, HISTORY_SHARE_KID);
+    if (!key) continue;
+    for (const [id, pub] of Object.entries(pubs || {})) {
+      if (typeof pub !== 'string') continue;
+      const wrap = await wrapFamilyKey(pub, key, HISTORY_SHARE_KID);
+      if (wrap) shares[id] = wrap;
+    }
+  }
+  return next;
 }
 
 export async function openAccountSecrets(account, storage, typedCode = '') {
@@ -147,7 +188,15 @@ export async function openAccountSecrets(account, storage, typedCode = '') {
   let home = account.home;
   let historyLocked = false;
   if (account.sealedHistory) {
-    const opened = await openJson(contentKeyBytes(readDevice(storage)), account.sealedHistory);
+    let opened = await openJson(contentKeyBytes(readDevice(storage)), account.sealedHistory);
+    if (!opened) {
+      const device = readDevice(storage);
+      const saved = readJson(storage, HISTORY_SHARE_STORAGE);
+      const book = account.historyShares && typeof account.historyShares === 'object' ? account.historyShares : null;
+      const share = (book && book[account.memberId]) || (saved && saved.memberId === account.memberId ? saved.wrap : null);
+      const key = device && share ? await unwrapFamilyKey(device.privateKey, share, HISTORY_SHARE_KID) : null;
+      if (key) opened = await openJson(key, account.sealedHistory);
+    }
     if (opened && typeof opened === 'object') {
       journeys = Array.isArray(opened.journeys) ? opened.journeys : [];
       visits = Array.isArray(opened.visits) ? opened.visits : [];

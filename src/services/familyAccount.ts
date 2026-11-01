@@ -45,6 +45,9 @@ export interface AccountSnapshot {
   naverLinked?: boolean;
   nameChosen?: boolean;
   created?: boolean;
+  restored?: boolean;
+  roster?: Array<{ id: string; name: string; role?: string; publisherId?: string; inviteCode?: string }>;
+  historyShares?: Record<string, { epk: string; iv: string; ct: string }>;
   vault?: unknown;
   sealedHistory?: unknown;
   historyLocked?: boolean;

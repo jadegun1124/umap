@@ -122,7 +122,7 @@ function Login({ onSubmit }: { onSubmit: (profile: Profile) => void }) {
   };
 
   const finishProvider = (
-    result: { ok: boolean; snapshot?: AccountSnapshot; message?: string; detail?: string },
+    result: { ok: boolean; snapshot?: AccountSnapshot; message?: string; detail?: string; restored?: boolean },
     fallback: string,
   ) => {
     setBusy(false);
@@ -132,7 +132,7 @@ function Login({ onSubmit }: { onSubmit: (profile: Profile) => void }) {
       return;
     }
     setDetail(null);
-    finishAccount(result.snapshot);
+    finishAccount({ ...result.snapshot, restored: result.restored === true });
   };
 
   if (step === 'name') {

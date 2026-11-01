@@ -758,6 +758,7 @@ function viewKeys(room) {
     pubs: seals.pubs && typeof seals.pubs === 'object' ? seals.pubs : {},
     wraps: seals.wraps && typeof seals.wraps === 'object' ? seals.wraps : {},
     revoked: Array.isArray(seals.revoked) ? seals.revoked.filter((id) => typeof id === 'string') : [],
+    history: seals.history && typeof seals.history === 'object' ? seals.history : {},
   };
 }
 
@@ -848,6 +849,7 @@ function roomSeals(room) {
     pubs: seals.pubs && typeof seals.pubs === 'object' ? { ...seals.pubs } : {},
     wraps: seals.wraps && typeof seals.wraps === 'object' ? { ...seals.wraps } : {},
     revoked: Array.isArray(seals.revoked) ? seals.revoked.filter((id) => typeof id === 'string') : [],
+    history: seals.history && typeof seals.history === 'object' ? seals.history : {},
   };
 }
 
@@ -876,6 +878,14 @@ export async function commitKeys(room, input, profileKey) {
       seals.kid = kid;
       seals.wraps = input.rotate === true ? incoming : { ...seals.wraps, ...incoming };
     }
+  }
+  if (input.history && typeof input.history === 'object' && !Array.isArray(input.history)) {
+    const history = seals.history && typeof seals.history === 'object' ? { ...seals.history } : {};
+    for (const [ownerId, shares] of Object.entries(input.history)) {
+      if (!MEMBER_ID.test(ownerId)) continue;
+      history[ownerId] = { ...(history[ownerId] || {}), ...cleanWraps(shares) };
+    }
+    seals.history = history;
   }
   if (typeof input.revoke === 'string' && MEMBER_ID.test(input.revoke) && input.revoke !== input.memberId) {
     if (!seals.revoked.includes(input.revoke)) seals.revoked.push(input.revoke);
