@@ -1668,11 +1668,11 @@ export function FamilyProvider({ children }: { children: React.ReactNode }) {
     const beforeJ = Object.values(state.journeys || {}).reduce((sum, list) => sum + (Array.isArray(list) ? list.length : 0), 0);
     const beforeV = Object.values(state.visits || {}).reduce((sum, list) => sum + (Array.isArray(list) ? list.length : 0), 0);
     const accountKey = readStoredAccountKey(storage);
+    restoreOnce.current = true;
     if (!accountKey) {
       noteDiag({ kind: 'restore', result: 'nokey', beforej: beforeJ, beforev: beforeV, afterj: beforeJ, afterv: beforeV });
       return;
     }
-    restoreOnce.current = true;
     let cancel = false;
     void (async () => {
       const loaded = await loadFamilyAccount(accountKey).catch(() => ({ ok: false as const }));

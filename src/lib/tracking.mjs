@@ -1655,7 +1655,7 @@ export function buildDayRecord(points, now) {
   });
   const indoor = recordsIndoorStay(sorted, when);
   if (indoor) {
-    const kept = stops.filter((stop) => (stop.leftAt ?? stop.arrivedAt) < indoor.startAt);
+    const kept = stops.filter((stop) => stop.leftAt != null && stop.leftAt < indoor.startAt);
     kept.push({
       lat: indoor.lat,
       lng: indoor.lng,
