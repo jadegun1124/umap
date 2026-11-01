@@ -144,6 +144,40 @@ export async function historySharesFor(contentKey, peers) {
   return shares;
 }
 
+export async function syncHistoryDirectory({ history, pubs, memberId, privateKey, contentKey }) {
+  const book = {};
+  const source = history && typeof history === 'object' ? history : {};
+  for (const [ownerId, shares] of Object.entries(source)) {
+    book[ownerId] = shares && typeof shares === 'object' ? { ...shares } : {};
+  }
+  const raw = contentKey instanceof Uint8Array ? contentKey : base64UrlToBytes(contentKey);
+  // A device that still holds its content key fills only missing recipients.
+  // An existing share may wrap the previous phone's key, so it is not replaced here.
+  if (raw && raw.length === 32) {
+    const mine = { ...(book[memberId] || {}) };
+    let added = false;
+    for (const [id, pub] of Object.entries(pubs || {})) {
+      if (typeof pub !== 'string' || mine[id]) continue;
+      const wrap = await wrapFamilyKey(pub, raw, HISTORY_SHARE_KID);
+      if (wrap) {
+        mine[id] = wrap;
+        added = true;
+      }
+    }
+    if (added) book[memberId] = mine;
+  }
+  // Any phone that can open a family member's history key rewraps it to the
+  // public keys now in the room, including a phone that was just reinstalled.
+  const refreshed = await rewrapHistoryShares({
+    history: book,
+    pubs,
+    holderId: memberId,
+    holderPrivate: privateKey,
+  });
+  const selfShare = refreshed[memberId] && refreshed[memberId][memberId];
+  return { history: refreshed, selfShare: selfShare || null };
+}
+
 export async function rewrapHistoryShares({ history, pubs, holderId, holderPrivate }) {
   const next = {};
   const book = history && typeof history === 'object' ? history : {};
