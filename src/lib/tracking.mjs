@@ -1955,6 +1955,7 @@ export function journeyPathDistance(points) {
     const pace = stepPace(prev, point);
     if (!pace || pace.speed > 45 || pace.dt < 800) continue;
     if (pace.speed >= 0.7 && pace.speed <= 3 && pace.moved >= 0.2) distance += pace.moved;
+    else if (pace.speed > 3 && pace.moved >= TRAIL_WALK_VERTEX_M) distance += pace.moved;
   }
   return distance;
 }
