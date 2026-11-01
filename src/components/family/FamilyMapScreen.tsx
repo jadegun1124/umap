@@ -20,6 +20,7 @@ import { openAccountSecrets } from '../../lib/familyVault.mjs';
 import { isMemberId } from '../../lib/sharedIdentity.mjs';
 import { Capacitor } from '@capacitor/core';
 import { abandonFamilySync, currentSyncPhase, deleteFamilyRoomRemote, familySyncConfigured, familySyncUrl, fetchMyDirectThreads, registerRoomPush, revokeFamilyPlace, rotateRemovedMember, splitSyncToken, startAdminRemoteSync, startSyncMonitor, subscribeSyncPhase, syncTokenFor, type SyncPhase } from '../../services/familySync';
+import { keepBanner } from '../../lib/keepBanner.mjs';
 import { OLD_APP_PLACE_LABEL, syncBannerText } from '../../lib/syncBanner.mjs';
 import { consumePendingChat, listenChatOpen, overlayPermissionGranted, umapLocation, umapLocationNative } from '../../services/umapLocation';
 import { sounds } from '../../utils/audio';
@@ -99,7 +100,7 @@ export function FamilyMapScreen() {
   const [alwaysSetup, setAlwaysSetup] = useState(false);
   const [guideBusy, setGuideBusy] = useState(false);
   const [guideHintHidden, setGuideHintHidden] = useState(() => readSessionFlag(ALWAYS_GUIDE_DISMISSED_KEY));
-  const [keepHint, setKeepHint] = useState('');
+  const [keepHint, setKeepHint] = useState<{ text: string; action: 'start' | 'always' | 'battery' } | null>(null);
   const [profileOpen, setProfileOpen] = useState(false);
   const [recordId, setRecordId] = useState<string | null>(null);
   const [managedSettings, setManagedSettings] = useState(false);
@@ -119,22 +120,22 @@ export function FamilyMapScreen() {
   }, []);
   useEffect(() => {
     if (!umapLocationNative() || state.stage !== 'map') {
-      setKeepHint('');
+      setKeepHint(null);
       return;
     }
     let cancel = false;
     const refresh = () => {
       void umapLocation.status().then((status) => {
         if (cancel) return;
-        if (!status.running && !status.userStopped) {
-          setKeepHint('위치 유지가 꺼져 있어 가족에게 지금 위치가 가지 않습니다. 앱을 다시 열어 위치 유지를 켜 주세요.');
-          return;
-        }
-        if (status.running && status.batteryUnrestricted === false) {
-          setKeepHint('배터리를 최적화하면 멈춰 있는 동안 위치가 끊깁니다. 눌러서 제한 없음을 켜 주세요.');
-          return;
-        }
-        setKeepHint('');
+        setKeepHint(keepBanner({
+          native: true,
+          onMap: true,
+          serviceRunning: status.running,
+          userStopped: status.userStopped,
+          keepAlive: state.backgroundKeepAlive,
+          locationMode: state.permissions.locationMode,
+          batteryUnrestricted: status.batteryUnrestricted,
+        }));
       }).catch(() => undefined);
     };
     refresh();
@@ -148,7 +149,7 @@ export function FamilyMapScreen() {
       window.clearInterval(timer);
       document.removeEventListener('visibilitychange', onVisible);
     };
-  }, [state.stage]);
+  }, [state.backgroundKeepAlive, state.permissions.locationMode, state.stage]);
   useEffect(() => {
     familyRef.current.closeJourneys(now);
   }, [now]);
@@ -908,19 +909,17 @@ export function FamilyMapScreen() {
           )}
 
           {keepHint && !placingHome && (
-            keepHint.includes('배터리') ? (
-              <button
-                type="button"
-                onClick={() => { void umapLocation.openBattery(); }}
-                className="absolute inset-x-4 top-16 z-30 rounded-2xl bg-white px-4 py-3 text-left text-sm font-semibold leading-6 text-slate-800 shadow"
-              >
-                {keepHint}
-              </button>
-            ) : (
-              <div className="absolute inset-x-4 top-16 z-30 rounded-2xl bg-white px-4 py-3 text-left text-sm font-semibold leading-6 text-slate-800 shadow">
-                {keepHint}
-              </div>
-            )
+            <button
+              type="button"
+              onClick={() => {
+                if (keepHint.action === 'battery') void umapLocation.openBattery();
+                else if (keepHint.action === 'always') openLocationSettings();
+                else window.dispatchEvent(new Event('umap-retry-keep'));
+              }}
+              className="absolute inset-x-4 top-16 z-30 rounded-2xl bg-white px-4 py-3 text-left text-sm font-semibold leading-6 text-slate-800 shadow"
+            >
+              {keepHint.text}
+            </button>
           )}
           {state.permissions.locationMode !== 'always' && !guideHintHidden && !placingHome && (
             <AlwaysAllowMapHint

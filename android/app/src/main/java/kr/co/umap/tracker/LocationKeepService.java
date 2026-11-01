@@ -135,9 +135,14 @@ public class LocationKeepService {
     }
 
     public static boolean isRunning() {
-        Context context = appContext;
-        if (context == null) return false;
-        return prefs(context).getBoolean("registered", false);
+        return isRunning(appContext);
+    }
+
+    /** Reads the registration even before this process has attached the service. */
+    public static boolean isRunning(Context context) {
+        Context current = context != null ? context.getApplicationContext() : appContext;
+        if (current == null) return false;
+        return prefs(current).getBoolean("registered", false);
     }
 
     public static String lastError() {

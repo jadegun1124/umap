@@ -68,9 +68,10 @@ export function useFamilyTracking(onFirstFix: (lat: number, lng: number) => void
       document.removeEventListener('resume', onResume);
     };
   }, []);
-  const selfPublishKey = nativeKeeps
-    ? 'native'
-    : `${self?.lat ?? ''}:${self?.lng ?? ''}:${self?.updatedAt ?? ''}:${self?.battery ?? ''}:${self?.charging ?? ''}`;
+  // Foreground fixes are published from this watch even when background keep is on.
+  // Keep's native service covers the time the screen is off. If that service is
+  // not registered, freezing the key would stop family updates while the pin still moves.
+  const selfPublishKey = `${self?.lat ?? ''}:${self?.lng ?? ''}:${self?.updatedAt ?? ''}:${self?.battery ?? ''}:${self?.charging ?? ''}`;
 
   useEffect(() => {
     const tick = () => familyRef.current.rollDay(Date.now());
@@ -399,11 +400,13 @@ export function useFamilyTracking(onFirstFix: (lat: number, lng: number) => void
     document.addEventListener('visibilitychange', onVisible);
     document.addEventListener('resume', onVisible);
     window.addEventListener('umap-family-keys', onVisible);
+    window.addEventListener('umap-retry-keep', onVisible);
     return () => {
       window.clearInterval(timer);
       document.removeEventListener('visibilitychange', onVisible);
       document.removeEventListener('resume', onVisible);
       window.removeEventListener('umap-family-keys', onVisible);
+      window.removeEventListener('umap-retry-keep', onVisible);
     };
   }, [keepKey]);
 
@@ -587,6 +590,7 @@ export function useFamilyTracking(onFirstFix: (lat: number, lng: number) => void
   }, [state.journeys]);
 
   const placeKeys = useRef<Record<string, string>>({});
+  const placeJobs = useRef<Record<string, string>>({});
   const memberPlaceKey = state.members
     .filter((member) => hasLocation(member))
     .map((member) => `${member.id}:${member.lat == null || member.lng == null ? '' : placeGridKey(member.lat, member.lng)}:${member.place ?? ''}`)
@@ -595,63 +599,37 @@ export function useFamilyTracking(onFirstFix: (lat: number, lng: number) => void
     if (state.stage !== 'map') return;
     const current = familyRef.current.state;
     const home = current.home;
-    const queue = current.members.filter((member) => {
-      if (!hasLocation(member) || member.role === 'guardian' || member.lat == null || member.lng == null) return false;
-      const key = placeGridKey(member.lat, member.lng);
-      return !(placeKeys.current[member.id] === key && cleanPlace(member.place));
-    });
-    if (!queue.length) return;
-    let cancel = false;
-    let timer = 0;
-    let cursor = 0;
-    const step = () => {
-      if (cancel) return;
-      const pending = queue[cursor++];
-      if (!pending || pending.lat == null || pending.lng == null) {
-        const stillOpen = queue.some((member) => {
-          if (member.lat == null || member.lng == null) return false;
-          const bucket = placeGridKey(member.lat, member.lng);
-          return !(placeKeys.current[member.id] === bucket && cleanPlace(member.place));
-        });
-        if (stillOpen) timer = window.setTimeout(() => {
-          cursor = 0;
-          step();
-        }, 60_000);
-        return;
-      }
-      const here = { lat: pending.lat, lng: pending.lng };
+    for (const member of current.members) {
+      if (!hasLocation(member) || member.role === 'guardian' || member.lat == null || member.lng == null) continue;
+      const here = { lat: member.lat, lng: member.lng };
       const key = placeGridKey(here.lat, here.lng);
-      const id = pending.id;
-      if (home && id === 'self' && haversineMeters(here, home) <= home.radiusM) {
-        placeKeys.current[id] = key;
-        const label = home.label || '우리 집';
-        if (pending.place !== label) familyRef.current.setMemberPlace(id, label);
-        else step();
-        return;
-      }
+      const id = member.id;
+      if (placeKeys.current[id] === key && cleanPlace(member.place)) continue;
+      const job = `${id}:${key}`;
+      if (placeJobs.current[id] === job) continue;
+      placeJobs.current[id] = job;
       const apply = (label: string | null, settled: boolean) => {
-        if (cancel) return;
+        if (placeJobs.current[id] !== job) return;
         const short = label ? presentPlace(label) : '';
         if (!short) {
-          step();
+          delete placeJobs.current[id];
           return;
         }
         if (settled) placeKeys.current[id] = key;
-        if (cleanPlace(pending.place) !== short) familyRef.current.setMemberPlace(id, short);
-        else step();
+        const latest = familyRef.current.state.members.find((item) => item.id === id);
+        if (latest && cleanPlace(latest.place) !== short) familyRef.current.setMemberPlace(id, short);
       };
+      if (home && id === 'self' && haversineMeters(here, home) <= home.radiusM) {
+        apply(home.label || '우리 집', true);
+        continue;
+      }
       const cached = cachedAddress(here.lat, here.lng);
       if (cached) {
         apply(cached, true);
-        return;
+        continue;
       }
       void reverseGeocodeCached(here.lat, here.lng).then((found) => apply(found.label, found.settled));
-    };
-    step();
-    return () => {
-      cancel = true;
-      window.clearTimeout(timer);
-    };
+    }
   }, [memberPlaceKey, state.home, state.stage]);
 
   return { waiting, familyShareNote, native: umapLocationNative(), openSettings: openAlwaysLocation };

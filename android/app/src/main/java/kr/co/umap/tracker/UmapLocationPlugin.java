@@ -500,7 +500,7 @@ public class UmapLocationPlugin extends Plugin {
     @PluginMethod
     public void status(PluginCall call) {
         JSObject result = new JSObject();
-        result.put("running", LocationKeepService.isRunning());
+        result.put("running", LocationKeepService.isRunning(getContext()));
         result.put("userStopped", LocationKeepService.userStopped(getContext()));
         result.put("native", true);
         PowerManager power = (PowerManager) getContext().getSystemService(Context.POWER_SERVICE);
