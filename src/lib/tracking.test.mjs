@@ -27,6 +27,7 @@ import {
   trailDecision,
   formatFixAge,
   isRideStep,
+  isVehicleStep,
   fixShowsRide,
   recentRide,
   liveMotionLabel,
@@ -147,13 +148,14 @@ test('live pin holds courtyard jitter and follows a relocation the walk filter u
   assert.equal(visibleTrail([hagye, courtyard]).length, 1);
 
   const blockLeap = { ...offset(hagye, 100, 0, t + 12_000), accuracyM: 17, speedMps: 0, staying: true };
-  assert.equal(trailDecision(hagye, blockLeap), 'snap');
+  assert.equal(isVehicleStep(hagye, blockLeap), true);
+  assert.equal(trailDecision(hagye, blockLeap), 'keep');
   const leapt = settleTrailPoint([hagye], blockLeap, blockLeap.at);
-  assert.equal(leapt.decision, 'snap');
+  assert.equal(leapt.decision, 'keep');
   assert.equal(leapt.lat, blockLeap.lat);
   assert.equal(leapt.lng, blockLeap.lng);
   assert.equal(displayCoordinate([hagye], blockLeap).lat, blockLeap.lat);
-  assert.equal(visibleTrail([hagye, blockLeap]).length, 1);
+  assert.ok(visibleTrail([hagye, blockLeap]).length >= 2);
 
   const shortHop = { ...offset(hagye, 1000, 80, t + 15_000), accuracyM: 17, speedMps: 0, staying: true };
   assert.equal(trailDecision(hagye, shortHop), 'drop');
@@ -301,7 +303,8 @@ test('a vehicle pace keeps 2.5s vertices solid and does not say 머무름', () =
     staying: true,
   };
   const withHole = settleTrailPoint(recorded, hole, hole.at).points;
-  assert.equal(trailDrawParts(withHole).some((part) => part.dashed), true);
+  assert.equal(isVehicleStep(drive[drive.length - 1], hole), true);
+  assert.equal(trailDrawParts(withHole).some((part) => part.dashed), false);
 
   const parked = { ...offset(origin, 6, 4, t + 8_000), accuracyM: 12, speedMps: 0, staying: true };
   assert.equal(trailDecision(origin, parked), 'snap');
@@ -337,6 +340,14 @@ test('a walk keeps 지금 through sensor gaps and a peer trail uses the same dwe
     points: walk,
     now: end + 8 * 60_000 + 1_000,
     pin: { ...stillWalking, accuracyM: 120, speedMps: 0, staying: true },
+  }), '머무름');
+  const drivingPin = offset(walk[walk.length - 1], 0, 4_000, end + 8 * 60_000);
+  assert.equal(liveMotionLabel({
+    located: true,
+    moving: false,
+    points: walk,
+    now: end + 8 * 60_000 + 1_000,
+    pin: { ...drivingPin, accuracyM: 12, speedMps: 0, staying: true },
   }), '지금');
   const walkedOn = offset(walk[walk.length - 1], 0, 40, end + 50_000);
   assert.equal(liveMotionLabel({
@@ -607,7 +618,7 @@ test('stay multipath does not zigzag and a fix outside the stay bubble still mov
   assert.equal(trailDecision(origin, bogus), 'snap');
   assert.equal(liveCoordinate(origin, bogus).lat, origin.lat);
   const left = { ...offset(origin, 70, 10, t + 8_000), accuracyM: 16, speedMps: 0, staying: true };
-  assert.equal(trailDecision(origin, left), 'snap');
+  assert.equal(trailDecision(origin, left), 'keep');
   const pin = liveCoordinate(origin, left);
   assert.equal(pin.lat, left.lat);
   assert.equal(pin.lng, left.lng);

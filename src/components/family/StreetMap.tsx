@@ -46,14 +46,12 @@ export const StreetMap = forwardRef<StreetMapHandle, {
   trails: TrackPoint[][];
   trailColor: string;
   selectedId?: string;
-  /** Family overview never paints a dashed hole. Records may still show one. */
-  solidOnly?: boolean;
   onSelect: (id: string) => void;
   onClear?: () => void;
   onMove?: (center: { lat: number; lng: number }) => void;
   /** Pinch, drag, or the zoom buttons. Programmatic fit and playback pan do not call this. */
   onUserView?: () => void;
-}>(function StreetMap({ center, zoom, members, home, trails, trailColor, selectedId, solidOnly = false, onSelect, onClear, onMove, onUserView }, ref) {
+}>(function StreetMap({ center, zoom, members, home, trails, trailColor, selectedId, onSelect, onClear, onMove, onUserView }, ref) {
   const nodeRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<L.Map | null>(null);
   const layersRef = useRef<L.LayerGroup | null>(null);
@@ -306,15 +304,17 @@ export const StreetMap = forwardRef<StreetMapHandle, {
     let pointCount = 0;
     for (const trail of trails) {
       if (!trail || trail.length < 2) continue;
+      const parts = trailDrawParts(trail).filter((part) => part.points.length >= 2);
       const trailEnd = trail[trail.length - 1];
-      const parts = trailDrawParts(trail).flatMap((part) => {
-        if (part.points.length < 2) return [];
-        if (!(solidOnly && part.dashed)) return [part];
-        const last = part.points[part.points.length - 1];
-        const reachesPin = last === trailEnd || (last.lat === trailEnd?.lat && last.lng === trailEnd?.lng && last.at === trailEnd?.at);
-        if (!reachesPin || isImpossibleJump(part.points[0], last)) return [];
-        return [{ ...part, dashed: false }];
-      });
+      const paintedEnd = parts[parts.length - 1]?.points.at(-1);
+      if (trailEnd && paintedEnd && Number.isFinite(trailEnd.lat) && Number.isFinite(trailEnd.lng)) {
+        const sameTip = Math.abs(paintedEnd.lat - trailEnd.lat) < 1e-5 && Math.abs(paintedEnd.lng - trailEnd.lng) < 1e-5;
+        if (!sameTip && !isImpossibleJump(paintedEnd, trailEnd)) {
+          const previous = parts[parts.length - 1];
+          if (previous && !previous.dashed) previous.points = previous.points.concat([trailEnd]);
+          else parts.push({ points: [paintedEnd, trailEnd], dashed: false });
+        }
+      }
       if (parts.length === 0) continue;
       for (const part of parts) {
         pointCount += part.points.length;
@@ -357,8 +357,8 @@ export const StreetMap = forwardRef<StreetMapHandle, {
       }
     }
     if (nodeRef.current) nodeRef.current.dataset.trail = drawn.join(';');
-    noteDiag({ kind: 'render', points: pointCount, segments: drawn.length, solid: solidOnly });
-  }, [ready, solidOnly, trails, trailColor]);
+    noteDiag({ kind: 'render', points: pointCount, segments: drawn.length });
+  }, [ready, trails, trailColor]);
 
   const missingKey = !key;
 

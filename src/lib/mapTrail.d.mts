@@ -22,10 +22,13 @@ export function memberLiveLines(
     updatedAt?: number;
     accuracyM?: number;
     moving?: boolean | null;
+    speedMps?: number | null;
+    staying?: boolean;
   } | null | undefined,
   tracks: Record<string, { lat: number; lng: number; at: number; speedMps?: number | null; accuracyM?: number; staying?: boolean; stayEnd?: boolean }[] | undefined> | null | undefined,
   now: number,
   liveDay?: string,
+  withPin?: boolean,
 ): {
   lines: { lat: number; lng: number; at: number }[][];
   reason: string;
@@ -34,10 +37,11 @@ export function memberLiveLines(
 };
 
 export function mainOverviewTrails(input: {
-  points?: { lat: number; lng: number; at: number; speedMps?: number | null; accuracyM?: number; stayEnd?: boolean }[] | null;
+  points?: { lat: number; lng: number; at: number; speedMps?: number | null; accuracyM?: number; staying?: boolean; stayEnd?: boolean }[] | null;
   motionPoints?: { lat: number; lng: number; at: number; speedMps?: number | null; accuracyM?: number; stayEnd?: boolean }[] | null;
-  pin?: { lat: number; lng: number; at?: number; speedMps?: number | null; accuracyM?: number } | null;
+  pin?: { lat: number; lng: number; at?: number; speedMps?: number | null; accuracyM?: number; staying?: boolean } | null;
   moving?: boolean | null;
   located?: boolean;
-  now: number;
+  now?: number;
+  withPin?: boolean;
 }): { lat: number; lng: number; at: number }[][];

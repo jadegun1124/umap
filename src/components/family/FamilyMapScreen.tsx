@@ -13,7 +13,7 @@ import { noteDiag } from '../../lib/diagLog.mjs';
 import { shouldAutoFitRecord } from '../../lib/recordMapFit.mjs';
 import { shouldDeleteCreatedRoom } from '../../lib/familyRoom.mjs';
 import { motionAlertCopy, motionNotifyNames, nextMotionAlert } from '../../lib/motionAlert.mjs';
-import { collapseDuplicateJourneys, collapseIndoorStayDisplay, displayCoordinate, historyDayKeys, historyDayLabel, lastTravelAt, liveMotionLabel, liveTrailDrawable, liveTrailPoints, MOTION_STILL_HOLD_MS, previewOpenJourney, seoulDayEndMs, seoulDayKey } from '../../lib/tracking.mjs';
+import { collapseDuplicateJourneys, collapseIndoorStayDisplay, displayCoordinate, displayLivePoints, historyDayKeys, historyDayLabel, lastTravelAt, liveMotionLabel, liveTrailDrawable, liveTrailPoints, MOTION_STILL_HOLD_MS, previewOpenJourney, seoulDayEndMs, seoulDayKey } from '../../lib/tracking.mjs';
 import { ackFamilyAlert, isFamilyAlertAcked, publishFamilyAlert, readFamilyAlert, subscribeFamilyAlerts, type FamilyAlert } from '../../services/familyAlert';
 import { readSharedPlaces, subscribeSharedPlaces } from '../../services/familyShare';
 import { openAccountSecrets } from '../../lib/familyVault.mjs';
@@ -544,6 +544,7 @@ export function FamilyMapScreen() {
   );
   const dayNow = pathDay === liveDay ? now : seoulDayEndMs(pathDay);
   const liveLine = useMemo(() => liveTrailPoints(dayPoints, dayNow), [dayNow, dayPoints]);
+  const openMapLine = useMemo(() => displayLivePoints(dayPoints, dayNow), [dayNow, dayPoints]);
   const memberJourneys = selected ? state.journeys[selected.id] ?? [] : [];
   const dayJourneys = useMemo(
     () => collapseDuplicateJourneys(memberJourneys.filter((journey) => seoulDayKey(journey.endedAt) === pathDay))
@@ -578,8 +579,8 @@ export function FamilyMapScreen() {
     return () => window.clearTimeout(id);
   }, [viewingRecords, detailOpen]);
   const detailPoints = useMemo(
-    () => collapseIndoorStayDisplay(detailId === 'open' ? liveLine : detailJourney?.points ?? []),
-    [detailId, detailJourney, liveLine],
+    () => collapseIndoorStayDisplay(detailId === 'open' ? openMapLine : detailJourney?.points ?? []),
+    [detailId, detailJourney, openMapLine],
   );
   const liveDrawable = liveTrailDrawable(liveLine, dayNow);
   const showPath = familyMapShowsTrail({
@@ -595,7 +596,7 @@ export function FamilyMapScreen() {
       if (!showPath || !selected) return [];
       const saved = recordsDayTrails({ journeys: dayJourneys, livePoints: [], liveDrawable: false });
       if (pathDay !== liveDay) return saved;
-      return saved.concat(overviewLinesFor(selected, state.tracks, now, liveDay));
+      return saved.concat(overviewLinesFor(selected, state.tracks, now, liveDay, false));
     }
     const lines = [];
     for (const member of state.members) {
@@ -827,7 +828,6 @@ export function FamilyMapScreen() {
             members={detailOpen ? [] : visibleMembers}
             home={detailOpen ? null : (draftHome ?? (showZone ? state.home : null))}
             trails={mapTrails}
-            solidOnly={!viewingRecords}
             trailColor="#0084FF"
             selectedId={selected?.id}
             onSelect={(id) => {
@@ -895,7 +895,7 @@ export function FamilyMapScreen() {
                   const next = !value;
                   if (next && selected) {
                     const saved = recordsDayTrails({ journeys: dayJourneys, livePoints: [], liveDrawable: false });
-                    const live = pathDay === liveDay ? overviewLinesFor(selected, state.tracks, now, liveDay) : [];
+                    const live = pathDay === liveDay ? overviewLinesFor(selected, state.tracks, now, liveDay, false) : [];
                     const points = saved.concat(live).flat();
                     if (points.length >= 2) mapRef.current?.fit(points);
                   }
@@ -1998,8 +1998,9 @@ function overviewLinesFor(
   tracks: Session['tracks'],
   now: number,
   liveDay: string,
+  withPin = true,
 ) {
-  return memberLiveLines(member, tracks, now, liveDay).lines;
+  return memberLiveLines(member, tracks, now, liveDay, withPin).lines;
 }
 
 function personLive(member: Member, points: { lat: number; lng: number; at: number; speedMps?: number | null; stayEnd?: boolean }[] | undefined, now: number) {

@@ -405,7 +405,7 @@ export function recentRide(points, now) {
  * Courtyard drift under 0.75 m/s is not travel.
  */
 function travelStep(last, point) {
-  if (isRideStep(last, point)) return true;
+  if (isVehicleStep(last, point)) return true;
   const pace = stepPace(last, point);
   if (!pace || pace.speed > FIX_MAX_JUMP_MPS) return false;
   if (pace.moved < TRAIL_WALK_VERTEX_M || pace.dt < 800) return false;
@@ -437,7 +437,7 @@ export function lastTravelWasRide(points) {
   if (lastTravelIndex < 0) return false;
   const from = Math.max(1, lastTravelIndex - 12);
   for (let index = lastTravelIndex; index >= from; index -= 1) {
-    if (isRideStep(drawn[index - 1], drawn[index])) return true;
+    if (isVehicleStep(drawn[index - 1], drawn[index])) return true;
   }
   return false;
 }
@@ -465,9 +465,7 @@ export function liveMotionLabel({ located, moving, points, now, pin }) {
   // A pin that has left the last vertex is not 「머무름」, even when the chord is
   // slower than a fresh 2.5s step or the sensor flag is still false.
   if (pin && end && Number.isFinite(pin.at) && now >= pin.at && now - pin.at < 10 * 60 * 1000) {
-    const pace = stepPace(end, pin);
-    if (pace && pace.moved >= 80 && pace.speed >= 0.2 && pace.speed <= 45) return '지금';
-    if (now - pin.at < dwell && travelStep(end, pin)) return '지금';
+    if (isVehicleStep(end, pin) || travelStep(end, pin)) return '지금';
   }
   if (moving === true && movedAt == null) return '지금';
   if (moving === false) return '머무름';
@@ -521,6 +519,27 @@ export function isImpossibleJump(last, point) {
 }
 
 /**
+ * A step the line should keep and draw solid.
+ * isRideStep covers a reported speed at or above ~7 km/h, and a missing speed
+ * whose ground pace is already a ride.
+ * A phone that still says stay, or reports 0, while the ground track is about
+ * 30 km/h or faster is the same kind of step. 1.12 snapped that hop inside
+ * 120m and dashed anything over 48m and 20s, so a car became a gap.
+ * The 2.5s floor keeps a 2s courtyard spike on the walk filters.
+ */
+export function isVehicleStep(last, point) {
+  if (isRideStep(last, point)) return true;
+  const reported = pointSpeed(point);
+  if (reported != null && reported > 0 && reported < TRAIL_RIDE_MIN_MPS) return false;
+  const pace = stepPace(last, point);
+  // About 30 km/h. A reported walking speed stays on the walk filters.
+  // Under 8s or 60m is the courtyard leap, not a city sample.
+  if (!pace || pace.speed < 8 || pace.speed > 45) return false;
+  if (pace.dt < 8_000 || pace.moved < 60) return false;
+  return !isImpossibleJump(last, point);
+}
+
+/**
  * keep: the coordinate extends the walked line, or a relocation past courtyard multipath.
  * snap: inside the step gate, or a still-phone spike. Not a live-pin hold by itself.
  * drop: the sample is too poor to use, or it is an impossible jump.
@@ -541,9 +560,9 @@ export function trailDecision(last, point) {
   if (isImpossibleJump(last, point)) return 'drop';
   const implied = dt > 0 ? moved / (dt / 1000) : Infinity;
   if (implied > FIX_MAX_JUMP_MPS) return 'drop';
-  // Bike and vehicle fixes are kept on the GPS clock. A stay flag, or a missing
-  // speed, must not wait for a 50–120m chord. Walk jitter still snaps below.
-  if (isRideStep(last, point)) return 'keep';
+  // Bike and vehicle fixes are kept on the GPS clock. A stay flag, or a reported
+  // 0, must not snap a city-speed step. Walk jitter still snaps below.
+  if (isVehicleStep(last, point)) return 'keep';
   // ~30 km/h or faster is a vehicle sample. A reported speed keeps it even when
   // the stay flag is still set, so a drive does not collapse into a dashed hole.
   // Implied speed alone does not: a stay with a zero reading is courtyard jitter.
@@ -621,9 +640,11 @@ function continuesStillWalk(points, point) {
 function indoorStayDrift(points, point) {
   if (!point || point.stayEnd || !stationarySample(point)) return false;
   const anchor = drawnAnchor(points);
-  if (!anchor || isRideStep(anchor, point)) return false;
+  if (!anchor || isVehicleStep(anchor, point)) return false;
   const moved = haversineMeters(anchor, point);
   if (!Number.isFinite(moved) || moved > INDOOR_STAY_RADIUS_M) return false;
+  // Past the 1.12 relocation bubble this is a real step, not building jitter.
+  if (moved > TRAIL_RELOCATION_M) return false;
   if (continuesStillWalk(points, point)) return false;
   if (positiveMeters(point.accuracyM) >= 30 && moved >= TRAIL_WALK_VERTEX_M) return true;
   if (moved >= INDOOR_LEAP_M) return true;
@@ -700,7 +721,7 @@ function trailingSpur(points, point) {
   const prev = previousVertex(points);
   if (!tip || !prev || !point || tip === point) return false;
   if (spikeDeviation(prev, tip, point) > 0) return true;
-  if (isRideStep(prev, tip) || isRideStep(tip, point)) return false;
+  if (isVehicleStep(prev, tip) || isVehicleStep(tip, point)) return false;
   if (speedShowsMoving(point) && point.staying !== true) return false;
   if (!stillSample(point) && point.staying !== true) return false;
   const turn = Math.abs(signedTurnDeg(prev, tip, point));
@@ -1068,7 +1089,10 @@ export function trailDrawDashed(start, end, prior) {
 
 /**
  * Solid runs are sampled walks, simplified only under TRAIL_SIMPLIFY_M.
- * A dashed part is the raw chord across a sample hole. No road geometry is added.
+ * A walk hole (48m and 20s) is the raw dashed chord, the same split as 1.12.
+ * A vehicle step stays inside the solid run, so a car is not a dashed gap and
+ * Douglas–Peucker does not replace a sampled corner with a longer chord.
+ * An impossible jump is not drawn. No road geometry is added.
  */
 export function trailDrawParts(points) {
   const sampled = sampledTrail(points);
@@ -1085,7 +1109,7 @@ export function trailDrawParts(points) {
     if (isImpossibleJump(prev, next)) {
       flushRun();
       run = [next];
-    } else if (trailDrawDashed(prev, next, sampled[index - 2])) {
+    } else if (!isVehicleStep(prev, next) && trailSegmentDashed(prev, next)) {
       flushRun();
       parts.push({ points: [prev, next], dashed: true });
       run = [next];
@@ -2045,9 +2069,28 @@ export function storedTrackAfterArchive(points, now) {
   };
 }
 
-/** In-progress line for the family map. Finished stays are not on this overlay. */
+/** In-progress line for the journey card. A slow hole behind the pin is not part of it. */
 export function liveTrailPoints(points, now) {
   return splitClosedJourneys(points, now).remaining;
+}
+
+/**
+ * Points the map paints for the open move.
+ * Finished stays are cut off, as in 1.12. A slow hole stays, so the painter
+ * can dash a walked gap or keep a vehicle chord. The journey card still uses
+ * liveTrailPoints, which may trim that hole.
+ */
+export function displayLivePoints(points, now) {
+  const source = Array.isArray(points) ? points : [];
+  const sorted = orderedTrail(source);
+  if (sorted.length < 2) return source;
+  const closing = closingStays(sorted, now);
+  if (closing.length === 0) return sorted.length === source.length ? source : sorted;
+  const remainFrom = closing[closing.length - 1].startAt;
+  let cut = 0;
+  while (cut < sorted.length && sorted[cut].at < remainFrom) cut += 1;
+  if (cut <= 0) return sorted.length === source.length ? source : sorted;
+  return sorted.slice(cut);
 }
 
 /** The open segment still has a line. A stay cluster and courtyard jitter do not. */
@@ -2133,7 +2176,7 @@ export function playbackAnchor(points, ratio) {
   for (let index = 1; index < list.length; index += 1) {
     const prev = run[run.length - 1];
     const point = list[index];
-    if (trailDrawDashed(prev, point, run[run.length - 2]) || isImpossibleJump(prev, point)) {
+    if ((!isVehicleStep(prev, point) && trailSegmentDashed(prev, point)) || isImpossibleJump(prev, point)) {
       if (run.length >= 2) runs.push(run);
       run = [point];
     } else {

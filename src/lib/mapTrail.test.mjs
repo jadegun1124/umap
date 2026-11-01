@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { familyMapShowsTrail, memberLiveLines, mainOverviewTrails, recordsDayTrails } from './mapTrail.mjs';
 import { liveTrailDrawable, liveTrailPoints, settleTrailPoint, trailDrawParts, trailSegmentDashed, WALK_STAY_LABEL_MS } from './tracking.mjs';
+import { settleTrailPoint as settle112, trailDrawParts as draw112 } from './tracking112.fixture.mjs';
 
 const self = { id: 'self', share: 'allowed', role: 'self' };
 const peer = { id: 'admin', share: 'allowed', role: 'admin-share' };
@@ -64,57 +65,65 @@ function walkCurve(now) {
   return points;
 }
 
-test('stay state draws zero polylines on the main overview', () => {
+test('a finished walk still draws after the card would say 머무름', () => {
   const now = Date.UTC(2026, 9, 28, 3, 46);
   const walked = walkCurve(now - WALK_STAY_LABEL_MS - 5_000);
   const end = walked[walked.length - 1];
   assert.equal(liveTrailDrawable(walked, end.at + 2 * 60 * 1000), true);
-  const hidden = mainOverviewTrails({
+  const stayed = mainOverviewTrails({
     points: walked,
     pin: { lat: end.lat, lng: end.lng, at: end.at },
     moving: false,
     now: end.at + WALK_STAY_LABEL_MS,
   });
-  assert.equal(hidden.length, 0);
+  assert.equal(stayed.length, 1);
+  assert.ok(stayed[0].length >= walked.length);
 
   const hole = [
     { lat: 37.6366, lng: 127.0672, at: now - 89 * 60 * 1000, accuracyM: 18, speedMps: 0, staying: true },
     { lat: 37.6378, lng: 127.0684, at: now - 60_000, accuracyM: 18, speedMps: 0, staying: true },
   ];
-  assert.equal(mainOverviewTrails({
+  const drawnHole = mainOverviewTrails({
     points: hole,
     pin: { lat: hole[1].lat, lng: hole[1].lng, at: hole[1].at },
     moving: false,
     now,
-  }).length, 0);
+  });
+  assert.equal(drawnHole.length, 1);
+  assert.equal(drawnHole[0].length, 2);
   assert.equal(trailSegmentDashed(hole[0], hole[1]), true);
+  assert.equal(trailDrawParts(drawnHole[0]).some((part) => part.dashed), true);
 });
 
-test('a moving overview keeps the dense curve, drops the dashed hole, and ends on the pin', () => {
+test('the overview keeps a walked hole and ends on a later pin', () => {
   const now = Date.UTC(2026, 9, 28, 4, 0);
   const walked = walkCurve(now);
   const end = walked[walked.length - 1];
-  const pin = offset(end, 12, -6, end.at);
   const hole = {
     ...offset(end, 0, 180, end.at + 80_000),
     accuracyM: 12,
     speedMps: 0,
     staying: true,
   };
+  const shared = mainOverviewTrails({
+    points: [...walked, hole],
+    pin: { lat: end.lat, lng: end.lng, at: end.at },
+    withPin: false,
+  });
+  assert.equal(shared.length, 1);
+  assert.equal(shared[0].some((point) => point.lat === hole.lat && point.lng === hole.lng), true);
+  assert.equal(trailDrawParts(shared[0]).some((part) => part.dashed), true);
+  const pin = offset(hole, 12, -6, hole.at + 4_000);
   const lines = mainOverviewTrails({
     points: [...walked, hole],
-    pin: { lat: pin.lat, lng: pin.lng, at: end.at },
+    pin: { lat: pin.lat, lng: pin.lng, at: pin.at, speedMps: 1.2, staying: false },
     moving: false,
-    now: hole.at + 2_000,
+    now: pin.at + 1_000,
   });
   assert.equal(lines.length, 1);
-  assert.ok(lines[0].length >= walked.length, `overview kept ${lines[0].length} of ${walked.length}`);
   assert.equal(lines[0][lines[0].length - 1].lat, pin.lat);
   assert.equal(lines[0][lines[0].length - 1].lng, pin.lng);
-  assert.equal(lines[0].some((point) => point.lat === hole.lat && point.lng === hole.lng), false);
-  for (let index = 1; index < lines[0].length; index += 1) {
-    assert.equal(trailSegmentDashed(lines[0][index - 1], lines[0][index]), false);
-  }
+  assert.deepEqual(lines[0].slice(0, -1).map((point) => point.lat), shared[0].map((point) => point.lat));
   const jumpedPin = offset(end, 0, 400, end.at + 6_000);
   const jumped = mainOverviewTrails({
     points: walked,
@@ -123,13 +132,11 @@ test('a moving overview keeps the dense curve, drops the dashed hole, and ends o
     now: end.at + 2_000,
   });
   assert.equal(jumped.length, 1);
-  assert.ok(jumped[0].length >= walked.length);
   assert.equal(jumped[0][jumped[0].length - 1].lat, end.lat);
-  assert.equal(jumped[0][jumped[0].length - 1].lng, end.lng);
   assert.equal(jumped[0].some((point) => point.lat === jumpedPin.lat && point.lng === jumpedPin.lng), false);
 });
 
-test('a gps hole hides the chord and keeps the solid trail until the next step', () => {
+test('a gps hole stays on the shared line and the next step still ends on the pin', () => {
   const now = Date.UTC(2026, 9, 28, 4, 10);
   const walked = walkCurve(now);
   const end = walked[walked.length - 1];
@@ -148,7 +155,7 @@ test('a gps hole hides the chord and keeps the solid trail until the next step',
   });
   assert.equal(during.length, 1);
   assert.ok(during[0].length >= walked.length);
-  assert.equal(during[0].some((point) => point.lat === hole.lat && point.lng === hole.lng), false);
+  assert.equal(during[0].some((point) => point.lat === hole.lat && point.lng === hole.lng), true);
   const resume = offset(hole, 0, 8, hole.at + 3_000);
   const after = mainOverviewTrails({
     points: [...walked, hole, { ...resume, accuracyM: 10, speedMps: 1.3, staying: false }],
@@ -157,7 +164,8 @@ test('a gps hole hides the chord and keeps the solid trail until the next step',
     now: resume.at + 1_000,
   });
   assert.ok(after.length >= 1);
-  assert.ok(after[0].length >= walked.length);
+  assert.equal(after[0][after[0].length - 1].lat, resume.lat);
+  assert.equal(after[0].some((point) => point.lat === hole.lat), true);
 });
 
 function eastOf(lat, lng, meters) {
@@ -292,6 +300,58 @@ test('a gps walk then network fixes still ends on the live pin for self and a fa
     assert.ok(line && line.length >= 2, kind);
     assert.ok(gap(line, member) < 20, `${kind} pin gap ${line ? Math.round(gap(line, member)) : 'none'}`);
   }
+});
+
+function paintParts(parts) {
+  return parts
+    .filter((part) => part.points.length >= 2)
+    .map((part) => `${part.dashed ? 'd' : 's'}:${part.points.map((point) => `${point.lat.toFixed(5)},${point.lng.toFixed(5)}`).join(' ')}`)
+    .join('|');
+}
+
+/** GPS-quality walk: dense curve, a 300m gap, then a quiet sensor that is still moving. */
+function referenceWalk() {
+  const origin = { lat: 37.6368, lng: 127.0674, at: Date.UTC(2026, 9, 31, 3, 49, 0) };
+  const fixes = [];
+  for (let index = 0; index <= 20; index += 1) {
+    const theta = (Math.PI / 2) * (index / 20);
+    fixes.push({
+      ...offset(origin, 48 * Math.sin(theta), 48 * (1 - Math.cos(theta)), origin.at + index * 2_500),
+      accuracyM: 12,
+      speedMps: 1.3,
+      staying: false,
+    });
+  }
+  const tip = fixes[fixes.length - 1];
+  fixes.push({
+    ...offset(tip, 300, 0, tip.at + 90_000),
+    accuracyM: 12,
+    speedMps: 0,
+    staying: true,
+  });
+  const afterGap = fixes[fixes.length - 1];
+  for (let index = 1; index <= 6; index += 1) {
+    fixes.push({
+      ...offset(afterGap, 0, index * 25, afterGap.at + index * 18_000),
+      accuracyM: 12,
+      speedMps: 0,
+      staying: true,
+    });
+  }
+  return fixes;
+}
+
+test('a 1.12-quality walk draws the same polyline as the 1.12 pipeline', () => {
+  const fixes = referenceWalk();
+  let current = [];
+  let previous = [];
+  for (const fix of fixes) {
+    current = settleTrailPoint(current, fix, fix.at).points;
+    previous = settle112(previous, fix, fix.at).points;
+  }
+  assert.equal(paintParts(trailDrawParts(current)), paintParts(draw112(previous)));
+  const gap = fixes.find((fix) => fix.speedMps === 0 && fix.staying === true);
+  assert.equal(paintParts(trailDrawParts(current)).includes(`${gap.lat.toFixed(5)},${gap.lng.toFixed(5)}`), true);
 });
 
 test('records include archived journeys even when the live segment is gone', () => {
