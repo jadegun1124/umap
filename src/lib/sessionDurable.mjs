@@ -4,7 +4,10 @@
 // an empty session until the seal opens. A later persist with a profile seals
 // that empty session over the old one, and an empty backup replaces the
 // server history. The plain key below is readable without Keystore, and an
-// unread seal is never replaced by an empty session.
+// unread seal is never replaced by an empty session. A plain copy whose
+// journeys are already outside the 30-day window does not block a newer save.
+
+import { journeysWithinHistory, tracksWithinHistory, visitsWithinHistory } from './tracking.mjs';
 
 export const FAMILY_STORAGE_KEY = 'umap_family_v1';
 export const PLAIN_SESSION_KEY = 'umap_family_v1_plain';
@@ -44,6 +47,18 @@ export function recordBags(session) {
 export function historyScore(session) {
   const bags = recordBags(session);
   return bags.journeys + bags.visits + bags.tracks;
+}
+
+/** Same count after the 30-day trim load() applies. Expired cards are not richer. */
+export function liveHistoryScore(session, now = Date.now()) {
+  if (!session || typeof session !== 'object') return 0;
+  try {
+    return bagCount(journeysWithinHistory(session.journeys, now))
+      + bagCount(visitsWithinHistory(session.visits, now))
+      + bagCount(tracksWithinHistory(session.tracks, now));
+  } catch {
+    return historyScore(session);
+  }
 }
 
 /** Journeys and visits are the 기록 tab. Tracks alone still count as stored history. */
@@ -92,7 +107,7 @@ export function richerStoredRaw(localStorage, next) {
   try {
     const raw = localStorage.getItem(PLAIN_SESSION_KEY) || '';
     const stored = parseStoredSession(raw);
-    if (stored && historyScore(stored) > 0) return raw;
+    if (stored && liveHistoryScore(stored) > liveHistoryScore(next)) return raw;
   } catch {
     return '';
   }

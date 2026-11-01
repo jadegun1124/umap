@@ -306,7 +306,7 @@ export function cleanAccountSnapshot(input, now = Date.now()) {
       profile: { name, photo: photo ?? null },
       room,
       guardians,
-      home: sealedHistory || keepHistory ? null : cleanHome(input.home),
+      home: sealedHistory ? null : cleanHome(input.home),
       journeys,
       visits,
       ...(vault ? { vault } : {}),
@@ -325,7 +325,7 @@ export function publicAccount(record, extras = {}) {
     profile: record.profile,
     room: record.room,
     guardians: record.guardians || [],
-    home: record.sealedHistory ? null : (record.home || null),
+    home: record.home || null,
     journeys: record.sealedHistory ? [] : (record.journeys || []),
     visits: record.sealedHistory ? [] : (record.visits || []),
     recoveryCode: record.recoveryCode ? formatRecoveryCode(record.recoveryCode) : '',
@@ -514,6 +514,8 @@ function mergeSnapshot(record, snapshot, now) {
     next.home = snapshot.home;
     next.journeys = snapshot.journeys;
     next.visits = snapshot.visits;
+  } else if (snapshot.home) {
+    next.home = snapshot.home;
   }
   if (snapshot.dropRecovery && next.vault) next.recoveryCode = '';
   return next;

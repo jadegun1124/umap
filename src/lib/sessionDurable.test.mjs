@@ -186,6 +186,42 @@ test('an empty session does not replace a plain copy that still has records', ()
   assert.equal(JSON.parse(local.getItem('umap_family_v1')).visits.self.length, 1);
 });
 
+test('a plain copy older than 30 days does not block a newer save', () => {
+  const now = Date.now();
+  const stale = releaseSession('1.43.0', now);
+  const old = now - 40 * 24 * 60 * 60 * 1000;
+  stale.journeys.self[0].startedAt = old - 60 * 60 * 1000;
+  stale.journeys.self[0].endedAt = old;
+  stale.journeys.self[0].points[0].at = old - 60 * 60 * 1000;
+  stale.journeys.self[0].points[1].at = old;
+  stale.visits.self[0].arrivedAt = old - 60 * 60 * 1000;
+  stale.visits.self[0].leftAt = old;
+  stale.tracks.self[0].at = old;
+  stale.tracks.self[1].at = old;
+  const local = memoryStorage();
+  const raw = JSON.stringify(stale);
+  commitDurableSession(local, stale, raw, { unreadSeal: false, sealText: null });
+  const next = emptySession();
+  next.profile = { id: 'self', name: '개발자' };
+  const decision = commitDurableSession(local, next, JSON.stringify(next), { unreadSeal: false, sealText: null });
+  assert.equal(decision.wrote, true);
+  assert.equal(JSON.parse(local.getItem(PLAIN_SESSION_KEY)).profile.name, '개발자');
+});
+
+test('an empty journey list still uploads a home', async () => {
+  const storage = memoryStorage();
+  const saved = await prepareBackup({
+    memberId: 'self',
+    profileKey: 'profilekeyAAAAAAAA',
+    journeys: [],
+    visits: [],
+    home: { label: '우리 집', lat: 37.6365, lng: 127.068, radiusM: 150 },
+  }, storage, 'ABCD2345EFGH');
+  assert.equal(saved.keepHistory, true);
+  assert.equal(saved.sealedHistory, undefined);
+  assert.equal(saved.home.label, '우리 집');
+});
+
 test('an empty backup keeps server history instead of sealing an empty list', async () => {
   const storage = memoryStorage();
   const empty = await prepareBackup({

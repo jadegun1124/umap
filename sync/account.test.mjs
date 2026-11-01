@@ -855,6 +855,17 @@ test('an empty keepHistory backup does not erase stored journeys', async () => {
   });
   assert.equal(kept.status, 200);
   assert.equal(kept.body.account.journeys[0].start.label, '하계1차청구아파트 104동');
+  const home = await accountCall(accounts, 'PUT', '/v1/account', {
+    accountKey: created.body.account.accountKey,
+    body: {
+      ...snapshot({ journeys: [], visits: [] }),
+      keepHistory: true,
+      home: { label: '우리 집', lat: 37.6365, lng: 127.068, radiusM: 150 },
+    },
+  });
+  assert.equal(home.status, 200);
+  assert.equal(home.body.account.journeys[0].start.label, '하계1차청구아파트 104동');
+  assert.equal(home.body.account.home.label, '우리 집');
 });
 
 test('a sealed backup deletes plaintext history and the stored recovery code', async () => {

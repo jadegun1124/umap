@@ -92,7 +92,11 @@ export async function prepareBackup(snapshot, storage, recoveryCode) {
   if (!snapshot || typeof snapshot !== 'object') return snapshot;
   // An update can open an empty session before the device seal. Sealing that
   // empty list replaces the server's sealedHistory. Keep what is already there.
-  if (snapshotHistoryEmpty(snapshot)) return keepStoredHistory(snapshot);
+  if (snapshotHistoryEmpty(snapshot)) {
+    const kept = keepStoredHistory(snapshot);
+    if (snapshot.home) kept.home = snapshot.home;
+    return kept;
+  }
   const code = normalizeRecoveryCode(recoveryCode);
   if (!code) return keepStoredHistory(snapshot);
   const device = await ensureDevice(storage);
@@ -146,7 +150,7 @@ export async function openAccountSecrets(account, storage, typedCode = '') {
     if (opened && typeof opened === 'object') {
       journeys = Array.isArray(opened.journeys) ? opened.journeys : [];
       visits = Array.isArray(opened.visits) ? opened.visits : [];
-      home = opened.home || null;
+      home = account.home || opened.home || null;
     } else if (!Array.isArray(account.journeys) || account.journeys.length === 0) {
       historyLocked = true;
     }
