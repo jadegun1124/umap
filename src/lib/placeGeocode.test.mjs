@@ -35,7 +35,7 @@ test('a Nominatim body becomes 구리시 수택동', () => {
   assert.equal(nominatimAddress({
     display_name: '3404, 29, 다산중앙로123번길, 지막, 다산1동, 남양주시, 경기도, 12248, 대한민국',
     address: { hamlet: '지막', city_district: '다산1동', city: '남양주시', province: '경기도' },
-  }), '남양주시 다산1동');
+  }), '다산중앙로123번길 29');
 });
 
 test('formatPrecisePlace keeps an apartment and a shop, and presentPlace does not strip them', () => {
@@ -366,6 +366,116 @@ test('a fix inside 하계1차청구아파트 near 노원소방서 keeps the comp
   assert.equal(apartment.settled, true);
   assert.equal(poi.label, '노원소방서');
   assert.equal(poi.settled, false);
+});
+
+test('a pin beside 105동 ranks the building edge ahead of a southern fire station', () => {
+  // West of 105동 and 104동, on the road. The complex centroid is farther
+  // from this pin than 노원소방서, which sits well south of the complex.
+  const pin = { lat: 37.6372, lng: 127.07085 };
+  const centroid = { name: '하계1차청구아파트', kind: 'residential', lat: 37.63755, lng: 127.07135 };
+  const station = { name: '노원소방서', kind: 'poi', lat: 37.63695, lng: 127.07085 };
+  const box = (west, south, east, north) => ({
+    type: 'Polygon',
+    coordinates: [[[west, south], [east, south], [east, north], [west, north], [west, south]]],
+  });
+  const dong105 = {
+    name: '하계1차청구아파트',
+    unit: '105동',
+    kind: 'residential',
+    geometry: box(127.07095, 37.63705, 127.07125, 37.63735),
+  };
+  const dong104 = {
+    name: '하계1차청구아파트',
+    unit: '104동',
+    kind: 'residential',
+    geometry: box(127.07095, 37.6367, 127.07125, 37.63698),
+  };
+  assert.equal(choosePlaceLabel([centroid, station], pin), '노원소방서');
+  assert.equal(choosePlaceLabel([centroid, station, dong104, dong105], pin), '하계1차청구아파트 105동');
+});
+
+test('a point beside a church on a 길 uses the place or the road, not 구·동', async () => {
+  const church = { lat: 37.63142, lng: 127.06518 };
+  const pin = { lat: 37.6314, lng: 127.0651 };
+  const fetchImpl = async (url) => {
+    const target = String(url);
+    if (target.includes('vworld.kr') && target.includes('getAddress')) {
+      return jsonResponse({
+        response: {
+          result: [{
+            text: '서울특별시 노원구 월계3동 마들로3길 15',
+            structure: { level2: '노원구', level4A: '월계3동', level4L: '마들로3길', level5: '15' },
+          }],
+        },
+      });
+    }
+    if (target.includes('LT_C_BLDGINFO')) return jsonResponse({ response: { result: { featureCollection: { features: [] } } } });
+    if (target.includes('nominatim.openstreetmap.org')) {
+      return jsonResponse({
+        display_name: '월계3동, 노원구, 서울특별시',
+        address: { suburb: '월계3동', borough: '노원구', city: '서울특별시' },
+      });
+    }
+    if (target.includes('overpass')) {
+      return jsonResponse({
+        elements: [
+          { type: 'node', lat: church.lat, lon: church.lng, tags: { name: '만나교회', amenity: 'place_of_worship' } },
+        ],
+      });
+    }
+    return jsonResponse({ elements: [] });
+  };
+  const beside = await reverseGeocode(pin.lat, pin.lng, { fetch: fetchImpl, key: 'test-key', pace: false });
+  assert.match(beside, /만나교회|마들로3길 15/);
+  assert.equal(beside, '만나교회');
+  const roadOnly = async (url) => {
+    if (String(url).includes('overpass')) return jsonResponse({ elements: [] });
+    return fetchImpl(url);
+  };
+  const road = await reverseGeocode(pin.lat, pin.lng, { fetch: roadOnly, key: 'test-key', pace: false });
+  assert.equal(road, '마들로3길 15');
+  assert.equal(road.includes('월계3동'), false);
+});
+
+test('reverse geocode of the 105동 west edge does not keep 노원소방서', async () => {
+  const pin = { lat: 37.6372, lng: 127.07085 };
+  const station = { lat: 37.6354, lng: 127.0711 };
+  const box = (west, south, east, north) => ([[
+    [west, south], [east, south], [east, north], [west, north], [west, south],
+  ]]);
+  const fetchImpl = async (url) => {
+    const target = String(url);
+    if (target.includes('LT_C_BLDGINFO')) {
+      return jsonResponse({
+        response: {
+          result: {
+            featureCollection: {
+              features: [
+                { properties: { buld_nm: '하계1차청구아파트', dong_nm: '105동' }, geometry: { type: 'Polygon', coordinates: box(127.07095, 37.63705, 127.07125, 37.63735) } },
+                { properties: { buld_nm: '하계1차청구아파트', dong_nm: '104동' }, geometry: { type: 'Polygon', coordinates: box(127.07095, 37.6367, 127.07125, 37.63698) } },
+                { properties: { buld_nm: '노원소방서' }, geometry: { type: 'Point', coordinates: [station.lng, station.lat] } },
+              ],
+            },
+          },
+        },
+      });
+    }
+    if (target.includes('vworld.kr')) {
+      return jsonResponse({ response: { result: [{ text: '서울특별시 노원구 하계동', structure: { level2: '노원구', level4L: '하계동' } }] } });
+    }
+    if (target.includes('nominatim')) {
+      return jsonResponse({
+        lat: String(station.lat),
+        lon: String(station.lng),
+        display_name: '노원소방서, 하계동, 노원구, 서울',
+        address: { amenity: '노원소방서', suburb: '하계동', borough: '노원구' },
+        namedetails: { name: '노원소방서' },
+      });
+    }
+    return jsonResponse({ elements: [] });
+  };
+  const label = await reverseGeocode(pin.lat, pin.lng, { fetch: fetchImpl, key: 'test-key', pace: false });
+  assert.equal(label, '하계1차청구아파트 105동');
 });
 
 test('family card status starts with the neighborhood, never 근처', () => {
