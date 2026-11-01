@@ -73,15 +73,28 @@ export function contentKeyBytes(device) {
   return key && key.length === 32 ? key : null;
 }
 
+export function snapshotHistoryEmpty(snapshot) {
+  const journeys = Array.isArray(snapshot && snapshot.journeys) ? snapshot.journeys : [];
+  const visits = Array.isArray(snapshot && snapshot.visits) ? snapshot.visits : [];
+  return journeys.length === 0 && visits.length === 0;
+}
+
+function keepStoredHistory(snapshot) {
+  const kept = { ...snapshot, keepHistory: true };
+  delete kept.journeys;
+  delete kept.visits;
+  delete kept.home;
+  delete kept.sealedHistory;
+  return kept;
+}
+
 export async function prepareBackup(snapshot, storage, recoveryCode) {
+  if (!snapshot || typeof snapshot !== 'object') return snapshot;
+  // An update can open an empty session before the device seal. Sealing that
+  // empty list replaces the server's sealedHistory. Keep what is already there.
+  if (snapshotHistoryEmpty(snapshot)) return keepStoredHistory(snapshot);
   const code = normalizeRecoveryCode(recoveryCode);
-  if (!code) {
-    const kept = { ...snapshot, keepHistory: true };
-    delete kept.journeys;
-    delete kept.visits;
-    delete kept.home;
-    return kept;
-  }
+  if (!code) return keepStoredHistory(snapshot);
   const device = await ensureDevice(storage);
   const vault = await wrapVault(code, device);
   const content = contentKeyBytes(device);

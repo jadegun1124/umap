@@ -845,6 +845,18 @@ test('kakao verification reports the upstream code and never logs the token', as
   }
 });
 
+test('an empty keepHistory backup does not erase stored journeys', async () => {
+  const accounts = createMemoryAccountStore();
+  const created = await accountCall(accounts, 'POST', '/v1/account', { body: snapshot() });
+  assert.equal(created.status, 200);
+  const kept = await accountCall(accounts, 'PUT', '/v1/account', {
+    accountKey: created.body.account.accountKey,
+    body: { ...snapshot({ journeys: [], visits: [], home: null }), keepHistory: true },
+  });
+  assert.equal(kept.status, 200);
+  assert.equal(kept.body.account.journeys[0].start.label, '하계1차청구아파트 104동');
+});
+
 test('a sealed backup deletes plaintext history and the stored recovery code', async () => {
   const { base64UrlToBytes, mintDeviceKey, sealJson, wrapVault } = await import('../src/lib/familySeal.mjs');
   const accounts = createMemoryAccountStore();

@@ -332,6 +332,7 @@ export function useFamilyTracking(onFirstFix: (lat: number, lng: number) => void
   const syncKeepAlive = useRef<() => Promise<void>>(async () => {});
   useEffect(() => {
     syncKeepAlive.current = async () => {
+      try {
       const current = familyRef.current.state;
       const status = await umapLocation.status().catch(() => ({ running: false, userStopped: false, native: false as const }));
       if (status.userStopped) {
@@ -360,10 +361,7 @@ export function useFamilyTracking(onFirstFix: (lat: number, lng: number) => void
         }
       }
       if (targets.length === 0) {
-        if (status.running) {
-          await umapLocation.stop().catch(() => undefined);
-          await umapLocation.ackStopped().catch(() => undefined);
-        }
+        // 업데이트 직후 가족 토큰이 아직 없으면 켜 둔 위치 유지를 끄지 않는다.
         return;
       }
       const memberId = current.profile?.profileKey ? current.profile.id : '';
@@ -387,6 +385,9 @@ export function useFamilyTracking(onFirstFix: (lat: number, lng: number) => void
         targets,
       };
       await umapLocation.start({ config: JSON.stringify(config) }).catch(() => undefined);
+      } finally {
+        if (typeof window !== 'undefined') window.dispatchEvent(new Event('umap-keep-status'));
+      }
     };
   }, [keepKey]);
 

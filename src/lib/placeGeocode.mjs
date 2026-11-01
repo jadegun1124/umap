@@ -7,9 +7,10 @@
 // The literal place label 「근처」 is never returned.
 
 import { APP_VERSION_NAME } from './appRelease.mjs';
+import { noteDiag } from './diagLog.mjs';
 
 const NOMINATIM_UA = `Kinnex/${APP_VERSION_NAME} (family location; https://github.com/jadegun1124/umap)`;
-const CACHE_KEY = 'umap_geocode_cache_v9';
+const CACHE_KEY = 'umap_geocode_cache_v10';
 const PLACE_LIMIT = 56;
 /** Farther than this, a place is not the nearest label. Inside a polygon, distance is 0. */
 export const NEAREST_PLACE_M = 80;
@@ -865,6 +866,84 @@ function settledLabel(label, residentialKnown, settled = true) {
   return { label: text || null, settled: keep };
 }
 
+export function vworldSearchHits(body) {
+  const items = body && body.response && body.response.result ? body.response.result.items : null;
+  if (!Array.isArray(items)) return [];
+  const hits = [];
+  for (const item of items) {
+    const title = cleanToken(String(item && item.title || '').replace(/<[^>]+>/g, ''));
+    const lat = Number(item && item.point && item.point.y);
+    const lng = Number(item && item.point && item.point.x);
+    if (!title || !Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+    hits.push({ title, lat, lng });
+  }
+  return hits;
+}
+
+function complexHint(candidates, buildingName) {
+  const names = [];
+  for (const item of candidates) {
+    const name = cleanToken(item && (item.name || item.building));
+    if (name && RESIDENTIAL_NAME.test(name) && !isUnitLabel(name)) names.push(name.replace(/\s*\d+동$/, ''));
+  }
+  const built = cleanToken(String(buildingName || '').replace(/\s*\d+동$/, ''));
+  if (built && RESIDENTIAL_NAME.test(built)) names.push(built);
+  names.sort((left, right) => left.length - right.length);
+  return names[0] || '';
+}
+
+/** A place-search title such as 「하계 1차청구아파트」 replaces the shorter register name. */
+export function preferLongerComplex(label, hits, point) {
+  const current = presentPlace(label);
+  if (!current || !Array.isArray(hits) || !hits.length) return current;
+  const unit = (current.match(/\d+동$/) || [])[0] || '';
+  const base = unit ? current.slice(0, -unit.length).trim() : current;
+  let best = base;
+  for (const hit of hits) {
+    const title = cleanToken(hit && hit.title);
+    if (!title || !RESIDENTIAL_NAME.test(title)) continue;
+    if (!Number.isFinite(hit.lat) || !Number.isFinite(hit.lng)) continue;
+    if (metersBetween(point, hit) > 400) continue;
+    const folded = title.replace(/\s+/g, '');
+    const baseFolded = base.replace(/\s+/g, '');
+    if (!sameComplexName(base, title) && !folded.includes(baseFolded) && !baseFolded.includes(folded)) continue;
+    if (title.length > best.length) best = title;
+  }
+  if (best === base) return current;
+  return unit ? `${best} ${unit}`.replace(/\s+/g, ' ').trim() : best;
+}
+
+function longerComplexCandidates(candidates, hits, point) {
+  const names = candidates.map((item) => cleanToken(item && (item.name || item.building))).filter(Boolean);
+  const extra = [];
+  for (const hit of hits) {
+    const title = cleanToken(hit && hit.title);
+    if (!title || !RESIDENTIAL_NAME.test(title)) continue;
+    if (!Number.isFinite(hit.lat) || !Number.isFinite(hit.lng) || metersBetween(point, hit) > 400) continue;
+    const matches = names.some((name) => sameComplexName(name, title));
+    if (!matches) continue;
+    if (names.some((name) => name.replace(/\s+/g, '') === title.replace(/\s+/g, ''))) continue;
+    extra.push({ name: title, kind: 'residential', lat: point.lat, lng: point.lng });
+  }
+  return extra;
+}
+
+async function fetchVworldPlaceSearch(fetchImpl, query, key) {
+  const url = new URL('https://api.vworld.kr/req/search');
+  url.searchParams.set('service', 'search');
+  url.searchParams.set('request', 'search');
+  url.searchParams.set('version', '2.0');
+  url.searchParams.set('crs', 'EPSG:4326');
+  url.searchParams.set('size', '10');
+  url.searchParams.set('page', '1');
+  url.searchParams.set('type', 'place');
+  url.searchParams.set('format', 'json');
+  url.searchParams.set('query', query);
+  url.searchParams.set('key', key);
+  const response = await fetchImpl(url.toString(), { signal: timeoutSignal(8000) });
+  return vworldSearchHits(await readJson(response));
+}
+
 async function lookupPlace(lat, lng, options = {}) {
   const fetchImpl = options.fetch || globalThis.fetch;
   if (typeof fetchImpl !== 'function') return { label: null, settled: false };
@@ -876,7 +955,37 @@ async function lookupPlace(lat, lng, options = {}) {
   let road = '';
   let buildingName = '';
   let residentialKnown = false;
-  const finish = (label, settled = true) => settledLabel(label, residentialKnown, settled);
+  const finish = (label, settled = true) => {
+    const found = settledLabel(label, residentialKnown, settled);
+    const names = [];
+    for (const item of candidates) {
+      const name = cleanToken(item && (item.name || item.building));
+      if (name && !names.includes(name)) names.push(name);
+    }
+    if (found.label) {
+      noteDiag({
+        kind: 'geocode',
+        label: found.label.slice(0, 80),
+        candidates: names.slice(0, 6).join(',').slice(0, 150),
+      });
+    }
+    return found;
+  };
+  let searchHits = null;
+  const absorbLongerComplex = async () => {
+    if (searchHits) return searchHits;
+    searchHits = [];
+    const hint = complexHint(candidates, buildingName);
+    if (!key || !hint) return searchHits;
+    try {
+      searchHits = await fetchVworldPlaceSearch(fetchImpl, hint, key);
+    } catch {
+      searchHits = [];
+    }
+    candidates.push(...longerComplexCandidates(candidates, searchHits, point));
+    if (buildingName) buildingName = preferLongerComplex(buildingName, searchHits, point);
+    return searchHits;
+  };
   const rememberRoad = (value) => {
     const next = extractRoadAddress(value);
     if (!next) return;
@@ -923,6 +1032,7 @@ async function lookupPlace(lat, lng, options = {}) {
     } catch {
       /* 도로·장소가 있으면 구·동으로 내려가지 않는다 */
     }
+    await absorbLongerComplex();
     const picked = choosePlaceLabel(candidates, point);
     if (picked) return finish(picked);
     if (road) return finish(road);
@@ -933,11 +1043,13 @@ async function lookupPlace(lat, lng, options = {}) {
     if (fromNominatim.label && isPrecisePlace(fromNominatim.label)) return finish(fromNominatim.label);
     if (fromNominatim.label && !road) return finish(fromNominatim.label);
   } catch {
+    await absorbLongerComplex();
     const picked = choosePlaceLabel(candidates, point);
     if (picked) return finish(picked);
     if (road) return finish(road);
     if (buildingName) return finish(buildingName, true);
   }
+  await absorbLongerComplex();
   const leftover = choosePlaceLabel(candidates, point);
   if (leftover) return finish(leftover);
   if (road) return finish(road);

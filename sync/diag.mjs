@@ -55,7 +55,8 @@ export function cleanDiagEvents(value) {
         if (number == null) continue;
         next[key] = number;
       } else if (typeof raw === 'string') {
-        const text = short(raw, key === 'reason' || key === 'error' ? 160 : 40);
+        const long = key === 'reason' || key === 'error' || key === 'label' || key === 'candidates' || key === 'place' || key === 'version';
+        const text = short(raw, long ? 160 : 40);
         if (!text) continue;
         next[key] = text;
       } else {

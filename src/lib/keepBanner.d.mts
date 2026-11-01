@@ -6,4 +6,5 @@ export function keepBanner(input?: {
   keepAlive?: boolean;
   locationMode?: string;
   batteryUnrestricted?: boolean;
+  reason?: string;
 }): { action: 'start' | 'always' | 'battery'; text: string } | null;

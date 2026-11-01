@@ -36,7 +36,7 @@ public final class DeviceCipher {
     public static String open(String sealed) {
         if (sealed == null || !sealed.startsWith(PREFIX)) return "";
         try {
-            byte[] packed = Base64.decode(sealed.substring(PREFIX.length()), Base64.NO_WRAP | Base64.URL_SAFE);
+            byte[] packed = Base64.decode(sealed.substring(PREFIX.length()), Base64.NO_WRAP | Base64.URL_SAFE | Base64.NO_PADDING);
             if (packed.length < 13) return "";
             byte[] iv = new byte[12];
             byte[] ct = new byte[packed.length - 12];

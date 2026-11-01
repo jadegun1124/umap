@@ -23,6 +23,7 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(UmapAuthPlugin.class);
         registerPlugin(DeviceSealPlugin.class);
         super.onCreate(savedInstanceState);
+        LocationKeepService.restartIfWanted(this);
         WebView webView = bridge != null ? bridge.getWebView() : null;
         if (webView != null) {
             webView.addJavascriptInterface(new UmapAndroidExit(this), "UmapAndroid");
