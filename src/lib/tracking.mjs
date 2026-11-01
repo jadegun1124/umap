@@ -567,13 +567,18 @@ export function trailDecision(last, point) {
   if (isImpossibleJump(last, point)) return 'drop';
   const implied = dt > 0 ? moved / (dt / 1000) : Infinity;
   if (implied > FIX_MAX_JUMP_MPS) return 'drop';
+  const reported = pointSpeed(point);
+  // A good walking GPS fix is a vertex even when the phone samples every second.
+  // The 2.5m gate was dropping those ~1m steps, so the walked line stayed short.
+  const groundWalk = implied >= 0.5 && implied <= 3;
+  const reportedWalk = reported != null && reported >= 0.7 && reported <= 2.6 && accuracy > 0 && accuracy <= 25 && moved >= 0.2 && (moved <= 8 || groundWalk);
+  if (reportedWalk) return 'keep';
   // Bike and vehicle fixes are kept on the GPS clock. A stay flag, or a reported
   // 0, must not snap a city-speed step. Walk jitter still snaps below.
   if (isVehicleStep(last, point)) return 'keep';
   // ~30 km/h or faster is a vehicle sample. A reported speed keeps it even when
   // the stay flag is still set, so a drive does not collapse into a dashed hole.
   // Implied speed alone does not: a stay with a zero reading is courtyard jitter.
-  const reported = pointSpeed(point);
   const fastGround = implied >= 8 && implied <= 45 && dt >= 800 && moved >= TRAIL_RIDE_MIN_STEP_M;
   if (reported != null && reported >= 8 && fastGround) return 'keep';
   if (reported == null && point?.staying !== true && fastGround) return 'keep';
@@ -1130,7 +1135,7 @@ function sampledTrail(points) {
   for (const point of collapsed) {
     if (!point || point.stayEnd) continue;
     const prev = drawn[drawn.length - 1];
-    if (prev && haversineMeters(prev, point) < 1.5) continue;
+    if (prev && haversineMeters(prev, point) < 0.25) continue;
     drawn.push(point);
   }
   return drawn;
@@ -1229,13 +1234,11 @@ export function appendLiveTip(parts, trailEnd) {
   if (!trailEnd || !paintedEnd || !Number.isFinite(trailEnd.lat) || !Number.isFinite(trailEnd.lng)) return painted;
   const sameTip = Math.abs(paintedEnd.lat - trailEnd.lat) < 1e-5 && Math.abs(paintedEnd.lng - trailEnd.lng) < 1e-5;
   if (sameTip || isImpossibleJump(paintedEnd, trailEnd)) return painted;
-  const prior = previous.points.length >= 2 ? previous.points[previous.points.length - 2] : null;
-  const hole = !isVehicleStep(paintedEnd, trailEnd) && trailDrawDashed(paintedEnd, trailEnd, prior);
-  if (!hole && !previous.dashed) {
+  if (!previous.dashed) {
     previous.points = previous.points.concat([trailEnd]);
     return painted;
   }
-  painted.push({ points: [paintedEnd, trailEnd], dashed: hole });
+  painted.push({ points: [paintedEnd, trailEnd], dashed: false });
   return painted;
 }
 
@@ -1260,10 +1263,6 @@ export function trailDrawParts(points) {
     const next = sampled[index];
     if (isImpossibleJump(prev, next)) {
       flushRun();
-      run = [next];
-    } else if (!isVehicleStep(prev, next) && trailDrawDashed(prev, next, index >= 2 ? sampled[index - 2] : null)) {
-      flushRun();
-      parts.push({ points: [prev, next], dashed: true });
       run = [next];
     } else if (run.length === 0) {
       run = [next];
@@ -1844,7 +1843,14 @@ function findClosingStays(points, now) {
   while (index < points.length) {
     const anchor = points[index];
     let end = index;
-    while (end + 1 < points.length && haversineMeters(anchor, points[end + 1]) <= STOP_RADIUS_M) end += 1;
+    while (end + 1 < points.length && haversineMeters(anchor, points[end + 1]) <= STOP_RADIUS_M) {
+      const step = points[end + 1];
+      const prev = points[end];
+      const reported = pointSpeed(step);
+      const accuracy = positiveMeters(step?.accuracyM);
+      if (reported != null && reported >= 0.7 && reported <= 2.6 && accuracy > 0 && accuracy <= 25 && prev && haversineMeters(prev, step) >= 0.2) break;
+      end += 1;
+    }
     const open = end === points.length - 1;
     const limit = journeyStayLimit(points, index);
     if (end > index && stayDwell(anchor.at, points[end].at, open, now, limit) >= limit) {
@@ -1875,7 +1881,7 @@ function compactJourneyPoints(points) {
   for (const point of points) {
     if (!point || point.stayEnd) continue;
     const prev = sampled[sampled.length - 1];
-    if (prev && haversineMeters(prev, point) < 1.5) continue;
+    if (prev && haversineMeters(prev, point) < 0.25) continue;
     sampled.push(point);
   }
   let current = sampled.length >= 2 ? sampled : points.filter((point) => point && !point.stayEnd);
@@ -2054,7 +2060,7 @@ export function hasDirectedWalk(points) {
     if (run.length < 3) return false;
     const path = pathDistance(run);
     const net = haversineMeters(run[0], run[run.length - 1]);
-    return path >= 40 && net >= 30 && path > 0 && net / path >= 0.62;
+    return path >= 40 && net >= 30 && path > 0 && net / path >= 0.5;
   };
   for (let index = 1; index < located.length; index += 1) {
     const point = located[index];
@@ -2068,8 +2074,8 @@ export function hasDirectedWalk(points) {
     const accuracy = positiveMeters(point.accuracyM);
     const reported = pointSpeed(point);
     const pace = stepPace(anchor, point);
-    const ground = pace && pace.moved >= 2 && pace.dt <= 90_000 && pace.speed >= 0.5 && pace.speed <= 3;
-    const reportedWalk = reported != null && reported >= 0.7 && reported <= 2.6 && pace && pace.moved >= 2 && pace.dt <= 90_000;
+    const ground = pace && pace.moved >= 0.2 && pace.dt <= 90_000 && pace.speed >= 0.5 && pace.speed <= 3;
+    const reportedWalk = reported != null && reported >= 0.7 && reported <= 2.6 && pace && pace.moved >= 0.2 && pace.dt <= 90_000;
     const walking = accuracy > 0 && accuracy <= 25 && (ground || reportedWalk);
     if (!walking) {
       if (directed()) return true;

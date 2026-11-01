@@ -374,7 +374,7 @@ test('a walk keeps 지금 through sensor gaps and a peer trail uses the same dwe
 test('a short step inside the walking gate is not a vertex, and a poor fix is dropped', () => {
   const t = 1_700_000_000_000;
   const origin = { lat: 37.5, lng: 127, at: t, accuracyM: 12, speedMps: 1.2, staying: false };
-  assert.equal(trailDecision(origin, { ...offset(origin, 1.6, 0, t + 2_500), speedMps: 1.2, staying: false }), 'snap');
+  assert.equal(trailDecision(origin, { ...offset(origin, 1.6, 0, t + 2_500), speedMps: 1.2, staying: false }), 'keep');
   assert.equal(trailDecision(origin, { ...offset(origin, 3, 0, t + 2_500), speedMps: 1.2, staying: false, accuracyM: 19 }), 'keep');
   assert.equal(trailDecision(origin, { ...offset(origin, 3, 0, t + 2_500), speedMps: 0, staying: false, accuracyM: 12 }), 'keep');
   assert.equal(trailDecision(origin, { ...offset(origin, 15, 0, t + 10_000), speedMps: 1.2, staying: false }), 'keep');
@@ -539,7 +539,7 @@ test('a 5s walk along a bend stays off the straight chord and a continuous run i
     staying: false,
   };
   const withHole = settleTrailPoint(recorded, hole, hole.at).points;
-  assert.equal(trailDrawParts(withHole).some((part) => part.dashed), true);
+  assert.equal(trailDrawParts(withHole).some((part) => part.dashed), false);
 });
 
 test('indoor stay drift is not a dashed zigzag or a records scribble, and a real departure still is', () => {

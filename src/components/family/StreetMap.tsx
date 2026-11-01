@@ -313,20 +313,17 @@ export const StreetMap = forwardRef<StreetMapHandle, {
         pointCount += part.points.length;
         drawn.push(part.points.map((point) => `${point.lat.toFixed(5)},${point.lng.toFixed(5)}`).join(' '));
         const latlngs = part.points.map((point) => [point.lat, point.lng] as [number, number]);
-        const dashed = part.dashed;
         L.polyline(latlngs, {
           ...stroke,
           color: '#ffffff',
-          weight: dashed ? 7 : 9,
+          weight: 9,
           opacity: 0.9,
-          dashArray: dashed ? '6 8' : undefined,
         }).addTo(trailGroup);
         L.polyline(latlngs, {
           ...stroke,
           color: trailColor,
-          weight: dashed ? 4 : 6,
-          opacity: dashed ? 0.85 : 1,
-          dashArray: dashed ? '6 8' : undefined,
+          weight: 6,
+          opacity: 1,
         }).addTo(trailGroup);
       }
       const start = parts[0]?.points[0] ?? trail[0];
