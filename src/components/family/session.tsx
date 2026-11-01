@@ -158,6 +158,7 @@ function fresh(stage: Stage = 'splash'): Session {
     accountVault: null,
     backgroundKeepAlive: false,
     home: null,
+    homeCleared: false,
     inviteCode: String(10000 + Math.floor(Math.random() * 90000)),
     notices: [],
     tab: 'map',
@@ -801,13 +802,14 @@ function reduceSession(state: Session, action: Action): Session {
       return archiveJourneys({
         ...state,
         home: { ...action.home, alertPhone: '' },
+        homeCleared: false,
         phone: state.phone,
         notices: [created, ...state.notices],
         tab: 'map',
       }, Date.now());
     }
     case 'clear-home':
-      return { ...state, home: null };
+      return { ...state, home: null, homeCleared: true };
     case 'add-member': {
       const name = action.name.trim();
       if (name.length < 1) return state;
@@ -1459,7 +1461,7 @@ function reduceSession(state: Session, action: Action): Session {
       const nextVisits = visitsEmpty && action.visits.length
         ? { ...state.visits, ...(cleanVisits({ self: action.visits })) }
         : state.visits;
-      const nextHome = state.home || cleanHome(action.home);
+      const nextHome = state.homeCleared ? state.home : (state.home || cleanHome(action.home));
       if (nextJourneys === state.journeys && nextVisits === state.visits && nextHome === state.home) return state;
       return {
         ...state,

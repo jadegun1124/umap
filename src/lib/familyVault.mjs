@@ -94,8 +94,8 @@ export async function prepareBackup(snapshot, storage, recoveryCode) {
   // empty list replaces the server's sealedHistory. Keep what is already there.
   if (snapshotHistoryEmpty(snapshot)) {
     const kept = keepStoredHistory(snapshot);
-    kept.home = snapshot.home || null;
-    kept.clearHome = !snapshot.home;
+    if (snapshot.home) kept.home = snapshot.home;
+    if (snapshot.homeCleared === true && !snapshot.home) kept.clearHome = true;
     return kept;
   }
   const code = normalizeRecoveryCode(recoveryCode);

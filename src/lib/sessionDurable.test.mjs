@@ -220,7 +220,7 @@ test('an empty journey list still uploads a home', async () => {
   assert.equal(saved.keepHistory, true);
   assert.equal(saved.sealedHistory, undefined);
   assert.equal(saved.home.label, '우리 집');
-  assert.equal(saved.clearHome, false);
+  assert.equal(saved.clearHome, undefined);
 });
 
 test('an empty backup keeps server history instead of sealing an empty list', async () => {
@@ -236,8 +236,18 @@ test('an empty backup keeps server history instead of sealing an empty list', as
   assert.equal(empty.sealedHistory, undefined);
   assert.equal(empty.journeys, undefined);
   assert.equal(empty.visits, undefined);
-  assert.equal(empty.home, null);
-  assert.equal(empty.clearHome, true);
+  assert.equal(empty.home, undefined);
+  assert.equal(empty.clearHome, undefined);
+  const cleared = await prepareBackup({
+    memberId: 'self',
+    profileKey: 'profilekeyAAAAAAAA',
+    journeys: [],
+    visits: [],
+    home: null,
+    homeCleared: true,
+  }, storage, 'ABCD2345EFGH');
+  assert.equal(cleared.clearHome, true);
+  assert.equal(cleared.keepHistory, true);
 });
 
 test('server history can fill an empty phone without a profile wipe', () => {

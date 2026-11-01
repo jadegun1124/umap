@@ -188,6 +188,7 @@ export function snapshotFromSession(state) {
     },
     guardians: Array.isArray(state.guardians) ? state.guardians : [],
     home: state.home || null,
+    ...(state.homeCleared ? { homeCleared: true } : {}),
     journeys: selfJourneys(state.journeys, profile.id),
     visits: selfVisits(state.visits, profile.id),
   };

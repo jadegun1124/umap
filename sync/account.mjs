@@ -311,7 +311,8 @@ export function cleanAccountSnapshot(input, now = Date.now()) {
       visits,
       ...(vault ? { vault } : {}),
       ...(sealedHistory ? { sealedHistory } : {}),
-      ...(keepHistory ? { keepHistory: true, clearHome: !cleanHome(input.home) } : {}),
+      ...(keepHistory ? { keepHistory: true } : {}),
+      ...(keepHistory && input.homeCleared === true && !cleanHome(input.home) ? { clearHome: true } : {}),
       ...(input.dropRecovery === true && vault ? { dropRecovery: true } : {}),
     },
   };
@@ -517,9 +518,12 @@ function mergeSnapshot(record, snapshot, now) {
     next.journeys = snapshot.journeys;
     next.visits = snapshot.visits;
     next.clearHome = false;
-  } else {
-    next.home = snapshot.home || null;
-    next.clearHome = snapshot.clearHome === true || !snapshot.home;
+  } else if (snapshot.clearHome === true) {
+    next.home = null;
+    next.clearHome = true;
+  } else if (snapshot.home) {
+    next.home = snapshot.home;
+    next.clearHome = false;
   }
   if (snapshot.dropRecovery && next.vault) next.recoveryCode = '';
   return next;
