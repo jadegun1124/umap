@@ -268,7 +268,8 @@ public class LocationKeepService {
                 if (!prefs(context).getBoolean("registered", false)) return;
                 Location last;
                 synchronized (LOCK) {
-                    last = lastPublished != null ? new Location(lastPublished) : storedBeat(context);
+                    ensureFilter(context);
+                    last = lastPublished == null ? null : new Location(lastPublished);
                 }
                 if (last != null && anySharing(readConfig(context))) publish(context, last);
             } finally {
@@ -304,26 +305,6 @@ public class LocationKeepService {
         } catch (Exception ignored) {
             /* 이미 없는 알람 */
         }
-    }
-
-    private static void rememberBeat(Context context, Location location) {
-        if (location == null) return;
-        prefs(context).edit()
-            .putLong("beatLatE6", Math.round(location.getLatitude() * 1_000_000d))
-            .putLong("beatLngE6", Math.round(location.getLongitude() * 1_000_000d))
-            .putInt("beatAcc", Math.max(1, Math.round(location.getAccuracy())))
-            .apply();
-    }
-
-    private static Location storedBeat(Context context) {
-        SharedPreferences saved = prefs(context);
-        if (!saved.contains("beatLatE6") || !saved.contains("beatLngE6")) return null;
-        Location location = new Location("heartbeat");
-        location.setLatitude(saved.getLong("beatLatE6", 0) / 1_000_000d);
-        location.setLongitude(saved.getLong("beatLngE6", 0) / 1_000_000d);
-        location.setAccuracy(saved.getInt("beatAcc", 20));
-        location.setTime(System.currentTimeMillis());
-        return location;
     }
 
     private static SharedPreferences prefs(Context context) {
@@ -477,7 +458,10 @@ public class LocationKeepService {
         motionAnchor = null;
         lastSample = null;
         filterLoaded = true;
-        prefs(context).edit().remove("stable").remove("last").remove("lastAt").apply();
+        prefs(context).edit()
+            .remove("stable").remove("last").remove("lastAt")
+            .remove("beatLatE6").remove("beatLngE6").remove("beatAcc")
+            .apply();
     }
 
     private static Location readStoredFix(SharedPreferences stored, String key) {
@@ -575,7 +559,6 @@ public class LocationKeepService {
         }
         lastPublished = new Location(location);
         lastPublishedAt = now;
-        rememberBeat(context, location);
         rememberFilter(context);
         scheduleHeartbeat(context);
         return new Location(location);

@@ -268,6 +268,7 @@ export function choosePlaceLabel(candidates, point) {
       rawName: cleanToken(candidate.name || candidate.building),
       unit,
       inside: footprint && polygonCovers(origin, geometry),
+      residential,
       dongBuilding: residential && Boolean(unit),
       landuseShell: residential && !unit && (RESIDENTIAL_LANDUSE.test(String(candidate.landuse || '')) || (footprint && areaM2 > 20_000)),
       areaM2,
@@ -285,9 +286,13 @@ export function choosePlaceLabel(candidates, point) {
   pool.sort((left, right) => left.distanceM - right.distanceM || left.areaM2 - right.areaM2);
   const winner = pool[0];
   if (!winner) return '';
-  const nearDong = pool
-    .filter((item) => item.dongBuilding && item.distanceM <= winner.distanceM + 30)
-    .sort((left, right) => left.distanceM - right.distanceM)[0];
+  // A complex point with no 동 can sit slightly closer than its own building edge.
+  // A church or station that is actually closer keeps its own name.
+  const nearDong = !winner.dongBuilding && winner.residential
+    ? pool
+      .filter((item) => item.dongBuilding && item.distanceM <= winner.distanceM + 30)
+      .sort((left, right) => left.distanceM - right.distanceM)[0]
+    : null;
   const chosen = nearDong || winner;
   let name = chosen.rawName;
   // 「하계청구아파트」 and 「하계1차청구아파트」 are the same complex. 1차 sits in the middle, so a plain includes() misses it.

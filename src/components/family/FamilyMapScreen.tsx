@@ -123,20 +123,30 @@ export function FamilyMapScreen() {
       return;
     }
     let cancel = false;
-    void umapLocation.status().then((status) => {
-      if (cancel) return;
-      if (!status.running && !status.userStopped) {
-        setKeepHint('위치 유지가 꺼져 있어 가족에게 지금 위치가 가지 않습니다. 앱을 다시 열어 위치 유지를 켜 주세요.');
-        return;
-      }
-      if (status.running && status.batteryUnrestricted === false) {
-        setKeepHint('배터리를 최적화하면 멈춰 있는 동안 위치가 끊깁니다. 눌러서 제한 없음을 켜 주세요.');
-        return;
-      }
-      setKeepHint('');
-    }).catch(() => undefined);
+    const refresh = () => {
+      void umapLocation.status().then((status) => {
+        if (cancel) return;
+        if (!status.running && !status.userStopped) {
+          setKeepHint('위치 유지가 꺼져 있어 가족에게 지금 위치가 가지 않습니다. 앱을 다시 열어 위치 유지를 켜 주세요.');
+          return;
+        }
+        if (status.running && status.batteryUnrestricted === false) {
+          setKeepHint('배터리를 최적화하면 멈춰 있는 동안 위치가 끊깁니다. 눌러서 제한 없음을 켜 주세요.');
+          return;
+        }
+        setKeepHint('');
+      }).catch(() => undefined);
+    };
+    refresh();
+    const timer = window.setInterval(refresh, 20_000);
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') refresh();
+    };
+    document.addEventListener('visibilitychange', onVisible);
     return () => {
       cancel = true;
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisible);
     };
   }, [state.stage]);
   useEffect(() => {

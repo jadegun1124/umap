@@ -392,6 +392,8 @@ test('a pin beside 105동 ranks the building edge ahead of a southern fire stati
   };
   assert.equal(choosePlaceLabel([centroid, station], pin), '노원소방서');
   assert.equal(choosePlaceLabel([centroid, station, dong104, dong105], pin), '하계1차청구아파트 105동');
+  const church = { name: '만나교회', kind: 'poi', lat: pin.lat, lng: pin.lng };
+  assert.equal(choosePlaceLabel([church, dong105], pin), '만나교회');
   const shortDong = { ...dong105, name: '하계청구아파트' };
   const longerShell = {
     name: '하계1차청구아파트',
