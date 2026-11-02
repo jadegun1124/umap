@@ -108,6 +108,14 @@ test('a quiet stay widens from 30s to 60s, and an unclear step uses the 20s brid
   assert.equal(armed.moving, true);
   assert.equal(armed.interval, 2_500);
   assert.equal(armed.recorded, 2);
+  const noisy = replayFixes(policy, [
+    { ...home, at: 0, speedMps: 0 },
+    { ...home, at: 30_000, speedMps: 0 },
+    { ...eastOf(home.lat, home.lng, 2), at: 90_000, speedMps: 0.6 },
+  ]);
+  assert.equal(noisy.stayConfirmed, true);
+  assert.equal(noisy.interval, 60_000);
+  assert.equal(noisy.moving, false);
 });
 
 test('1s ride samples and 2.5s walk samples stay in the stored trail', () => {

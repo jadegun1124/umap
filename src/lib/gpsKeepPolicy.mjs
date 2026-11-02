@@ -122,12 +122,12 @@ function noteMovement(state, policy, fix) {
     state.movingStream = true;
     return true;
   }
-  const quiet = moved < policy.walkDisplaceM && (speed < 0 || speed < 0.35);
-  const hint = !quiet && (speed >= 0.35 || moved >= 4);
+  const quiet = moved < 4;
+  const partial = moved >= 4 && moved < policy.walkDisplaceM;
   if (!state.movingStream) {
     if (state.stillSince === 0) state.stillSince = state.anchor.at;
     if (policy.useStayConfirmed && quiet && dt >= policy.stillProbeMs) state.stayConfirmed = true;
-    state.ambiguous = policy.useAmbiguous ? hint : false;
+    state.ambiguous = policy.useAmbiguous ? partial && !state.stayConfirmed : false;
     if (dt >= policy.movingHoldMs && moved < policy.walkDisplaceM) state.anchor = { ...fix };
     return false;
   }

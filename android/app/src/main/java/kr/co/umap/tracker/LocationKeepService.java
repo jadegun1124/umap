@@ -697,12 +697,14 @@ public class LocationKeepService {
             movingStream = true;
             return true;
         }
-        boolean quiet = moved < WALK_DISPLACE_M && (speed < 0f || speed < 0.35f);
-        boolean hint = !quiet && (speed >= 0.35f || moved >= 4f);
+        // A parked phone often reports a walking speed with almost no movement.
+        // That badge must not hold the 20s bridge after the stay is confirmed.
+        boolean quiet = moved < 4f;
+        boolean partial = moved >= 4f && moved < WALK_DISPLACE_M;
         if (!movingStream) {
             if (stillSinceMs == 0L) stillSinceMs = anchorAt;
             if (quiet && dt >= GPS_STILL_PROBE_MS) stayConfirmed = true;
-            ambiguousMotion = hint;
+            ambiguousMotion = partial && !stayConfirmed;
             if (dt >= MOVING_HOLD_MS && moved < WALK_DISPLACE_M) {
                 motionAnchor = new Location(fix);
                 motionAnchor.setTime(fixAt);

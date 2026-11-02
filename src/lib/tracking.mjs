@@ -845,10 +845,12 @@ function movingHeadingJitter(points, point) {
   if (!pace || pace.dt < 800) return false;
   const reported = pointSpeed(point);
   const agrees = reported != null && reported >= 0.5 && reported <= 3 && Math.abs(reported - pace.speed) <= 0.8;
-  if (agrees && pace.moved >= 2.5 && pace.moved <= 8 && pace.dt <= 8_000 && turn <= 120) return false;
+  const groundWalk = pace.speed >= 0.5 && pace.speed <= 3 && pace.moved >= 2.5 && pace.moved <= 8 && pace.dt <= 8_000;
+  const quietBadge = reported == null || reported === 0;
+  if (turn <= 120 && groundWalk && (agrees || quietBadge)) return false;
   const accuracy = Math.max(positiveMeters(point.accuracyM), positiveMeters(tip.accuracyM));
   const insideError = pace.moved <= Math.max(6, accuracy * 0.5);
-  if (insideError && turn >= 70 && !agrees) return true;
+  if (insideError && turn >= 70 && !agrees && !quietBadge) return true;
   return false;
 }
 
