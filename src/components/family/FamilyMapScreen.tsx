@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Bell, ChevronLeft, ChevronRight, Copy, Home, LocateFixed, MapPin, Menu, Plus, Route, Settings, UserPlus, X } from 'lucide-react';
-import { APP_VERSION_NAME, currentAppVersionLabel } from '../../lib/appRelease.mjs';
+import { APP_VERSION_CODE, APP_VERSION_NAME, currentAppVersionLabel } from '../../lib/appRelease.mjs';
 import { looksLikePhone, localProfile } from '../../lib/localProfile.mjs';
 import { KAKAO_SETUP_MESSAGE } from '../../lib/kakaoAuth.mjs';
 import { NAVER_SETUP_MESSAGE } from '../../lib/naverAuth.mjs';
@@ -101,6 +101,7 @@ export function FamilyMapScreen() {
   const [guideBusy, setGuideBusy] = useState(false);
   const [guideHintHidden, setGuideHintHidden] = useState(() => readSessionFlag(ALWAYS_GUIDE_DISMISSED_KEY));
   const [keepHint, setKeepHint] = useState<{ text: string; action: 'start' | 'always' | 'battery' } | null>(null);
+  const [keepLive, setKeepLive] = useState<{ battery: boolean | null; running: boolean; location: string }>({ battery: null, running: false, location: '' });
   const [profileOpen, setProfileOpen] = useState(false);
   const [recordId, setRecordId] = useState<string | null>(null);
   const [managedSettings, setManagedSettings] = useState(false);
@@ -128,13 +129,19 @@ export function FamilyMapScreen() {
     const refresh = () => {
       void umapLocation.status().then((status) => {
         if (cancel) return;
+        const location = status.location || state.permissions.locationMode || 'unknown';
+        setKeepLive({
+          battery: status.batteryUnrestricted === false ? false : status.batteryUnrestricted === true ? true : null,
+          running: status.running === true,
+          location,
+        });
         setKeepHint(keepBanner({
           native: true,
           onMap: true,
           serviceRunning: status.running,
           userStopped: status.userStopped,
           keepAlive: state.backgroundKeepAlive,
-          locationMode: state.permissions.locationMode,
+          locationMode: location,
           batteryUnrestricted: status.batteryUnrestricted,
           reason: status.reason || '',
         }));
@@ -142,17 +149,22 @@ export function FamilyMapScreen() {
           APP_VERSION_NAME,
           state.backgroundKeepAlive ? 'on' : 'off',
           status.running ? 'yes' : 'no',
-          state.permissions.locationMode || 'unknown',
+          location,
           status.batteryUnrestricted === false ? 'restricted' : 'open',
         ].join('|');
         if (row === noted) return;
         noted = row;
+        if (status.location && status.location !== state.permissions.locationMode) {
+          familyRef.current.noteLocation(status.location, status.precise === false ? 'approximate' : 'precise');
+        }
         noteDiag({
           kind: 'keep',
-          version: APP_VERSION_NAME,
+          version: status.versionName || APP_VERSION_NAME,
+          code: typeof status.versionCode === 'number' ? status.versionCode : APP_VERSION_CODE,
           keep: state.backgroundKeepAlive ? 'on' : 'off',
           running: status.running ? 'yes' : 'no',
-          location: state.permissions.locationMode || 'unknown',
+          location,
+          precise: status.precise === false ? 'coarse' : 'fine',
           battery: status.batteryUnrestricted === false ? 'restricted' : 'open',
         });
       }).catch(() => undefined);
@@ -1494,9 +1506,11 @@ export function FamilyMapScreen() {
             <LocationConsentRow />
             <div className="mt-3">
               <AlwaysAllowNotice
-                locationMode={state.permissions.locationMode}
+                locationMode={keepLive.location === 'always' || keepLive.location === 'while-using' || keepLive.location === 'denied' ? keepLive.location : state.permissions.locationMode}
                 keepAlive={state.backgroundKeepAlive}
                 native={tracking.native}
+                batteryUnrestricted={keepLive.battery}
+                serviceRunning={keepLive.running}
                 note={settingsNote}
                 onOpenSettings={openLocationSettings}
                 onShowGuide={openLocationSettings}
@@ -2578,7 +2592,7 @@ function KeepNoticeSheet({
         <p className="mt-2 text-sm leading-6 text-slate-600">
           {mode === 'permission'
             ? '알림 권한은 SOS, 집 반경, 움직임 시작·멈춤, 새 대화에 씁니다. 허용을 누르면 알림 창이 열립니다. 위치 공유 중에는 알림 목록에 Kinnex 카드가 나오지 않습니다. 앱이 혼자 켜지 않습니다. 전화번호는 쓰지 않습니다.'
-            : '켜면 앱을 닫아도 위치를 보냅니다. 걷는 동안만 촘촘히 받고, 한곳에 머물면 2분에서 5분으로 줄입니다. 알림 목록에 Kinnex 카드는 나오지 않습니다. 배터리 제한이 없으면 그 간격을 더 잘 지킵니다. 앱이 혼자 켜지 않습니다.'}
+            : '켜면 앱을 닫아도 위치를 보냅니다. 걷는 동안은 2.5초, 차나 자전거는 1초마다 기록합니다. 머무는 동안은 30초에서 1분마다 움직임만 확인하고, 7분이 넘으면 1분(최대 2분)입니다. 그 확인은 궤적에 점을 남기지 않습니다. 알림 목록에 Kinnex 카드는 나오지 않습니다. 배터리 제한이 없으면 그 간격을 더 잘 지킵니다. 앱이 혼자 켜지 않습니다.'}
         </p>
         {note && <p className="mt-3 text-sm leading-6 text-amber-800">{note}</p>}
         <button type="button" disabled={busy} onClick={onPrimary} className="mt-4 w-full rounded-full bg-[#0084FF] py-3.5 font-bold text-white disabled:opacity-40">

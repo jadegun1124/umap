@@ -69,7 +69,7 @@ async function ledgerId(accounts, memberId) {
 }
 
 async function register(accounts, memberId = 'local-restore1', code = '48291') {
-  const created = await accountCall(accounts, 'POST', '/v1/account', { body: snapshot(memberId, code) });
+  const created = await accountCall(accounts, 'POST', '/v1/account', { body: snapshot(memberId, code), now: AT });
   assert.equal(created.status, 200);
   return created.body.account;
 }

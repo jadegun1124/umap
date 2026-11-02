@@ -363,7 +363,11 @@ export function isRideStep(last, point) {
   if (!pace || !(pace.speed >= 0) || pace.speed > FIX_MAX_JUMP_MPS) return false;
   const reported = pointSpeed(point);
   if (reported != null && reported >= TRAIL_RIDE_MIN_MPS) {
-    return pace.moved >= TRAIL_RIDE_MIN_STEP_M
+    // A 1s ride fix is about 2–8m. The 8m gate kept only every few of those samples.
+    const shortRide = pace.dt <= 1_500;
+    const minStep = shortRide ? 1.5 : TRAIL_RIDE_MIN_STEP_M;
+    if (shortRide && pace.speed < TRAIL_RIDE_MIN_MPS) return false;
+    return pace.moved >= minStep
       && pace.dt >= 800
       && pace.speed >= TRAIL_RIDE_MIN_MPS * 0.45;
   }
@@ -824,8 +828,35 @@ export function walkLeavesStay(points, point) {
   return departsOnFoot(points, point);
 }
 
+/**
+ * A moving sample that disagrees with the heading, inside its own accuracy.
+ * A consistent walk step, including a real corner, stays. A stay departure
+ * is decided earlier and is not this.
+ */
+function movingHeadingJitter(points, point) {
+  if (!point || point.stayEnd) return false;
+  const tip = drawnAnchor(points);
+  const prev = previousVertex(points);
+  if (!tip || !prev) return false;
+  if (isVehicleStep(tip, point) || isRideStep(tip, point)) return false;
+  const turn = Math.abs(signedTurnDeg(prev, tip, point));
+  if (!Number.isFinite(turn) || turn < 70) return false;
+  const pace = stepPace(tip, point);
+  if (!pace || pace.dt < 800) return false;
+  const reported = pointSpeed(point);
+  const agrees = reported != null && reported >= 0.5 && reported <= 3 && Math.abs(reported - pace.speed) <= 0.8;
+  const groundWalk = pace.speed >= 0.5 && pace.speed <= 3 && pace.moved >= 2.5 && pace.moved <= 8 && pace.dt <= 8_000;
+  const quietBadge = reported == null || reported < 0.4;
+  if (turn <= 120 && groundWalk && (agrees || quietBadge)) return false;
+  const accuracy = Math.max(positiveMeters(point.accuracyM), positiveMeters(tip.accuracyM));
+  const insideError = pace.moved <= Math.max(6, accuracy * 0.5);
+  if (insideError && turn >= 70 && !agrees && !quietBadge) return true;
+  return false;
+}
+
 function resolvedTrailDecision(points, point) {
   if (departsOnFoot(points, point)) return 'keep';
+  if (movingHeadingJitter(points, point)) return 'snap';
   const anchor = drawnAnchor(Array.isArray(points) ? points : []);
   const decision = trailDecision(anchor, point);
   if (decision === 'keep' && indoorStayDrift(points, point)) return 'snap';

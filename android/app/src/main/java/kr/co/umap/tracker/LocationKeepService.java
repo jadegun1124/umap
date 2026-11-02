@@ -50,18 +50,18 @@ import org.json.JSONObject;
  * stale pin. A fresh precise fix still wins over a coarser one.
  * Coordinates are the real fix. The live pin's stay bubble is applied in JS.
  * Keep-alive is not a continuous GNSS stream. A walk requests GPS every
- * 2.5s once the step is clear (about 12m at walking pace, or a reported speed
- * with real displacement). A bike or vehicle (about 7 km/h, 8m when speed is
- * reported, 18m when it is not) requests every 1s so the line stays dense.
- * A short light does not drop
- * a walk: the stream stays dense until the phone has barely moved for 45s.
- * After a ride, a stop holds 12s fixes for 3 minutes so the next departure is
- * not a 20s hole. It does not stay at 2.5s while parked. A confirmed stay is
- * then 2 minutes, and 5 minutes after 7 minutes still — the same moment a
- * journey card is archived. The first request, and every fresh process,
- * starts at 2 minutes. Family HTTP is separate: at most every 8s or 25m while
- * moving, and every 2 minutes while still. The local trail still receives
- * every accepted fix.
+ * 2.5s once the step is clear (about 8m at a walking pace, or a reported
+ * speed with real displacement) and switches to that stream on the detecting
+ * fix. A bike or vehicle (about 7 km/h) requests every 1s. Those moving fixes
+ * are the recorded trail. The 8s/25m family publish gap does not drop them.
+ * A short light does not drop a walk: the stream stays dense until the phone
+ * has barely moved for 45s. An inconclusive step uses a 20s bridge instead of
+ * the stay interval. After a ride, a stop holds 12s fixes for 3 minutes.
+ * A stay asks for a fix after 30s, then every 60s, and still every 60s after
+ * 7 minutes. Nothing here asks slower than 120s. Those stay fixes only detect
+ * movement: they are not emitted, so the pin and the trail stay on one point.
+ * The first request starts at 30s. Battery cost of the shorter stay checks
+ * is not measured on a device.
  */
 public class LocationKeepService {
     public static final String ACTION_FIX = "kr.co.umap.tracker.LOCATION_FIX";
@@ -86,15 +86,28 @@ public class LocationKeepService {
     private static final long GPS_MOVING_MS = 2_500L;
     /** Bike and vehicle. Denser than a walk, still above a same-second provider burst. */
     private static final long GPS_RIDE_MS = 1_000L;
-    /** Confirmed stay, and the interval keep-alive uses before a walk is clear. */
-    private static final long GPS_STILL_MS = 120_000L;
-    /** After 7 minutes still, matching JOURNEY_STAY_MS. */
-    private static final long GPS_STILL_LONG_MS = 300_000L;
+    /** First stay check. The next quiet check widens the request. */
+    private static final long GPS_STILL_PROBE_MS = 30_000L;
+    /** Confirmed stay, including after 7 minutes. */
+    private static final long GPS_STILL_MS = 60_000L;
+    /** After 7 minutes still. Same pace as a confirmed stay; the cap is the ceiling. */
+    private static final long GPS_STILL_LONG_MS = 60_000L;
+    /** No stay request is slower than this. */
+    private static final long GPS_STILL_MAX_MS = 120_000L;
     private static final long STILL_LONG_AFTER_MS = 7 * 60_000L;
+    /**
+     * Not a clear walk and not a quiet stay. Faster than the stay check,
+     * slower than 2.5s. Inside the 15–30s bridge.
+     */
+    private static final long GPS_AMBIGUOUS_MS = 20_000L;
     /** Hold 2.5s through a short light. A real stop is most of a minute. */
     private static final long MOVING_HOLD_MS = 45_000L;
-    private static final float WALK_DISPLACE_M = 12f;
-    private static final long WALK_DISPLACE_MS = 4_000L;
+    /** A shorter step than 1.51, so a still probe can arm 2.5s on this fix. */
+    private static final float WALK_DISPLACE_M = 8f;
+    private static final long WALK_DISPLACE_MS = 2_000L;
+    /** A 30s, 60s, or 120s stay probe can still be the step that arms the walk. */
+    private static final long WALK_PACE_MAX_MS = 120_000L;
+    private static final float WALK_IMPLIED_MIN_MPS = 0.6f;
     /** 7 km/h. Same cut as MODE_WALK_MAX_KMH / TRAIL_RIDE_MIN_MPS. */
     private static final float RIDE_MIN_MPS = 7f / 3.6f;
     /** Reported ride speed with this much real movement. Matches TRAIL_RIDE_MIN_STEP_M. */
@@ -107,19 +120,28 @@ public class LocationKeepService {
      */
     private static final long RIDE_BRIDGE_MS = 12_000L;
     private static final long RIDE_BRIDGE_FOR_MS = 3 * 60_000L;
-    /** Drop a second provider's burst. 2.5s GPS fixes sit outside this window. */
-    private static final long SAMPLE_GAP_MS = 1_200L;
+    /** Drop a second provider's burst. 1s ride fixes and 2.5s walk fixes sit outside this window. */
+    private static final long SAMPLE_GAP_MS = 800L;
     /** Family server. Local emit() is not throttled by these. */
     private static final long PUBLISH_MOVING_MS = 8_000L;
     private static final long PUBLISH_STILL_MS = 120_000L;
     /** Fresher than the 10 minute family stale window, even when GPS is quiet. */
     private static final long HEARTBEAT_MS = 3 * 60 * 1000L;
+    /** No accepted fix for this long, with permission still granted, re-registers GPS. */
+    private static final long WATCHDOG_QUIET_MS = 3 * 60 * 1000L;
+    private static volatile boolean starting = false;
     private static final int HEARTBEAT_CODE = REQUEST_CODE + 1;
     private static final float PUBLISH_MOVING_M = 25f;
-    private static long requestedGpsMs = GPS_STILL_MS;
+    private static long requestedGpsMs = GPS_STILL_PROBE_MS;
     private static long stillSinceMs = 0;
     private static long lastRideAt = 0L;
     private static boolean movingStream = false;
+    /** Quiet long enough that the next stay request may widen past the 30s probe. */
+    private static boolean stayConfirmed = false;
+    /** A hint of movement that has not armed the 2.5s stream. */
+    private static boolean ambiguousMotion = false;
+    /** The first accepted fix is the stay anchor. Later still probes are not. */
+    private static boolean anchorRecorded = false;
     private static boolean updatesRegistered = false;
     private static String registeredConfig = "";
     private static long lastSampleAt = 0;
@@ -150,6 +172,16 @@ public class LocationKeepService {
     }
 
     public static boolean start(Context context, String configJson) {
+        if (starting) return isRunning(context);
+        starting = true;
+        try {
+            return startHolding(context, configJson);
+        } finally {
+            starting = false;
+        }
+    }
+
+    private static boolean startHolding(Context context, String configJson) {
         attach(context);
         OngoingNotificationCleanup.clear(context);
         String incoming;
@@ -199,6 +231,7 @@ public class LocationKeepService {
         }
         if (!anySharing(config)) IO.execute(() -> publish(context, null));
         else scheduleHeartbeat(context);
+        LocationKeepProcess.hold(context);
         return true;
     }
 
@@ -211,6 +244,7 @@ public class LocationKeepService {
             cancelHeartbeat(context);
         }
         OngoingNotificationCleanup.clear(context);
+        LocationKeepProcess.release(context);
     }
 
     public static void markUserStopped(Context context) {
@@ -220,6 +254,7 @@ public class LocationKeepService {
             removeUpdates(context);
             cancelHeartbeat(context);
         }
+        LocationKeepProcess.release(context);
     }
 
     public static void ackUserStopped(Context context) {
@@ -287,6 +322,16 @@ public class LocationKeepService {
                 Location last;
                 synchronized (LOCK) {
                     ensureFilter(context);
+                    long quiet = lastSampleAt <= 0L ? Long.MAX_VALUE : System.currentTimeMillis() - lastSampleAt;
+                    long due = Math.max(requestedGpsMs * 2L + 15_000L, 45_000L);
+                    JSONObject config = readConfig(context);
+                    boolean granted = hasLocationPermission(context);
+                    if (granted && quiet >= WATCHDOG_QUIET_MS && anySharing(config)) {
+                        registerUpdates(context, config);
+                        LocationKeepProcess.hold(context);
+                    } else if (quiet > due && anySharing(config)) {
+                        registerUpdates(context, config);
+                    }
                     last = lastPublished == null ? null : new Location(lastPublished);
                 }
                 if (last != null && anySharing(readConfig(context))) publish(context, last);
@@ -303,6 +348,11 @@ public class LocationKeepService {
         int flags = android.app.PendingIntent.FLAG_UPDATE_CURRENT;
         if (Build.VERSION.SDK_INT >= 31) flags |= android.app.PendingIntent.FLAG_IMMUTABLE;
         return android.app.PendingIntent.getBroadcast(context, HEARTBEAT_CODE, intent, flags);
+    }
+
+    /** Alarm that wakes the process when GPS has gone quiet. */
+    public static void ensureWatchdog(Context context) {
+        scheduleHeartbeat(context);
     }
 
     private static void scheduleHeartbeat(Context context) {
@@ -394,7 +444,7 @@ public class LocationKeepService {
             /* GPS 하드웨어가 없거나 권한이 없는 경우 */
         }
         if (!gpsOn) {
-            long networkMs = Math.max(gpsMs, GPS_STILL_MS);
+            long networkMs = movingStream ? gpsMs : Math.max(gpsMs, GPS_STILL_PROBE_MS);
             try {
                 if (locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
                     locationManager.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, networkMs, 0f, pending);
@@ -468,10 +518,13 @@ public class LocationKeepService {
         stableFix = null;
         lastPublished = null;
         lastPublishedAt = 0L;
-        requestedGpsMs = GPS_STILL_MS;
+        requestedGpsMs = GPS_STILL_PROBE_MS;
         stillSinceMs = 0L;
         lastRideAt = 0L;
         movingStream = false;
+        stayConfirmed = false;
+        ambiguousMotion = false;
+        anchorRecorded = false;
         lastSampleAt = 0L;
         motionAnchor = null;
         lastSample = null;
@@ -564,6 +617,11 @@ public class LocationKeepService {
         }
         lastSample = new Location(location);
         lastSampleAt = now;
+        if (!recordFix(moving)) {
+            rememberFilter(context);
+            scheduleHeartbeat(context);
+            return null;
+        }
         emit(location, fixAt);
         if (lastPublishedAt > 0) {
             long since = now - lastPublishedAt;
@@ -594,8 +652,8 @@ public class LocationKeepService {
     }
 
     /**
-     * True only while the 2.5s stream should stay on.
-     * Ambiguous fixes, a lone speed, and a 2s jump stay on the slow interval.
+     * True only while the 2.5s or 1s stream should stay on.
+     * A still probe that has actually walked arms that stream on this fix.
      */
     private static boolean noteMovement(Location fix, long fixAt) {
         float speed = fix.hasSpeed() ? fix.getSpeed() : -1f;
@@ -603,9 +661,11 @@ public class LocationKeepService {
             motionAnchor = new Location(fix);
             motionAnchor.setTime(fixAt);
             stillSinceMs = fixAt;
+            stayConfirmed = false;
+            ambiguousMotion = false;
             float opening = fix.hasSpeed() ? fix.getSpeed() : -1f;
             // Already at about 30 km/h: start the 1s stream on this fix so the
-            // drive does not wait out a 2 minute hole before the next sample.
+            // drive does not wait out a stay probe before the next sample.
             if (opening >= 8f) {
                 lastRideAt = fixAt;
                 stillSinceMs = 0L;
@@ -620,12 +680,11 @@ public class LocationKeepService {
         if (dt < 0) dt = 0;
         float moved = motionAnchor.distanceTo(fix);
         float implied = dt > 0 ? moved / (dt / 1000f) : 0f;
-        boolean pacedWalk = dt >= WALK_DISPLACE_MS && dt <= 20_000L && moved >= WALK_DISPLACE_M && implied >= 0.75f && implied <= 12f;
-        boolean pacedTrip = dt > 20_000L && moved >= WALK_DISPLACE_M && implied >= 0.75f && implied <= 45f;
-        boolean reported = speed >= 0.8f && moved >= 8f && dt >= WALK_DISPLACE_MS && dt <= 20_000L;
-        // Above a walk, the 4–20s window used to ignore anything faster than 12 m/s
-        // unless a speed was reported inside that same window. A car then stayed on
-        // the 2 minute request and the trail became one dashed chord.
+        boolean pacedWalk = dt >= WALK_DISPLACE_MS && dt <= WALK_PACE_MAX_MS && moved >= WALK_DISPLACE_M && implied >= WALK_IMPLIED_MIN_MPS && implied <= 12f;
+        boolean pacedTrip = dt > WALK_PACE_MAX_MS && moved >= WALK_DISPLACE_M && implied >= WALK_IMPLIED_MIN_MPS && implied <= 45f;
+        boolean reported = speed >= WALK_IMPLIED_MIN_MPS && moved >= 5f && implied >= 0.45f && dt >= WALK_DISPLACE_MS && dt <= WALK_PACE_MAX_MS;
+        // Above a walk, a car used to stay on the slow request and the trail
+        // became one chord. A reported ride, or a fast gap with no speed, arms 1s.
         boolean rideReported = speed >= RIDE_MIN_MPS && moved >= RIDE_STEP_M && dt >= 1_000L && dt <= 30_000L && implied >= RIDE_MIN_MPS * 0.45f;
         boolean rideImplied = speed < 0f && dt >= 2_500L && dt <= 180_000L && moved >= RIDE_STAY_STEP_M && implied > 2.4f && implied <= 45f;
         if (pacedWalk || pacedTrip || reported || rideReported || rideImplied) {
@@ -633,11 +692,19 @@ public class LocationKeepService {
             motionAnchor = new Location(fix);
             motionAnchor.setTime(fixAt);
             stillSinceMs = 0L;
+            stayConfirmed = false;
+            ambiguousMotion = false;
             movingStream = true;
             return true;
         }
+        // A parked phone often reports a walking speed with almost no movement.
+        // That badge must not hold the 20s bridge after the stay is confirmed.
+        boolean quiet = moved < 4f;
+        boolean partial = moved >= 4f && moved < WALK_DISPLACE_M;
         if (!movingStream) {
             if (stillSinceMs == 0L) stillSinceMs = anchorAt;
+            if (quiet && dt >= GPS_STILL_PROBE_MS) stayConfirmed = true;
+            ambiguousMotion = partial && !stayConfirmed;
             if (dt >= MOVING_HOLD_MS && moved < WALK_DISPLACE_M) {
                 motionAnchor = new Location(fix);
                 motionAnchor.setTime(fixAt);
@@ -649,11 +716,23 @@ public class LocationKeepService {
         if (littleDrift || settled) {
             if (stillSinceMs == 0L) stillSinceMs = anchorAt;
             movingStream = false;
+            stayConfirmed = false;
+            ambiguousMotion = false;
             motionAnchor = new Location(fix);
             motionAnchor.setTime(fixAt);
             return false;
         }
+        ambiguousMotion = false;
         return true;
+    }
+
+    /** The opening fix is stored. A later stay probe is not a trail point. */
+    private static boolean recordFix(boolean moving) {
+        if (!anchorRecorded) {
+            anchorRecorded = true;
+            return true;
+        }
+        return moving;
     }
 
     private static long gpsInterval(boolean moving, long now) {
@@ -661,10 +740,14 @@ public class LocationKeepService {
             if (lastRideAt > 0L && now - lastRideAt <= MOVING_HOLD_MS) return GPS_RIDE_MS;
             return GPS_MOVING_MS;
         }
-        long stillFor = stillSinceMs > 0L ? Math.max(0L, now - stillSinceMs) : 0L;
-        if (stillFor >= STILL_LONG_AFTER_MS) return GPS_STILL_LONG_MS;
         if (lastRideAt > 0L && now - lastRideAt < RIDE_BRIDGE_FOR_MS) return RIDE_BRIDGE_MS;
-        return GPS_STILL_MS;
+        if (ambiguousMotion && !stayConfirmed) return GPS_AMBIGUOUS_MS;
+        long stillFor = stillSinceMs > 0L ? Math.max(0L, now - stillSinceMs) : 0L;
+        long interval = GPS_STILL_PROBE_MS;
+        if (stayConfirmed && stillFor >= STILL_LONG_AFTER_MS) interval = GPS_STILL_LONG_MS;
+        else if (stayConfirmed) interval = GPS_STILL_MS;
+        if (interval > GPS_STILL_MAX_MS) interval = GPS_STILL_MAX_MS;
+        return interval;
     }
 
     private static void emit(Location location, long fixAt) {
