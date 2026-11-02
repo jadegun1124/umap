@@ -105,6 +105,17 @@ function json(data, status = 200) {
   });
 }
 
+// Workers Free SQLite Durable Objects allow 100,000 rows written per day.
+// The counter resets at 00:00 UTC, which is 09:00 in Korea.
+export const STORAGE_QUOTA_MESSAGE = '위치 서버의 오늘 저장 한도를 넘었습니다. 오전 9시 이후에 다시 시도해 주세요.';
+
+export function storageQuotaResponse(error) {
+  const cause = error && error.cause && error.cause.message ? error.cause.message : '';
+  const text = `${error && error.message ? error.message : ''} ${cause}`;
+  if (!/exceeded allowed rows (?:written|read)|durable objects free tier/i.test(text)) return null;
+  return json({ error: 'quota', message: STORAGE_QUOTA_MESSAGE }, 503);
+}
+
 export function withCors(response) {
   const headers = new Headers(response.headers);
   headers.set('access-control-allow-origin', '*');

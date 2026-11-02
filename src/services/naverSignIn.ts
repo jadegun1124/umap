@@ -1,5 +1,5 @@
 import { Capacitor, registerPlugin } from '@capacitor/core';
-import { NAVER_APP_REDIRECT, NAVER_CANCEL_MESSAGE, NAVER_SETUP_MESSAGE, NAVER_VERIFY_MESSAGE, naverClientIdOrPublic, naverRedirectUri } from '../lib/naverAuth.mjs';
+import { NAVER_APP_REDIRECT, NAVER_CANCEL_MESSAGE, NAVER_NATIVE_FAILED_MESSAGE, NAVER_SERVER_MISSING_MESSAGE, NAVER_SERVER_UNREACHABLE_MESSAGE, NAVER_SETUP_MESSAGE, NAVER_VERIFY_MESSAGE, naverClientIdOrPublic, naverRedirectUri } from '../lib/naverAuth.mjs';
 import { localProfile } from '../lib/localProfile.mjs';
 import { restoredProfile } from '../lib/accountRestore.mjs';
 import { ACCOUNT_UNLINKED_MESSAGE } from '../lib/accountRestore.mjs';
@@ -93,7 +93,7 @@ export async function signInWithNaver(
 ): Promise<ProviderSignInResult> {
   const clientId = configuredNaverClientId();
   if (!clientId) return { ok: false, message: NAVER_SETUP_MESSAGE };
-  if (!familySyncUrl()) return { ok: false, message: NAVER_VERIFY_MESSAGE };
+  if (!familySyncUrl()) return { ok: false, message: NAVER_SERVER_MISSING_MESSAGE };
   let code = '';
   let state = '';
   let accessToken = '';
@@ -103,11 +103,12 @@ export async function signInWithNaver(
     if (!result.ok) {
       if (result.error === 'missing-client') return { ok: false, message: NAVER_SETUP_MESSAGE };
       if (result.error === 'canceled') return { ok: false, message: NAVER_CANCEL_MESSAGE };
-      return { ok: false, message: NAVER_VERIFY_MESSAGE };
+      return { ok: false, message: NAVER_NATIVE_FAILED_MESSAGE };
     }
     code = result.code || '';
     state = result.state || '';
     accessToken = result.accessToken || '';
+    if (!code && !accessToken) return { ok: false, message: NAVER_VERIFY_MESSAGE };
   } else {
     redirectUri = naverRedirectUri();
     try {
@@ -116,12 +117,13 @@ export async function signInWithNaver(
       state = granted.state;
     } catch (error) {
       const message = error instanceof Error ? error.message : '';
-      return { ok: false, message: message === 'canceled' ? NAVER_CANCEL_MESSAGE : NAVER_VERIFY_MESSAGE };
+      if (message === 'canceled') return { ok: false, message: NAVER_CANCEL_MESSAGE };
+      return { ok: false, message: NAVER_NATIVE_FAILED_MESSAGE };
     }
   }
   const linked = await linkNaverAccount({ accessToken, code, state, redirectUri }, snapshot, options.mode || 'login').catch(() => ({
     ok: false as const,
-    message: NAVER_VERIFY_MESSAGE,
+    message: NAVER_SERVER_UNREACHABLE_MESSAGE,
   }));
   if (!linked.ok || !linked.account) return { ok: false, message: linked.message || NAVER_VERIFY_MESSAGE };
   if (options.mode === 'link' && linked.account.naverLinked !== true) {

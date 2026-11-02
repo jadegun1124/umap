@@ -1,6 +1,6 @@
 import { PUBLIC_NAVER_CLIENT_ID } from '../src/lib/naverAuth.mjs';
 import { createMemoryAccountStore, handleAccountOperation } from './account.mjs';
-import { applyAlert, applyDirectMessage, applySubscription, alertPushPayload, chatPushPayload, commitKeys, commitPlace, commitProfile, commitTrail, emptyRoom, memberRoomToken, parseOperation, planForgetMember, pushesForAlert, pushesForChat, removeSubscriptions, viewDirectMessages, viewFamilyPlaces, viewMyThreads, viewRoom, withCors } from './protocol.mjs';
+import { applyAlert, applyDirectMessage, applySubscription, alertPushPayload, chatPushPayload, commitKeys, commitPlace, commitProfile, commitTrail, emptyRoom, memberRoomToken, parseOperation, planForgetMember, pushesForAlert, pushesForChat, removeSubscriptions, storageQuotaResponse, viewDirectMessages, viewFamilyPlaces, viewMyThreads, viewRoom, withCors } from './protocol.mjs';
 import { createVapidKeys, sendWebPush } from './webpush.mjs';
 
 // One Durable Object per family room. The id is a hash of the invite code,
@@ -12,6 +12,16 @@ export class FamilyRoom {
   }
 
   async fetch(request) {
+    try {
+      return await this.perform(request);
+    } catch (error) {
+      const limited = storageQuotaResponse(error);
+      if (limited) return limited;
+      throw error;
+    }
+  }
+
+  async perform(request) {
     const op = await request.json();
     if (op.kind === 'vapid') {
       let keys = await this.ctx.storage.get('vapid');
@@ -192,14 +202,20 @@ export class FamilyAccount {
   }
 
   async fetch(request) {
-    const body = await request.json();
-    const env = this.env || {};
-    return handleAccountOperation(durableAccountStore(this.ctx.storage), body.op, {
-      ...accountRuntimeOptions(env),
-      naverClientId: body.naverClientId || env.NAVER_CLIENT_ID || PUBLIC_NAVER_CLIENT_ID,
-      naverClientSecret: body.naverClientSecret || env.NAVER_CLIENT_SECRET || '',
-      now: body.now,
-    });
+    try {
+      const body = await request.json();
+      const env = this.env || {};
+      return await handleAccountOperation(durableAccountStore(this.ctx.storage), body.op, {
+        ...accountRuntimeOptions(env),
+        naverClientId: body.naverClientId || env.NAVER_CLIENT_ID || PUBLIC_NAVER_CLIENT_ID,
+        naverClientSecret: body.naverClientSecret || env.NAVER_CLIENT_SECRET || '',
+        now: body.now,
+      });
+    } catch (error) {
+      const limited = storageQuotaResponse(error);
+      if (limited) return limited;
+      throw error;
+    }
   }
 }
 
@@ -319,23 +335,36 @@ export default {
       if (!accounts) {
         return withCors(await handleAccountOperation(createMemoryAccountStore(), op, accountRuntimeOptions(env)));
       }
-      const response = await accounts.fetch('https://account.internal/op', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          op,
-          naverClientId: env.NAVER_CLIENT_ID || PUBLIC_NAVER_CLIENT_ID,
-          naverClientSecret: env.NAVER_CLIENT_SECRET || '',
-        }),
-      });
-      return withCors(response);
+      try {
+        const response = await accounts.fetch('https://account.internal/op', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            op,
+            naverClientId: env.NAVER_CLIENT_ID || PUBLIC_NAVER_CLIENT_ID,
+            naverClientSecret: env.NAVER_CLIENT_SECRET || '',
+          }),
+        });
+        return withCors(response);
+      } catch (error) {
+        const limited = storageQuotaResponse(error);
+        if (limited) return withCors(limited);
+        throw error;
+      }
     }
     const stub = env.FAMILY_ROOM.get(env.FAMILY_ROOM.idFromName(op.token));
-    const response = await stub.fetch('https://room.internal/op', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(op),
-    });
+    let response;
+    try {
+      response = await stub.fetch('https://room.internal/op', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(op),
+      });
+    } catch (error) {
+      const limited = storageQuotaResponse(error);
+      if (limited) return withCors(limited);
+      throw error;
+    }
     if (op.kind === 'place' || op.kind === 'trail' || op.kind === 'family' || op.kind === 'get') {
       const data = await response.json();
       await noteHandling(env, op, data).catch(() => undefined);

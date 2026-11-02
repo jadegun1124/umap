@@ -12,7 +12,7 @@ import type { SharedPlace, SharedProfile } from './familyShare';
 
 const KEY_PART = /^[A-Za-z0-9_-]{16,64}$/;
 
-export type SyncPhase = 'off' | 'connecting' | 'live' | 'down' | 'rejected';
+export type SyncPhase = 'off' | 'connecting' | 'live' | 'down' | 'rejected' | 'limited';
 
 export function isKeyPart(value: unknown): value is string {
   return typeof value === 'string' && KEY_PART.test(value);
@@ -107,7 +107,7 @@ async function request(path: string, init: RequestInit): Promise<Response> {
 
 async function noteStatus(response: Response): Promise<string> {
   let error = '';
-  if (response.status === 401 || response.status === 403) {
+  if (response.status === 401 || response.status === 403 || response.status === 503) {
     try {
       const body = await response.clone().json() as { error?: unknown };
       if (body && typeof body.error === 'string') error = body.error;
@@ -116,6 +116,7 @@ async function noteStatus(response: Response): Promise<string> {
     }
   }
   if (response.ok || error === 'member') setPhase('live');
+  else if (error === 'quota') setPhase('limited');
   else if (response.status === 401 || response.status === 403) setPhase('rejected');
   else setPhase('down');
   return error;
@@ -664,7 +665,7 @@ export async function probeFamilySync() {
       return;
     }
     await flushQueues();
-    if (phase !== 'rejected' && !hasPending()) setPhase('live');
+    if (phase !== 'rejected' && phase !== 'limited' && !hasPending()) setPhase('live');
   } catch {
     setPhase('down');
   }
