@@ -5,7 +5,7 @@ import { createMemoryAccountStore } from '../../sync/account.mjs';
 import { commitKeys, createMemoryStore, emptyRoom, handleSyncRequest } from '../../sync/protocol.mjs';
 import { accountNeedsDisplayName, applyAccountSnapshot, clearDeviceAccount } from './accountRestore.mjs';
 import { HISTORY_SHARE_KID, openAccountSecrets, prepareBackup, rewrapHistoryShares, syncHistoryDirectory } from './familyVault.mjs';
-import { mintDeviceKey, sealJson, wrapFamilyKey } from './familySeal.mjs';
+import { mintDeviceKey, sealJson, unwrapFamilyKey, wrapFamilyKey } from './familySeal.mjs';
 import { base64UrlToBytes, bytesToBase64Url } from './familySeal.mjs';
 
 const KAKAO = {
@@ -218,6 +218,15 @@ test('a family phone rewraps history so Kakao login restores the name, family, a
     memberId: 'local-owner01',
     publicKey: replaced.publicKey,
   }, 'profilekeyowner0001')).room;
+  const early = await syncHistoryDirectory({
+    history: room.seals.history,
+    pubs: room.seals.pubs,
+    memberId: 'local-owner01',
+    privateKey: replaced.privateKey,
+    contentKey: base64UrlToBytes(replaced.contentKey),
+  });
+  const kept = await unwrapFamilyKey(mom.privateKey, early.history['local-owner01']['local-mom0001'], HISTORY_SHARE_KID);
+  assert.equal(bytesToBase64Url(kept), bytesToBase64Url(ownerContent));
   const momOnline = await syncHistoryDirectory({
     history: room.seals.history,
     pubs: room.seals.pubs,

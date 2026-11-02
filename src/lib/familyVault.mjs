@@ -144,6 +144,22 @@ export async function historySharesFor(contentKey, peers) {
   return shares;
 }
 
+function sameBytes(left, right) {
+  if (!(left instanceof Uint8Array) || !(right instanceof Uint8Array) || left.length !== right.length) return false;
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) return false;
+  }
+  return true;
+}
+
+async function contentKeyStillHeld(shares, privateKey, raw) {
+  for (const wrap of Object.values(shares || {})) {
+    const opened = await unwrapFamilyKey(privateKey, wrap, HISTORY_SHARE_KID);
+    if (opened && sameBytes(opened, raw)) return true;
+  }
+  return false;
+}
+
 export async function syncHistoryDirectory({ history, pubs, memberId, privateKey, contentKey }) {
   const book = {};
   const source = history && typeof history === 'object' ? history : {};
@@ -151,23 +167,28 @@ export async function syncHistoryDirectory({ history, pubs, memberId, privateKey
     book[ownerId] = shares && typeof shares === 'object' ? { ...shares } : {};
   }
   const raw = contentKey instanceof Uint8Array ? contentKey : base64UrlToBytes(contentKey);
-  // A device that still holds its content key fills only missing recipients.
-  // An existing share may wrap the previous phone's key, so it is not replaced here.
-  if (raw && raw.length === 32) {
-    const mine = { ...(book[memberId] || {}) };
+  const mine = book[memberId];
+  const rowIsNew = !mine || Object.keys(mine).length === 0;
+  // A new phone mints a content key that does not open sealedHistory.
+  // Fill a missing slot only when this phone still holds the key already shared,
+  // or when this account has never published a history key.
+  const mayPublish = raw && raw.length === 32 && (rowIsNew || await contentKeyStillHeld(mine, privateKey, raw));
+  if (mayPublish) {
+    const next = { ...(mine || {}) };
     let added = false;
     for (const [id, pub] of Object.entries(pubs || {})) {
-      if (typeof pub !== 'string' || mine[id]) continue;
+      if (typeof pub !== 'string' || next[id]) continue;
       const wrap = await wrapFamilyKey(pub, raw, HISTORY_SHARE_KID);
       if (wrap) {
-        mine[id] = wrap;
+        next[id] = wrap;
         added = true;
       }
     }
-    if (added) book[memberId] = mine;
+    if (added) book[memberId] = next;
   }
-  // Any phone that can open a family member's history key rewraps it to the
-  // public keys now in the room, including a phone that was just reinstalled.
+  // A family phone that can open someone else's history key rewraps that key
+  // to the public keys now in the room. A reinstall cannot open the old wraps,
+  // so it does not overwrite them.
   const refreshed = await rewrapHistoryShares({
     history: book,
     pubs,
