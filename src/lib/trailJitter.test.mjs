@@ -55,7 +55,7 @@ test('a 2.5s walk and a real corner stay, and a walk still leaves a stay', () =>
   assert.equal(turned.decision, 'keep');
   const quietCorner = { ...north(tip.lat, tip.lng, 3), at: tip.at + 2_500, speedMps: null, accuracyM: 18, staying: false };
   assert.equal(settleTrailPoint(points, quietCorner, quietCorner.at).decision, 'keep');
-  const zeroCorner = { ...north(tip.lat, tip.lng, 3), at: tip.at + 2_500, speedMps: 0, accuracyM: 18, staying: false };
+  const zeroCorner = { ...north(tip.lat, tip.lng, 3), at: tip.at + 2_500, speedMps: 0.2, accuracyM: 18, staying: false };
   assert.equal(settleTrailPoint(points, zeroCorner, zeroCorner.at).decision, 'keep');
   assert.equal(trailDrawParts(turned.points).some((part) => part.dashed), false);
 
