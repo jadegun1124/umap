@@ -15,6 +15,35 @@ function passesDenseWalkStart(result) {
     && result.movingGaps.every((gap) => gap === 2_500);
 }
 
+test('the walk-start test runs the JS mirror, and Java gpsInterval cannot reorder without this failing', () => {
+  const mirror = readFileSync(new URL('./gpsKeepPolicy.mjs', import.meta.url), 'utf8');
+  const names = ['GPS_RIDE_MS', 'GPS_MOVING_MS', 'RIDE_BRIDGE_MS', 'GPS_AMBIGUOUS_MS', 'GPS_STILL_PROBE_MS', 'GPS_STILL_LONG_MS', 'GPS_STILL_MS', 'GPS_STILL_MAX_MS'];
+  const javaBody = java.slice(java.indexOf('private static long gpsInterval'), java.indexOf('private static void emit'));
+  const mirrorBody = mirror.slice(mirror.indexOf('function gpsInterval'), mirror.indexOf('function noteMovement'));
+  const mirrorName = {
+    GPS_RIDE_MS: 'rideMs',
+    GPS_MOVING_MS: 'movingMs',
+    RIDE_BRIDGE_MS: 'rideBridgeMs',
+    GPS_AMBIGUOUS_MS: 'ambiguousMs',
+    GPS_STILL_PROBE_MS: 'stillProbeMs',
+    GPS_STILL_LONG_MS: 'stillLongMs',
+    GPS_STILL_MS: 'stillMs',
+    GPS_STILL_MAX_MS: 'stillMaxMs',
+  };
+  let javaAt = 0;
+  let mirrorAt = 0;
+  for (const name of names) {
+    javaAt = javaBody.indexOf(name, javaAt);
+    mirrorAt = mirrorBody.indexOf(mirrorName[name], mirrorAt);
+    assert.ok(javaAt >= 0, name);
+    assert.ok(mirrorAt >= 0, name);
+    javaAt += name.length;
+    mirrorAt += mirrorName[name].length;
+  }
+  assert.match(java, /private static boolean recordFix\(boolean moving\)/);
+  assert.equal(java.includes('class LocationKeepServiceTest'), false);
+});
+
 test('a walk that starts after a long stay is sampled at 2.5s, and the 1.51 intervals fail that', () => {
   const current = policyFromJava(java);
   assert.equal(current.movingMs, 2_500);

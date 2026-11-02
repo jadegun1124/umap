@@ -18,12 +18,13 @@ export function keepBanner({
   if (!native || !onMap || userStopped) return null;
   if (keepAlive !== true) return null;
   if (locationMode !== 'always' || reason === 'permission') {
-    return {
-      action: 'always',
-      text: reason === 'permission'
-        ? '위치 권한이 항상 허용이 아닙니다. 눌러서 설정으로 이동합니다.'
-        : '위치를 항상 허용으로 바꾸면 앱을 닫아도 위치가 갑니다. 눌러서 설정으로 이동합니다.',
-    };
+    const batteryNote = batteryUnrestricted === false ? ' 배터리 제한 없음도 꺼져 있습니다.' : '';
+    const text = locationMode === 'while-using'
+      ? `위치는 앱 사용 중에만 허용입니다. 눌러서 항상 허용으로 바꿉니다.${batteryNote}`
+      : reason === 'permission'
+        ? `위치 권한이 항상 허용이 아닙니다. 눌러서 설정으로 이동합니다.${batteryNote}`
+        : `위치를 항상 허용으로 바꾸면 앱을 닫아도 위치가 갑니다. 눌러서 설정으로 이동합니다.${batteryNote}`;
+    return { action: 'always', text };
   }
   if (!serviceRunning && batteryUnrestricted === false) {
     return {

@@ -503,8 +503,21 @@ public class UmapLocationPlugin extends Plugin {
         result.put("running", LocationKeepService.isRunning(getContext()));
         result.put("userStopped", LocationKeepService.userStopped(getContext()));
         result.put("native", true);
+        String location = "denied";
+        if (hasBackground()) location = "always";
+        else if (hasForeground()) location = "while-using";
+        result.put("location", location);
+        result.put("precise", hasFine());
         PowerManager power = (PowerManager) getContext().getSystemService(Context.POWER_SERVICE);
         result.put("batteryUnrestricted", power != null && power.isIgnoringBatteryOptimizations(getContext().getPackageName()));
+        try {
+            android.content.pm.PackageInfo info = getContext().getPackageManager().getPackageInfo(getContext().getPackageName(), 0);
+            result.put("versionName", info.versionName == null ? "" : info.versionName);
+            long code = Build.VERSION.SDK_INT >= 28 ? info.getLongVersionCode() : info.versionCode;
+            result.put("versionCode", code);
+        } catch (Exception ignored) {
+            /* The web build still records the bundled version. */
+        }
         String reason = LocationKeepService.lastError();
         if (reason != null) result.put("reason", reason);
         call.resolve(result);

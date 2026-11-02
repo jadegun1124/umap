@@ -127,6 +127,9 @@ public class LocationKeepService {
     private static final long PUBLISH_STILL_MS = 120_000L;
     /** Fresher than the 10 minute family stale window, even when GPS is quiet. */
     private static final long HEARTBEAT_MS = 3 * 60 * 1000L;
+    /** No accepted fix for this long, with permission still granted, re-registers GPS. */
+    private static final long WATCHDOG_QUIET_MS = 3 * 60 * 1000L;
+    private static volatile boolean starting = false;
     private static final int HEARTBEAT_CODE = REQUEST_CODE + 1;
     private static final float PUBLISH_MOVING_M = 25f;
     private static long requestedGpsMs = GPS_STILL_PROBE_MS;
@@ -169,6 +172,16 @@ public class LocationKeepService {
     }
 
     public static boolean start(Context context, String configJson) {
+        if (starting) return isRunning(context);
+        starting = true;
+        try {
+            return startHolding(context, configJson);
+        } finally {
+            starting = false;
+        }
+    }
+
+    private static boolean startHolding(Context context, String configJson) {
         attach(context);
         OngoingNotificationCleanup.clear(context);
         String incoming;
@@ -218,6 +231,7 @@ public class LocationKeepService {
         }
         if (!anySharing(config)) IO.execute(() -> publish(context, null));
         else scheduleHeartbeat(context);
+        LocationKeepProcess.hold(context);
         return true;
     }
 
@@ -230,6 +244,7 @@ public class LocationKeepService {
             cancelHeartbeat(context);
         }
         OngoingNotificationCleanup.clear(context);
+        LocationKeepProcess.release(context);
     }
 
     public static void markUserStopped(Context context) {
@@ -239,6 +254,7 @@ public class LocationKeepService {
             removeUpdates(context);
             cancelHeartbeat(context);
         }
+        LocationKeepProcess.release(context);
     }
 
     public static void ackUserStopped(Context context) {
@@ -309,7 +325,13 @@ public class LocationKeepService {
                     long quiet = lastSampleAt <= 0L ? Long.MAX_VALUE : System.currentTimeMillis() - lastSampleAt;
                     long due = Math.max(requestedGpsMs * 2L + 15_000L, 45_000L);
                     JSONObject config = readConfig(context);
-                    if (quiet > due && anySharing(config)) registerUpdates(context, config);
+                    boolean granted = hasLocationPermission(context);
+                    if (granted && quiet >= WATCHDOG_QUIET_MS && anySharing(config)) {
+                        registerUpdates(context, config);
+                        LocationKeepProcess.hold(context);
+                    } else if (quiet > due && anySharing(config)) {
+                        registerUpdates(context, config);
+                    }
                     last = lastPublished == null ? null : new Location(lastPublished);
                 }
                 if (last != null && anySharing(readConfig(context))) publish(context, last);
@@ -326,6 +348,11 @@ public class LocationKeepService {
         int flags = android.app.PendingIntent.FLAG_UPDATE_CURRENT;
         if (Build.VERSION.SDK_INT >= 31) flags |= android.app.PendingIntent.FLAG_IMMUTABLE;
         return android.app.PendingIntent.getBroadcast(context, HEARTBEAT_CODE, intent, flags);
+    }
+
+    /** Alarm that wakes the process when GPS has gone quiet. */
+    public static void ensureWatchdog(Context context) {
+        scheduleHeartbeat(context);
     }
 
     private static void scheduleHeartbeat(Context context) {

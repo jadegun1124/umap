@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Bell, ChevronLeft, ChevronRight, Copy, Home, LocateFixed, MapPin, Menu, Plus, Route, Settings, UserPlus, X } from 'lucide-react';
-import { APP_VERSION_NAME, currentAppVersionLabel } from '../../lib/appRelease.mjs';
+import { APP_VERSION_CODE, APP_VERSION_NAME, currentAppVersionLabel } from '../../lib/appRelease.mjs';
 import { looksLikePhone, localProfile } from '../../lib/localProfile.mjs';
 import { KAKAO_SETUP_MESSAGE } from '../../lib/kakaoAuth.mjs';
 import { NAVER_SETUP_MESSAGE } from '../../lib/naverAuth.mjs';
@@ -101,6 +101,7 @@ export function FamilyMapScreen() {
   const [guideBusy, setGuideBusy] = useState(false);
   const [guideHintHidden, setGuideHintHidden] = useState(() => readSessionFlag(ALWAYS_GUIDE_DISMISSED_KEY));
   const [keepHint, setKeepHint] = useState<{ text: string; action: 'start' | 'always' | 'battery' } | null>(null);
+  const [keepLive, setKeepLive] = useState<{ battery: boolean | null; running: boolean; location: string }>({ battery: null, running: false, location: '' });
   const [profileOpen, setProfileOpen] = useState(false);
   const [recordId, setRecordId] = useState<string | null>(null);
   const [managedSettings, setManagedSettings] = useState(false);
@@ -128,13 +129,19 @@ export function FamilyMapScreen() {
     const refresh = () => {
       void umapLocation.status().then((status) => {
         if (cancel) return;
+        const location = status.location || state.permissions.locationMode || 'unknown';
+        setKeepLive({
+          battery: status.batteryUnrestricted === false ? false : status.batteryUnrestricted === true ? true : null,
+          running: status.running === true,
+          location,
+        });
         setKeepHint(keepBanner({
           native: true,
           onMap: true,
           serviceRunning: status.running,
           userStopped: status.userStopped,
           keepAlive: state.backgroundKeepAlive,
-          locationMode: state.permissions.locationMode,
+          locationMode: location,
           batteryUnrestricted: status.batteryUnrestricted,
           reason: status.reason || '',
         }));
@@ -142,17 +149,22 @@ export function FamilyMapScreen() {
           APP_VERSION_NAME,
           state.backgroundKeepAlive ? 'on' : 'off',
           status.running ? 'yes' : 'no',
-          state.permissions.locationMode || 'unknown',
+          location,
           status.batteryUnrestricted === false ? 'restricted' : 'open',
         ].join('|');
         if (row === noted) return;
         noted = row;
+        if (status.location && status.location !== state.permissions.locationMode) {
+          familyRef.current.noteLocation(status.location, status.precise === false ? 'approximate' : 'precise');
+        }
         noteDiag({
           kind: 'keep',
-          version: APP_VERSION_NAME,
+          version: status.versionName || APP_VERSION_NAME,
+          code: typeof status.versionCode === 'number' ? status.versionCode : APP_VERSION_CODE,
           keep: state.backgroundKeepAlive ? 'on' : 'off',
           running: status.running ? 'yes' : 'no',
-          location: state.permissions.locationMode || 'unknown',
+          location,
+          precise: status.precise === false ? 'coarse' : 'fine',
           battery: status.batteryUnrestricted === false ? 'restricted' : 'open',
         });
       }).catch(() => undefined);
@@ -1494,9 +1506,11 @@ export function FamilyMapScreen() {
             <LocationConsentRow />
             <div className="mt-3">
               <AlwaysAllowNotice
-                locationMode={state.permissions.locationMode}
+                locationMode={keepLive.location === 'always' || keepLive.location === 'while-using' || keepLive.location === 'denied' ? keepLive.location : state.permissions.locationMode}
                 keepAlive={state.backgroundKeepAlive}
                 native={tracking.native}
+                batteryUnrestricted={keepLive.battery}
+                serviceRunning={keepLive.running}
                 note={settingsNote}
                 onOpenSettings={openLocationSettings}
                 onShowGuide={openLocationSettings}

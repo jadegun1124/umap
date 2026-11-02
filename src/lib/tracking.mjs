@@ -828,8 +828,33 @@ export function walkLeavesStay(points, point) {
   return departsOnFoot(points, point);
 }
 
+/**
+ * A moving sample that disagrees with the heading, inside its own accuracy.
+ * A consistent walk step, including a real corner, stays. A stay departure
+ * is decided earlier and is not this.
+ */
+function movingHeadingJitter(points, point) {
+  if (!point || point.stayEnd) return false;
+  const tip = drawnAnchor(points);
+  const prev = previousVertex(points);
+  if (!tip || !prev) return false;
+  if (isVehicleStep(tip, point) || isRideStep(tip, point)) return false;
+  const turn = Math.abs(signedTurnDeg(prev, tip, point));
+  if (!Number.isFinite(turn) || turn < 70) return false;
+  const pace = stepPace(tip, point);
+  if (!pace || pace.dt < 800) return false;
+  const reported = pointSpeed(point);
+  const agrees = reported != null && reported >= 0.5 && reported <= 3 && Math.abs(reported - pace.speed) <= 0.8;
+  if (agrees && pace.moved >= 2.5 && pace.moved <= 8 && pace.dt <= 8_000 && turn <= 120) return false;
+  const accuracy = Math.max(positiveMeters(point.accuracyM), positiveMeters(tip.accuracyM));
+  const insideError = pace.moved <= Math.max(6, accuracy * 0.5);
+  if (insideError && turn >= 70 && !agrees) return true;
+  return false;
+}
+
 function resolvedTrailDecision(points, point) {
   if (departsOnFoot(points, point)) return 'keep';
+  if (movingHeadingJitter(points, point)) return 'snap';
   const anchor = drawnAnchor(Array.isArray(points) ? points : []);
   const decision = trailDecision(anchor, point);
   if (decision === 'keep' && indoorStayDrift(points, point)) return 'snap';
