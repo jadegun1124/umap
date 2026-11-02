@@ -741,7 +741,7 @@ public class LocationKeepService {
             return GPS_MOVING_MS;
         }
         if (lastRideAt > 0L && now - lastRideAt < RIDE_BRIDGE_FOR_MS) return RIDE_BRIDGE_MS;
-        if (ambiguousMotion) return GPS_AMBIGUOUS_MS;
+        if (ambiguousMotion && !stayConfirmed) return GPS_AMBIGUOUS_MS;
         long stillFor = stillSinceMs > 0L ? Math.max(0L, now - stillSinceMs) : 0L;
         long interval = GPS_STILL_PROBE_MS;
         if (stayConfirmed && stillFor >= STILL_LONG_AFTER_MS) interval = GPS_STILL_LONG_MS;

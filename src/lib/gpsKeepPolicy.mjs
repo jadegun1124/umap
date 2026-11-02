@@ -76,7 +76,7 @@ function gpsInterval(state, policy, moving, now) {
     return policy.movingMs;
   }
   if (state.lastRideAt > 0 && now - state.lastRideAt < policy.rideBridgeForMs) return policy.rideBridgeMs;
-  if (policy.useAmbiguous && state.ambiguous) return policy.ambiguousMs;
+  if (policy.useAmbiguous && state.ambiguous && !state.stayConfirmed) return policy.ambiguousMs;
   const stillFor = state.stillSince > 0 ? Math.max(0, now - state.stillSince) : 0;
   if (!policy.useStayConfirmed) {
     if (stillFor >= policy.stillLongAfterMs) return policy.stillLongMs;
