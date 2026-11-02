@@ -4,9 +4,9 @@ import test from 'node:test';
 import { createMemoryAccountStore } from '../../sync/account.mjs';
 import { commitKeys, createMemoryStore, emptyRoom, handleSyncRequest } from '../../sync/protocol.mjs';
 import { accountNeedsDisplayName, applyAccountSnapshot, clearDeviceAccount } from './accountRestore.mjs';
-import { HISTORY_SHARE_KID, openAccountSecrets, rewrapHistoryShares } from './familyVault.mjs';
-import { mintDeviceKey, sealJson, wrapFamilyKey } from './familySeal.mjs';
-import { base64UrlToBytes } from './familySeal.mjs';
+import { HISTORY_SHARE_KID, openAccountSecrets, prepareBackup, rewrapHistoryShares, syncHistoryDirectory } from './familyVault.mjs';
+import { mintDeviceKey, sealJson, unwrapFamilyKey, wrapFamilyKey } from './familySeal.mjs';
+import { base64UrlToBytes, bytesToBase64Url } from './familySeal.mjs';
 
 const KAKAO = {
   fetchKakaoUser: async () => ({ id: 123456789, kakao_account: { profile: { nickname: '엄마' } } }),
@@ -134,6 +134,127 @@ test('kakao sign-in after uninstall restores the name, both members, and sealed 
   });
   assert.equal(opened.historyLocked, false);
   assert.equal(opened.journeys[0].id, 'j-walk');
+});
+
+function memoryStorage(initial = {}) {
+  const storage = new Map(Object.entries(initial));
+  return {
+    getItem: (key) => (storage.has(key) ? storage.get(key) : null),
+    setItem: (key, value) => { storage.set(key, String(value)); },
+    removeItem: (key) => { storage.delete(key); },
+    get length() { return storage.size; },
+    key: (index) => [...storage.keys()][index] || null,
+  };
+}
+
+test('a family phone rewraps history so Kakao login restores the name, family, and 우리 집 without a recovery code', async () => {
+  const owner = await mintDeviceKey();
+  const mom = await mintDeviceKey();
+  const ownerBox = memoryStorage({ umap_seal_device_v1: JSON.stringify(owner) });
+  const sealed = await prepareBackup({
+    memberId: 'local-owner01',
+    profileKey: 'profilekeyowner0001',
+    profile: { name: '개발자', photo: null },
+    room: { code: '48291', writeKey: 'writeKeyAAAAAAAAAA', readKey: 'readKeyAAAAAAAAAAA' },
+    guardians: [],
+    roster: [{ id: 'family:48291:local-mom0001', name: '엄마', role: 'admin-share', publisherId: 'local-mom0001', inviteCode: '48291' }],
+    home: { label: '우리 집', address: '', lat: 37.55, lng: 127.05, radiusM: 150 },
+    journeys: [{
+      id: 'j-walk',
+      startedAt: Date.now() - 60_000,
+      endedAt: Date.now() - 30_000,
+      distanceM: 180,
+      points: [
+        { lat: 37.55, lng: 127.05, at: Date.now() - 60_000 },
+        { lat: 37.551, lng: 127.051, at: Date.now() - 30_000 },
+      ],
+      start: { lat: 37.55, lng: 127.05, label: '우리 집' },
+      end: { lat: 37.551, lng: 127.051, label: '하계동' },
+    }],
+    visits: [],
+  }, ownerBox, 'ABCDEFGHJKLN');
+  assert.equal(sealed.historyShares, undefined);
+  const accounts = createMemoryAccountStore();
+  const linked = await accountCall(accounts, 'POST', '/v1/account/kakao', {
+    accessToken: 'kakao-access-ok',
+    mode: 'link',
+    snapshot: sealed,
+  });
+  assert.equal(linked.status, 200);
+
+  let room = emptyRoom();
+  room = (await commitKeys(room, { memberId: 'local-mom0001', publicKey: mom.publicKey }, 'profilekeymom000001')).room;
+  room = (await commitKeys(room, { memberId: 'local-owner01', publicKey: owner.publicKey }, 'profilekeyowner0001')).room;
+  const ownerContent = base64UrlToBytes(owner.contentKey);
+  const published = await syncHistoryDirectory({
+    history: room.seals.history,
+    pubs: { ...room.seals.pubs, 'local-owner01': owner.publicKey },
+    memberId: 'local-owner01',
+    privateKey: owner.privateKey,
+    contentKey: ownerContent,
+  });
+  room = (await commitKeys(room, {
+    memberId: 'local-owner01',
+    publicKey: owner.publicKey,
+    history: published.history,
+  }, 'profilekeyowner0001')).room;
+  assert.ok(room.seals.history['local-owner01']['local-mom0001'], 'owner publishes the history key to mom');
+
+  clearDeviceAccount(ownerBox, ownerBox);
+  const replaced = await mintDeviceKey();
+  const again = await accountCall(accounts, 'POST', '/v1/account/kakao', {
+    accessToken: 'kakao-access-ok',
+    mode: 'login',
+  });
+  const account = { ...again.body.account, restored: true };
+  assert.equal(accountNeedsDisplayName(account), false);
+  const session = applyAccountSnapshot(freshPhone(), account);
+  assert.equal(session.stage, 'map');
+  assert.equal(session.profile.name, '개발자');
+  assert.equal(session.members.some((member) => member.name === '엄마'), true);
+  assert.equal(session.historyLocked || !session.home, true);
+
+  room = (await commitKeys(room, {
+    memberId: 'local-owner01',
+    publicKey: replaced.publicKey,
+  }, 'profilekeyowner0001')).room;
+  const early = await syncHistoryDirectory({
+    history: room.seals.history,
+    pubs: room.seals.pubs,
+    memberId: 'local-owner01',
+    privateKey: replaced.privateKey,
+    contentKey: base64UrlToBytes(replaced.contentKey),
+  });
+  const kept = await unwrapFamilyKey(mom.privateKey, early.history['local-owner01']['local-mom0001'], HISTORY_SHARE_KID);
+  assert.equal(bytesToBase64Url(kept), bytesToBase64Url(ownerContent));
+  const momOnline = await syncHistoryDirectory({
+    history: room.seals.history,
+    pubs: room.seals.pubs,
+    memberId: 'local-mom0001',
+    privateKey: mom.privateKey,
+    contentKey: base64UrlToBytes(mom.contentKey),
+  });
+  room = (await commitKeys(room, {
+    memberId: 'local-mom0001',
+    publicKey: mom.publicKey,
+    history: momOnline.history,
+  }, 'profilekeymom000001')).room;
+  const ownerOnline = await syncHistoryDirectory({
+    history: room.seals.history,
+    pubs: room.seals.pubs,
+    memberId: 'local-owner01',
+    privateKey: replaced.privateKey,
+    contentKey: base64UrlToBytes(replaced.contentKey),
+  });
+  const opened = await openAccountSecrets({
+    ...account,
+    historyShares: ownerOnline.history['local-owner01'],
+  }, memoryStorage({ umap_seal_device_v1: JSON.stringify(replaced) }));
+  assert.equal(opened.historyLocked, false);
+  assert.equal(opened.journeys[0].id, 'j-walk');
+  assert.equal(opened.home.label, '우리 집');
+  assert.equal(readFileSync(new URL('../components/family/FamilyMapScreen.tsx', import.meta.url), 'utf8').includes('가족 폰에서 Kinnex를 열면 지난 기록이 자동으로 돌아옵니다'), true);
+  assert.equal(bytesToBase64Url(ownerContent).length > 0, true);
 });
 
 test('recovery uses the same restored flag so a named account skips the name screen', () => {

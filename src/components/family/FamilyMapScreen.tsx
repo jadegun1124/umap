@@ -1142,7 +1142,7 @@ export function FamilyMapScreen() {
                     home: null,
                   }, localStorage, historyCode).then((opened) => {
                     if (opened.historyLocked) {
-                      setHistoryNote('복구 코드가 맞지 않습니다. 코드가 없으면 다른 가족이 앱을 켜야 앞으로의 위치가 보이고, 지난 기록은 열리지 않습니다.');
+                      setHistoryNote('복구 코드가 맞지 않습니다. 가족 폰에서 Kinnex를 열면 지난 기록과 우리 집이 자동으로 돌아옵니다.');
                       return;
                     }
                     const journeys = Array.isArray(opened.journeys) ? opened.journeys as Session['journeys'][string] : [];
@@ -1151,8 +1151,8 @@ export function FamilyMapScreen() {
                   });
                 }}
               >
-                <p className="text-sm font-black text-slate-900">지난 위치 기록은 복구 코드로만 열립니다</p>
-                <p className="mt-1 text-xs font-semibold leading-5 text-slate-600">카카오·네이버만으로는 암호를 풀 수 없습니다. 다른 가족이 앱을 켜면 앞으로의 가족 위치는 다시 보이지만, 이 계정의 지난 기록과 우리 집은 복구 코드가 있어야 돌아옵니다.</p>
+                <p className="text-sm font-black text-slate-900">가족 폰에서 Kinnex를 열면 지난 기록이 자동으로 돌아옵니다</p>
+                <p className="mt-1 text-xs font-semibold leading-5 text-slate-600">다른 가족 폰이 온라인이면 그 폰이 이 기기에 기록 열쇠를 다시 감싸 줍니다. 우리 집도 그때 돌아옵니다. 복구 코드가 있으면 여기서도 열 수 있습니다.</p>
                 <input
                   value={historyCode}
                   onChange={(event) => setHistoryCode(event.target.value.toUpperCase())}
