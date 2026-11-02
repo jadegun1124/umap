@@ -75,15 +75,25 @@ export class FamilyRoom {
     if (op.kind === 'place') {
       const next = await commitPlace(room, op.place, op.profileKey || '');
       if (next.error) return next.error;
-      if (!next.ignored) {
+      const memberId = typeof op.place?.memberId === 'string' ? op.place.memberId : '';
+      const at = typeof op.place?.at === 'number' ? op.place.at : Date.now();
+      // One room rewrite per member per 8s. A 25m highway fix still returns ok,
+      // and the next fix after 8s is the one stored. Duplicate JS and native uploads collapse.
+      const lastAt = memberId && this.persistedPlaceAt ? this.persistedPlaceAt.get(memberId) || 0 : 0;
+      const held = !next.ignored && memberId && lastAt > 0 && at >= lastAt && at - lastAt < 8000;
+      if (!next.ignored && !held) {
         room = next.room;
         await this.ctx.storage.put('room', room);
+        if (memberId) {
+          if (!this.persistedPlaceAt) this.persistedPlaceAt = new Map();
+          this.persistedPlaceAt.set(memberId, at);
+        }
       }
       return Response.json({
         ok: true,
-        collected: next.ignored !== true && !!op.place?.memberId,
-        memberId: op.place?.memberId || '',
-        at: op.place?.at || Date.now(),
+        collected: !next.ignored && !held && !!memberId,
+        memberId,
+        at,
       });
     }
     if (op.kind === 'profile') {
@@ -113,8 +123,9 @@ export class FamilyRoom {
     if (op.kind === 'keys') {
       const next = await commitKeys(room, op.keys, op.profileKey || '');
       if (next.error) return next.error;
-      room = next.room;
-      await this.ctx.storage.put('room', room);
+      // The phones repeat this on every map poll. An unchanged directory must not
+      // rewrite the room blob: that was the free-tier row-write hotspot.
+      if (!next.unchanged) await this.ctx.storage.put('room', next.room);
       return Response.json({ ok: true, keys: next.directory });
     }
     if (op.kind === 'alert') {

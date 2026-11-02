@@ -1,4 +1,5 @@
 import { noteDiag } from '../lib/diagLog.mjs';
+import { QUOTA_RETRY_MS, shouldRefreshFamilyKeys } from '../lib/keySyncPace.mjs';
 import { openJson, sealJson, mintFamilyKey, unwrapFamilyKey, wrapFamilyKey } from '../lib/familySeal.mjs';
 import { contentKeyBytes, ensureDevice, familyKeyRecord, rememberFamilyKey, syncHistoryDirectory } from '../lib/familyVault.mjs';
 import { rememberPlaceName } from '../lib/placeAlias.mjs';
@@ -386,8 +387,12 @@ async function putRoomKeys(code: string, token: string, profileKey: string, body
   }
 }
 
+const keysSyncedAt = new Map<string, number>();
+
 export async function syncFamilyKeys(code: string, token: string, memberId: string, profileKey: string): Promise<boolean> {
   if (typeof localStorage === 'undefined' || !memberId || !profileKey || !splitSyncToken(token) || !/^\d{4,6}$/.test(code)) return false;
+  const paceKey = `${code}:${memberId}`;
+  if (!shouldRefreshFamilyKeys(keysSyncedAt.get(paceKey), Date.now(), familyKeyRecord(localStorage, code) != null)) return true;
   const device = await ensureDevice(localStorage);
   let directory = await putRoomKeys(code, token, profileKey, { memberId, publicKey: device.publicKey });
   if (!directory) return familyKeyRecord(localStorage, code) != null;
@@ -463,7 +468,9 @@ export async function syncFamilyKeys(code: string, token: string, memberId: stri
       history: synced.history,
     });
   }
-  return familyKeyRecord(localStorage, code) != null;
+  const ready = familyKeyRecord(localStorage, code) != null;
+  if (ready) keysSyncedAt.set(paceKey, Date.now());
+  return ready;
 }
 
 async function sealQueuedPlace(place: { code: string; token: string; body: Record<string, unknown>; profileKey: string }) {
@@ -639,10 +646,10 @@ async function flushQueues() {
       });
       if (!ok) failed = true;
     }
-    retryMs = failed ? Math.min(retryMs * 2, 20000) : 3000;
+    retryMs = currentSyncPhase() === 'limited' ? QUOTA_RETRY_MS : (failed ? Math.min(retryMs * 2, 20000) : 3000);
   } catch {
     failed = true;
-    retryMs = Math.min(retryMs * 2, 20000);
+    retryMs = currentSyncPhase() === 'limited' ? QUOTA_RETRY_MS : Math.min(retryMs * 2, 20000);
     if (familySyncUrl()) setPhase('down');
     else setPhase('off');
   } finally {
@@ -798,6 +805,10 @@ export function startAdminRemoteSync(
 
   const tick = async () => {
     if (stopped) return;
+    if (currentSyncPhase() === 'limited') {
+      schedule(QUOTA_RETRY_MS);
+      return;
+    }
     let delay = 2500;
     try {
       const token = await syncTokenFor(link.writeKey, link.readKey);
@@ -834,7 +845,7 @@ export function startAdminRemoteSync(
           if (alert.at > since) since = alert.at;
         }
       } else {
-        delay = 8000;
+        delay = error === 'quota' ? QUOTA_RETRY_MS : 8000;
       }
     } catch {
       if (!stopped) setPhase('down');
@@ -909,6 +920,10 @@ export function startManagedFamilySync(
 
   const tick = async () => {
     if (stopped) return;
+    if (currentSyncPhase() === 'limited') {
+      timer = window.setTimeout(() => void tick(), QUOTA_RETRY_MS);
+      return;
+    }
     let delay = 4000;
     try {
       for (const link of usable) {
@@ -928,7 +943,7 @@ export function startManagedFamilySync(
         }
         if (!response.ok) {
           noteDiag({ kind: 'http', dir: 'download', path: `/v1/rooms/${link.code}/family`, status: response.status, ok: false, places: 0 });
-          delay = 12000;
+          delay = error === 'quota' ? QUOTA_RETRY_MS : 12000;
           continue;
         }
         const body: unknown = await response.json();

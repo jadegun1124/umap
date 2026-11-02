@@ -874,10 +874,26 @@ function cleanWraps(input) {
   return wraps;
 }
 
+function stableJson(value) {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value ?? null);
+}
+
+function roomPersistStamp(room) {
+  return stableJson({
+    owners: roomOwners(room),
+    seals: roomSeals(room),
+  });
+}
+
 export async function commitKeys(room, input, profileKey) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return { error: json({ error: 'keys' }, 400) };
   if (typeof input.memberId !== 'string' || !MEMBER_ID.test(input.memberId)) return { error: json({ error: 'member' }, 400) };
   if (!isPublicKey(input.publicKey)) return { error: json({ error: 'keys' }, 400) };
+  const before = roomPersistStamp(room);
   const auth = await authorizeMember(room, input.memberId, profileKey || '');
   if (auth.error) return { error: auth.error, room };
   const seals = roomSeals(auth.room);
@@ -908,7 +924,8 @@ export async function commitKeys(room, input, profileKey) {
     delete seals.wraps[id];
   }
   const next = { ...auth.room, seals };
-  return { error: null, room: next, directory: viewKeys(next) };
+  const unchanged = roomPersistStamp(next) === before;
+  return { error: null, room: unchanged ? room : next, directory: viewKeys(unchanged ? room : next), unchanged };
 }
 
 export async function parseOperation(request) {
@@ -1297,7 +1314,7 @@ export async function handleSyncRequest(store, request, extras = {}) {
   if (op.kind === 'keys') {
     const next = await commitKeys(room, op.keys, op.profileKey || '');
     if (next.error) return next.error;
-    await store.write(op.token, next.room);
+    if (!next.unchanged) await store.write(op.token, next.room);
     return json({ ok: true, keys: next.directory });
   }
   if (op.kind === 'alert') {
