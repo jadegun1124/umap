@@ -153,7 +153,10 @@ test('handling routes cannot be deleted', async () => {
   assert.equal(recorded.ok, true);
   const blocked = await accountCall(accounts, 'DELETE', '/v1/account/handling', { accountKey: created.body.account.accountKey });
   assert.equal(blocked.status, 405);
-  const listed = await accountCall(accounts, 'GET', '/v1/account/handling', { accountKey: created.body.account.accountKey });
+  const listed = await accountCall(accounts, 'GET', '/v1/account/handling', {
+    accountKey: created.body.account.accountKey,
+    now: Date.UTC(2026, 4, 2, 3, 0, 0),
+  });
   assert.equal(listed.status, 200);
   assert.equal(listed.body.events.length, 1);
   const again = await recordHandling(accounts, {
