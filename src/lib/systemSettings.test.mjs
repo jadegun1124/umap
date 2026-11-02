@@ -114,16 +114,22 @@ test('chat shade notification is one event and opens that conversation', () => {
   assert.match(plugin, /notifyListeners\("chat"/);
 });
 
-test('gps is 2.5s while walking, 1s while riding, 12s for 3 minutes after a ride, then 2 and 5 minutes while parked', () => {
+test('gps is 2.5s while walking, 1s while riding, and a stay probe never becomes a trail point', () => {
   const location = readFileSync(new URL('../../android/app/src/main/java/kr/co/umap/tracker/LocationKeepService.java', import.meta.url), 'utf8');
   assert.match(location, /GPS_MOVING_MS = 2_500L/);
   assert.match(location, /GPS_RIDE_MS = 1_000L/);
   assert.match(location, /requestedGpsMs < GPS_RIDE_MS \? GPS_RIDE_MS/);
-  assert.match(location, /SAMPLE_GAP_MS = 1_200L/);
-  assert.match(location, /GPS_STILL_MS = 120_000L/);
-  assert.match(location, /GPS_STILL_LONG_MS = 300_000L/);
+  assert.match(location, /SAMPLE_GAP_MS = 800L/);
+  assert.match(location, /GPS_STILL_PROBE_MS = 30_000L/);
+  assert.match(location, /GPS_STILL_MS = 60_000L/);
+  assert.match(location, /GPS_STILL_LONG_MS = 60_000L/);
+  assert.match(location, /GPS_STILL_MAX_MS = 120_000L/);
+  assert.match(location, /GPS_AMBIGUOUS_MS = 20_000L/);
   assert.match(location, /STILL_LONG_AFTER_MS = 7 \* 60_000L/);
   assert.match(location, /MOVING_HOLD_MS = 45_000L/);
+  assert.match(location, /WALK_DISPLACE_M = 8f/);
+  assert.match(location, /WALK_PACE_MAX_MS = 120_000L/);
+  assert.match(location, /WALK_IMPLIED_MIN_MPS = 0\.6f/);
   assert.match(location, /RIDE_MIN_MPS = 7f \/ 3.6f/);
   assert.match(location, /RIDE_STEP_M = 8f/);
   assert.match(location, /RIDE_STAY_STEP_M = 18f/);
@@ -133,18 +139,21 @@ test('gps is 2.5s while walking, 1s while riding, 12s for 3 minutes after a ride
   assert.match(location, /PUBLISH_MOVING_MS = 8_000L/);
   assert.match(location, /PUBLISH_STILL_MS = 120_000L/);
   assert.match(location, /PUBLISH_MOVING_M = 25f/);
-  assert.match(location, /requestedGpsMs = GPS_STILL_MS/);
+  assert.match(location, /requestedGpsMs = GPS_STILL_PROBE_MS/);
+  assert.match(location, /if \(!recordFix\(moving\)\)/);
+  assert.match(location, /return moving;/);
+  assert.match(location, /emit\(location, fixAt\)/);
   assert.match(location, /updatesRegistered && incoming\.equals\(registeredConfig\)/);
   assert.match(location, /movingStream = false/);
   assert.match(location, /GPS_PROVIDER, gpsMs, 0f/);
-  assert.equal(location.includes('GPS_STILL_MS = 30_000L'), false);
-  assert.equal(location.includes('GPS_STILL_LONGER'), false);
-  assert.equal(location.includes('15_000L'), false);
-  assert.equal(location.includes('GPS_MOVING_MS = 5_000L'), false);
-  assert.equal(location.includes('GPS_MOVING_MS = 3_000L'), false);
+  assert.match(location, /quiet > due && anySharing\(config\)\) registerUpdates/);
+  assert.equal(location.includes('GPS_STILL_MS = 120_000L'), false);
+  assert.equal(location.includes('GPS_STILL_LONG_MS = 300_000L'), false);
   assert.equal(location.includes('GPS_MOVING_MS = 1_000L'), false);
-  assert.equal(location.includes('5_000L, 0f'), false);
-  assert.equal(location.includes('isStayJitter'), false);
+  assert.equal(location.includes('SAMPLE_GAP_MS = 1_200L'), false);
+  const emitAt = location.indexOf('emit(location, fixAt)');
+  const publishGap = location.indexOf('since + 1_000L < publishGap');
+  assert.ok(emitAt > 0 && publishGap > emitAt);
 });
 
 test('browser permission buttons stay inside the browser prompt', () => {

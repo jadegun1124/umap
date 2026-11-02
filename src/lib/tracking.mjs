@@ -363,7 +363,11 @@ export function isRideStep(last, point) {
   if (!pace || !(pace.speed >= 0) || pace.speed > FIX_MAX_JUMP_MPS) return false;
   const reported = pointSpeed(point);
   if (reported != null && reported >= TRAIL_RIDE_MIN_MPS) {
-    return pace.moved >= TRAIL_RIDE_MIN_STEP_M
+    // A 1s ride fix is about 2–8m. The 8m gate kept only every few of those samples.
+    const shortRide = pace.dt <= 1_500;
+    const minStep = shortRide ? 1.5 : TRAIL_RIDE_MIN_STEP_M;
+    if (shortRide && pace.speed < TRAIL_RIDE_MIN_MPS) return false;
+    return pace.moved >= minStep
       && pace.dt >= 800
       && pace.speed >= TRAIL_RIDE_MIN_MPS * 0.45;
   }
