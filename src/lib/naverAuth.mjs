@@ -12,6 +12,9 @@ export const NAVER_SETUP_MESSAGE = [
 
 export const NAVER_VERIFY_MESSAGE = '네이버 로그인 토큰이 거절되었습니다. 다시 로그인해 주세요.';
 export const NAVER_CANCEL_MESSAGE = '네이버 로그인을 취소했습니다.';
+export const NAVER_SERVER_MISSING_MESSAGE = '위치 서버 주소가 없어 네이버 로그인을 시작하지 않습니다.';
+export const NAVER_NATIVE_FAILED_MESSAGE = '네이버 로그인 창이 실패했습니다. 다시 시도해 주세요.';
+export const NAVER_SERVER_UNREACHABLE_MESSAGE = '위치 서버에 연결하지 못해 네이버 로그인을 마치지 못했습니다.';
 export const NAVER_REDIRECT = 'kinnex://naver';
 export const NAVER_APP_REDIRECT = 'https://umap-family-sync.umap-jadegun.workers.dev/v1/naver/callback';
 

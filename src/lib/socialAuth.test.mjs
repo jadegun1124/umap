@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { ACCOUNT_LINKED_OTHER_MESSAGE, linkedAccountWouldSwitch } from './accountRestore.mjs';
-import { KAKAO_SETUP_MESSAGE, PUBLIC_KAKAO_NATIVE_APP_KEY, kakaoJavascriptKey, kakaoNativeAppKey, kakaoNativeAppKeyOrPublic } from './kakaoAuth.mjs';
-import { NAVER_APP_REDIRECT, NAVER_REDIRECT, NAVER_SETUP_MESSAGE, PUBLIC_NAVER_CLIENT_ID, allowedNaverRedirect, naverClientId, naverClientIdOrPublic } from './naverAuth.mjs';
+import { KAKAO_NATIVE_FAILED_MESSAGE, KAKAO_SERVER_MISSING_MESSAGE, KAKAO_SERVER_UNREACHABLE_MESSAGE, KAKAO_SETUP_MESSAGE, KAKAO_VERIFY_MESSAGE, PUBLIC_KAKAO_NATIVE_APP_KEY, kakaoJavascriptKey, kakaoNativeAppKey, kakaoNativeAppKeyOrPublic } from './kakaoAuth.mjs';
+import { NAVER_APP_REDIRECT, NAVER_NATIVE_FAILED_MESSAGE, NAVER_REDIRECT, NAVER_SERVER_MISSING_MESSAGE, NAVER_SERVER_UNREACHABLE_MESSAGE, NAVER_SETUP_MESSAGE, NAVER_VERIFY_MESSAGE, PUBLIC_NAVER_CLIENT_ID, allowedNaverRedirect, naverClientId, naverClientIdOrPublic } from './naverAuth.mjs';
 
 test('missing Kakao and Naver keys keep those buttons closed', () => {
   assert.equal(kakaoNativeAppKey(''), '');
@@ -37,6 +37,12 @@ test('missing Kakao and Naver keys keep those buttons closed', () => {
   assert.equal(allowedNaverRedirect('https://evil.example/v1/naver/callback'), '');
   assert.match(NAVER_SETUP_MESSAGE, /VITE_NAVER_CLIENT_ID/);
   assert.match(NAVER_SETUP_MESSAGE, /NAVER_CLIENT_SECRET/);
+  assert.notEqual(KAKAO_SERVER_MISSING_MESSAGE, KAKAO_VERIFY_MESSAGE);
+  assert.notEqual(KAKAO_NATIVE_FAILED_MESSAGE, KAKAO_VERIFY_MESSAGE);
+  assert.notEqual(KAKAO_SERVER_UNREACHABLE_MESSAGE, KAKAO_VERIFY_MESSAGE);
+  assert.notEqual(NAVER_SERVER_MISSING_MESSAGE, NAVER_VERIFY_MESSAGE);
+  assert.notEqual(NAVER_NATIVE_FAILED_MESSAGE, NAVER_VERIFY_MESSAGE);
+  assert.notEqual(NAVER_SERVER_UNREACHABLE_MESSAGE, NAVER_VERIFY_MESSAGE);
 
   assert.equal(linkedAccountWouldSwitch('local-restore1', { memberId: 'local-restore1' }), false);
   assert.equal(linkedAccountWouldSwitch('local-restore1', { memberId: 'local-other2' }), true);

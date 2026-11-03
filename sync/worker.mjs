@@ -1,6 +1,6 @@
 import { PUBLIC_NAVER_CLIENT_ID } from '../src/lib/naverAuth.mjs';
 import { createMemoryAccountStore, handleAccountOperation } from './account.mjs';
-import { applyAlert, applyDirectMessage, applySubscription, alertPushPayload, chatPushPayload, commitKeys, commitPlace, commitProfile, commitTrail, emptyRoom, memberRoomToken, parseOperation, planForgetMember, pushesForAlert, pushesForChat, removeSubscriptions, viewDirectMessages, viewFamilyPlaces, viewMyThreads, viewRoom, withCors } from './protocol.mjs';
+import { applyAlert, applyDirectMessage, applySubscription, alertPushPayload, chatPushPayload, commitKeys, commitPlace, commitProfile, commitTrail, emptyRoom, memberRoomToken, parseOperation, planForgetMember, previousPlaceSharing, pushesForAlert, pushesForChat, removeSubscriptions, shouldHoldPlaceWrite, storageQuotaResponse, viewDirectMessages, viewFamilyPlaces, viewMyThreads, viewRoom, withCors } from './protocol.mjs';
 import { createVapidKeys, sendWebPush } from './webpush.mjs';
 
 // One Durable Object per family room. The id is a hash of the invite code,
@@ -12,6 +12,16 @@ export class FamilyRoom {
   }
 
   async fetch(request) {
+    try {
+      return await this.perform(request);
+    } catch (error) {
+      const limited = storageQuotaResponse(error);
+      if (limited) return limited;
+      throw error;
+    }
+  }
+
+  async perform(request) {
     const op = await request.json();
     if (op.kind === 'vapid') {
       let keys = await this.ctx.storage.get('vapid');
@@ -65,15 +75,31 @@ export class FamilyRoom {
     if (op.kind === 'place') {
       const next = await commitPlace(room, op.place, op.profileKey || '');
       if (next.error) return next.error;
-      if (!next.ignored) {
+      const memberId = typeof op.place?.memberId === 'string' ? op.place.memberId : '';
+      const at = typeof op.place?.at === 'number' ? op.place.at : Date.now();
+      // One room rewrite per member per 8s for a live fix. A stop or a sharing
+      // change is written now; returning ok without storing it would leave the
+      // member shared. Duplicate JS and native uploads still collapse.
+      const lastAt = memberId && this.persistedPlaceAt ? this.persistedPlaceAt.get(memberId) || 0 : 0;
+      const held = !next.ignored && shouldHoldPlaceWrite({
+        previousSharing: previousPlaceSharing(room, op.place),
+        sharing: op.place?.sharing,
+        lastPersistedAt: lastAt,
+        at,
+      });
+      if (!next.ignored && !held) {
         room = next.room;
         await this.ctx.storage.put('room', room);
+        if (memberId) {
+          if (!this.persistedPlaceAt) this.persistedPlaceAt = new Map();
+          this.persistedPlaceAt.set(memberId, at);
+        }
       }
       return Response.json({
         ok: true,
-        collected: next.ignored !== true && !!op.place?.memberId,
-        memberId: op.place?.memberId || '',
-        at: op.place?.at || Date.now(),
+        collected: !next.ignored && !held && !!memberId,
+        memberId,
+        at,
       });
     }
     if (op.kind === 'profile') {
@@ -103,8 +129,9 @@ export class FamilyRoom {
     if (op.kind === 'keys') {
       const next = await commitKeys(room, op.keys, op.profileKey || '');
       if (next.error) return next.error;
-      room = next.room;
-      await this.ctx.storage.put('room', room);
+      // The phones repeat this on every map poll. An unchanged directory must not
+      // rewrite the room blob: that was the free-tier row-write hotspot.
+      if (!next.unchanged) await this.ctx.storage.put('room', next.room);
       return Response.json({ ok: true, keys: next.directory });
     }
     if (op.kind === 'alert') {
@@ -192,14 +219,20 @@ export class FamilyAccount {
   }
 
   async fetch(request) {
-    const body = await request.json();
-    const env = this.env || {};
-    return handleAccountOperation(durableAccountStore(this.ctx.storage), body.op, {
-      ...accountRuntimeOptions(env),
-      naverClientId: body.naverClientId || env.NAVER_CLIENT_ID || PUBLIC_NAVER_CLIENT_ID,
-      naverClientSecret: body.naverClientSecret || env.NAVER_CLIENT_SECRET || '',
-      now: body.now,
-    });
+    try {
+      const body = await request.json();
+      const env = this.env || {};
+      return await handleAccountOperation(durableAccountStore(this.ctx.storage), body.op, {
+        ...accountRuntimeOptions(env),
+        naverClientId: body.naverClientId || env.NAVER_CLIENT_ID || PUBLIC_NAVER_CLIENT_ID,
+        naverClientSecret: body.naverClientSecret || env.NAVER_CLIENT_SECRET || '',
+        now: body.now,
+      });
+    } catch (error) {
+      const limited = storageQuotaResponse(error);
+      if (limited) return limited;
+      throw error;
+    }
   }
 }
 
@@ -293,6 +326,28 @@ async function purgeDisclosureLedger(env) {
   });
 }
 
+export async function quotaResponse(response) {
+  if (!response || response.status !== 503) return null;
+  const body = await response.clone().json().catch(() => null);
+  if (!body || body.error !== 'quota') return null;
+  return response;
+}
+
+export async function presentRoomResponse(kind, response) {
+  if (kind === 'alert' || kind === 'chat') {
+    const quota = await quotaResponse(response);
+    if (quota) return quota;
+    const data = await response.json();
+    if (kind === 'alert') return Response.json({ ok: data.ok === true });
+    return Response.json({ messages: Array.isArray(data.messages) ? data.messages : [] });
+  }
+  if (kind === 'place' || kind === 'trail' || kind === 'family' || kind === 'get') {
+    const data = await response.json();
+    return Response.json(data, { status: response.status });
+  }
+  return response;
+}
+
 export default {
   async scheduled(_event, env, ctx) {
     ctx.waitUntil(purgeDisclosureLedger(env).catch(() => undefined));
@@ -319,32 +374,47 @@ export default {
       if (!accounts) {
         return withCors(await handleAccountOperation(createMemoryAccountStore(), op, accountRuntimeOptions(env)));
       }
-      const response = await accounts.fetch('https://account.internal/op', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          op,
-          naverClientId: env.NAVER_CLIENT_ID || PUBLIC_NAVER_CLIENT_ID,
-          naverClientSecret: env.NAVER_CLIENT_SECRET || '',
-        }),
-      });
-      return withCors(response);
+      try {
+        const response = await accounts.fetch('https://account.internal/op', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            op,
+            naverClientId: env.NAVER_CLIENT_ID || PUBLIC_NAVER_CLIENT_ID,
+            naverClientSecret: env.NAVER_CLIENT_SECRET || '',
+          }),
+        });
+        return withCors(response);
+      } catch (error) {
+        const limited = storageQuotaResponse(error);
+        if (limited) return withCors(limited);
+        throw error;
+      }
     }
     const stub = env.FAMILY_ROOM.get(env.FAMILY_ROOM.idFromName(op.token));
-    const response = await stub.fetch('https://room.internal/op', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(op),
-    });
-    if (op.kind === 'place' || op.kind === 'trail' || op.kind === 'family' || op.kind === 'get') {
-      const data = await response.json();
-      await noteHandling(env, op, data).catch(() => undefined);
-      return withCors(Response.json(data, { status: response.status }));
+    let response;
+    try {
+      response = await stub.fetch('https://room.internal/op', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(op),
+      });
+    } catch (error) {
+      const limited = storageQuotaResponse(error);
+      if (limited) return withCors(limited);
+      throw error;
     }
-    if (op.kind !== 'alert' && op.kind !== 'chat') return withCors(response);
-    const data = await response.json();
-    await deliverAlert(env, stub, data);
-    if (op.kind === 'alert') return withCors(Response.json({ ok: data.ok === true }));
-    return withCors(Response.json({ messages: Array.isArray(data.messages) ? data.messages : [] }));
+    if (op.kind === 'alert' || op.kind === 'chat') {
+      const quota = await quotaResponse(response);
+      if (!quota) {
+        const data = await response.clone().json().catch(() => null);
+        if (data) await deliverAlert(env, stub, data);
+      }
+    }
+    if (op.kind === 'place' || op.kind === 'trail' || op.kind === 'family' || op.kind === 'get') {
+      const data = await response.clone().json().catch(() => null);
+      if (data && response.status !== 503) await noteHandling(env, op, data).catch(() => undefined);
+    }
+    return withCors(await presentRoomResponse(op.kind, response));
   },
 };

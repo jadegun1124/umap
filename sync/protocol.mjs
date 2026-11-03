@@ -105,6 +105,17 @@ function json(data, status = 200) {
   });
 }
 
+// Workers Free SQLite Durable Objects allow 100,000 rows written per day.
+// The counter resets at 00:00 UTC, which is 09:00 in Korea.
+export const STORAGE_QUOTA_MESSAGE = '위치 서버의 오늘 저장 한도를 넘었습니다. 오전 9시 이후에 다시 시도해 주세요.';
+
+export function storageQuotaResponse(error) {
+  const cause = error && error.cause && error.cause.message ? error.cause.message : '';
+  const text = `${error && error.message ? error.message : ''} ${cause}`;
+  if (!/exceeded allowed rows (?:written|read)|durable objects free tier/i.test(text)) return null;
+  return json({ error: 'quota', message: STORAGE_QUOTA_MESSAGE }, 503);
+}
+
 export function withCors(response) {
   const headers = new Headers(response.headers);
   headers.set('access-control-allow-origin', '*');
@@ -286,6 +297,23 @@ function cleanAlert(input, code, now) {
 
 function legacyStorageKey(place, name) {
   return place.audience === 'family' ? `family\u0000${name}` : name;
+}
+
+export function previousPlaceSharing(room, place) {
+  if (!place || !room || !room.places) return undefined;
+  const current = adoptCurrent(room.places, place);
+  if (!current || typeof current.sharing !== 'boolean') return undefined;
+  return current.sharing;
+}
+
+// Ordinary live fixes wait 8s between room rewrites. A stop, a leave, or any
+// sharing flip is not a live fix and must hit storage on this request.
+export function shouldHoldPlaceWrite({ previousSharing, sharing, lastPersistedAt, at }) {
+  if (sharing !== true) return false;
+  if (previousSharing === false) return false;
+  if (typeof lastPersistedAt !== 'number' || lastPersistedAt <= 0) return false;
+  if (typeof at !== 'number') return false;
+  return at >= lastPersistedAt && at - lastPersistedAt < 8000;
 }
 
 function placeStorageKey(place) {
@@ -863,10 +891,26 @@ function cleanWraps(input) {
   return wraps;
 }
 
+function stableJson(value) {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value ?? null);
+}
+
+function roomPersistStamp(room) {
+  return stableJson({
+    owners: roomOwners(room),
+    seals: roomSeals(room),
+  });
+}
+
 export async function commitKeys(room, input, profileKey) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return { error: json({ error: 'keys' }, 400) };
   if (typeof input.memberId !== 'string' || !MEMBER_ID.test(input.memberId)) return { error: json({ error: 'member' }, 400) };
   if (!isPublicKey(input.publicKey)) return { error: json({ error: 'keys' }, 400) };
+  const before = roomPersistStamp(room);
   const auth = await authorizeMember(room, input.memberId, profileKey || '');
   if (auth.error) return { error: auth.error, room };
   const seals = roomSeals(auth.room);
@@ -897,7 +941,8 @@ export async function commitKeys(room, input, profileKey) {
     delete seals.wraps[id];
   }
   const next = { ...auth.room, seals };
-  return { error: null, room: next, directory: viewKeys(next) };
+  const unchanged = roomPersistStamp(next) === before;
+  return { error: null, room: unchanged ? room : next, directory: viewKeys(unchanged ? room : next), unchanged };
 }
 
 export async function parseOperation(request) {
@@ -1286,7 +1331,7 @@ export async function handleSyncRequest(store, request, extras = {}) {
   if (op.kind === 'keys') {
     const next = await commitKeys(room, op.keys, op.profileKey || '');
     if (next.error) return next.error;
-    await store.write(op.token, next.room);
+    if (!next.unchanged) await store.write(op.token, next.room);
     return json({ ok: true, keys: next.directory });
   }
   if (op.kind === 'alert') {

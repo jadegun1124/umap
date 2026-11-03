@@ -1,5 +1,5 @@
 import { Capacitor, registerPlugin } from '@capacitor/core';
-import { KAKAO_CANCEL_MESSAGE, KAKAO_SETUP_MESSAGE, KAKAO_VERIFY_MESSAGE, kakaoJavascriptKey, kakaoNativeAppKeyOrPublic } from '../lib/kakaoAuth.mjs';
+import { KAKAO_CANCEL_MESSAGE, KAKAO_NATIVE_FAILED_MESSAGE, KAKAO_SERVER_MISSING_MESSAGE, KAKAO_SERVER_UNREACHABLE_MESSAGE, KAKAO_SETUP_MESSAGE, KAKAO_VERIFY_MESSAGE, kakaoJavascriptKey, kakaoNativeAppKeyOrPublic } from '../lib/kakaoAuth.mjs';
 import { localProfile } from '../lib/localProfile.mjs';
 import { restoredProfile } from '../lib/accountRestore.mjs';
 import { ACCOUNT_UNLINKED_MESSAGE } from '../lib/accountRestore.mjs';
@@ -95,13 +95,14 @@ export async function signInWithKakao(
 ): Promise<ProviderSignInResult> {
   const appKey = configuredKakaoLoginKey();
   if (!appKey) return { ok: false, message: KAKAO_SETUP_MESSAGE };
-  if (!familySyncUrl()) return { ok: false, message: KAKAO_VERIFY_MESSAGE };
+  if (!familySyncUrl()) return { ok: false, message: KAKAO_SERVER_MISSING_MESSAGE };
   let accessToken = '';
   if (Capacitor.isNativePlatform()) {
-    const result = await nativeAuth.signInKakao({ nativeAppKey: configuredKakaoNativeAppKey() }).catch(() => ({ ok: false as const, code: 'failed', detail: '' }));
+    const result: { ok: boolean; accessToken?: string; code?: string; detail?: string } = await nativeAuth.signInKakao({ nativeAppKey: configuredKakaoNativeAppKey() }).catch(() => ({ ok: false, code: 'failed', detail: '' }));
     if (!result.ok || !result.accessToken) {
       if (result.code === 'missing-client') return { ok: false, message: KAKAO_SETUP_MESSAGE };
       if (result.code === 'canceled') return { ok: false, message: KAKAO_CANCEL_MESSAGE };
+      if (!result.accessToken) return { ok: false, message: KAKAO_NATIVE_FAILED_MESSAGE, detail: result.detail || undefined };
       return { ok: false, message: KAKAO_VERIFY_MESSAGE, detail: result.detail || undefined };
     }
     accessToken = result.accessToken;
@@ -110,10 +111,12 @@ export async function signInWithKakao(
       accessToken = await browserAccessToken(appKey);
     } catch (error) {
       const message = error instanceof Error ? error.message : '';
-      return { ok: false, message: message === 'canceled' ? KAKAO_CANCEL_MESSAGE : KAKAO_VERIFY_MESSAGE };
+      if (message === 'canceled') return { ok: false, message: KAKAO_CANCEL_MESSAGE };
+      if (message === 'kakao-sdk') return { ok: false, message: KAKAO_NATIVE_FAILED_MESSAGE };
+      return { ok: false, message: KAKAO_VERIFY_MESSAGE };
     }
   }
-  const linked = await linkKakaoAccount(accessToken, snapshot, options.mode || 'login').catch(() => ({ ok: false as const, message: KAKAO_VERIFY_MESSAGE, detail: undefined as string | undefined }));
+  const linked = await linkKakaoAccount(accessToken, snapshot, options.mode || 'login').catch(() => ({ ok: false as const, message: KAKAO_SERVER_UNREACHABLE_MESSAGE, detail: undefined as string | undefined }));
   if (!linked.ok || !linked.account) return { ok: false, message: linked.message || KAKAO_VERIFY_MESSAGE, detail: linked.detail };
   if (options.mode === 'link' && linked.account.kakaoLinked !== true) {
     return { ok: false, message: ACCOUNT_UNLINKED_MESSAGE };

@@ -15,6 +15,11 @@ export function syncBannerText(phase, missingSyncKey = false, native = false) {
       ? '위치 서버에 연결하지 못했습니다. 이 폰에는 마지막으로 받은 위치가 보입니다.'
       : '위치 서버에 연결하지 못했습니다. 이 브라우저 안에서만 공유됩니다.';
   }
+  if (phase === 'limited') {
+    return native
+      ? '위치 서버의 오늘 저장 한도를 넘었습니다. 오전 9시 이후에 다시 이어집니다. 이 폰에는 마지막으로 받은 위치가 보입니다.'
+      : '위치 서버의 오늘 저장 한도를 넘었습니다. 오전 9시 이후에 다시 이어집니다. 이 브라우저 안에서만 공유됩니다.';
+  }
   if (phase === 'rejected') {
     return native
       ? '가족 연결 키가 맞지 않습니다. 복구 코드로 다시 불러오면 이어서 공유됩니다.'

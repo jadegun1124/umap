@@ -1,4 +1,5 @@
 import { noteDiag } from '../lib/diagLog.mjs';
+import { QUOTA_RETRY_MS, quotaPollPaused, shouldRefreshFamilyKeys, syncPhaseAfterResponse } from '../lib/keySyncPace.mjs';
 import { openJson, sealJson, mintFamilyKey, unwrapFamilyKey, wrapFamilyKey } from '../lib/familySeal.mjs';
 import { contentKeyBytes, ensureDevice, familyKeyRecord, rememberFamilyKey, syncHistoryDirectory } from '../lib/familyVault.mjs';
 import { rememberPlaceName } from '../lib/placeAlias.mjs';
@@ -12,7 +13,7 @@ import type { SharedPlace, SharedProfile } from './familyShare';
 
 const KEY_PART = /^[A-Za-z0-9_-]{16,64}$/;
 
-export type SyncPhase = 'off' | 'connecting' | 'live' | 'down' | 'rejected';
+export type SyncPhase = 'off' | 'connecting' | 'live' | 'down' | 'rejected' | 'limited';
 
 export function isKeyPart(value: unknown): value is string {
   return typeof value === 'string' && KEY_PART.test(value);
@@ -105,9 +106,11 @@ async function request(path: string, init: RequestInit): Promise<Response> {
   return fetch(`${base}${path}`, { ...init, signal: timeoutSignal(8000), cache: 'no-store' });
 }
 
-async function noteStatus(response: Response): Promise<string> {
+let limitedUntil = 0;
+
+async function noteStatus(response: Response, method = 'GET'): Promise<string> {
   let error = '';
-  if (response.status === 401 || response.status === 403) {
+  if (response.status === 401 || response.status === 403 || response.status === 503) {
     try {
       const body = await response.clone().json() as { error?: unknown };
       if (body && typeof body.error === 'string') error = body.error;
@@ -115,9 +118,18 @@ async function noteStatus(response: Response): Promise<string> {
       error = '';
     }
   }
-  if (response.ok || error === 'member') setPhase('live');
-  else if (response.status === 401 || response.status === 403) setPhase('rejected');
-  else setPhase('down');
+  const next = syncPhaseAfterResponse(phase, {
+    ok: response.ok,
+    error,
+    status: response.status,
+    method,
+    now: Date.now(),
+    limitedUntil,
+  });
+  limitedUntil = next.limitedUntil;
+  if (next.phase === 'live' || next.phase === 'limited' || next.phase === 'rejected' || next.phase === 'down' || next.phase === 'off' || next.phase === 'connecting') {
+    setPhase(next.phase);
+  }
   return error;
 }
 
@@ -205,7 +217,7 @@ export async function publishChatRemote(
       headers: { 'content-type': 'application/json', 'x-umap-sync-key': syncToken },
       body: JSON.stringify({ id: message.id, from: message.from, to: message.to, text: message.text, at: message.at }),
     });
-    await noteStatus(response);
+    await noteStatus(response, 'POST');
     if (response.ok) return 'ok';
     return 'local';
   } catch {
@@ -314,7 +326,7 @@ export async function revokeFamilyPlace(link: {
   if (link.profileKey) headers['x-umap-profile-key'] = link.profileKey;
   try {
     const response = await request(`/v1/rooms/${link.code}/place`, { method: 'PUT', headers, body: JSON.stringify(body) });
-    await noteStatus(response);
+    await noteStatus(response, 'PUT');
   } catch {
     if (familySyncUrl()) setPhase('down');
   }
@@ -328,7 +340,7 @@ export async function deleteFamilyRoomRemote(code: string, writeKey: string, rea
       method: 'DELETE',
       headers: { 'x-umap-sync-key': token, 'x-umap-read-key': readKey },
     });
-    await noteStatus(response);
+    await noteStatus(response, 'DELETE');
     return response.ok ? 'ok' : 'failed';
   } catch {
     if (familySyncUrl()) setPhase('down');
@@ -340,8 +352,9 @@ async function sendQueued(path: string, token: string, body: unknown, drop: () =
   const epoch = syncEpoch;
   const headers: Record<string, string> = { 'content-type': 'application/json', 'x-umap-sync-key': token };
   if (profileKey) headers['x-umap-profile-key'] = profileKey;
+  const method = path.endsWith('/alert') ? 'POST' : 'PUT';
   const response = await request(path, {
-    method: path.endsWith('/alert') ? 'POST' : 'PUT',
+    method,
     headers,
     body: JSON.stringify(body),
   });
@@ -352,7 +365,7 @@ async function sendQueued(path: string, token: string, body: unknown, drop: () =
     return true;
   }
   const optionalMissing = optionalRouteMissing(path, response.status);
-  if (!optionalMissing) await noteStatus(response);
+  if (!optionalMissing) await noteStatus(response, method);
   if (response.ok || optionalMissing || response.status === 400 || response.status === 401 || response.status === 403 || response.status === 413) drop();
   return response.ok || optionalMissing;
 }
@@ -385,8 +398,12 @@ async function putRoomKeys(code: string, token: string, profileKey: string, body
   }
 }
 
+const keysSyncedAt = new Map<string, number>();
+
 export async function syncFamilyKeys(code: string, token: string, memberId: string, profileKey: string): Promise<boolean> {
   if (typeof localStorage === 'undefined' || !memberId || !profileKey || !splitSyncToken(token) || !/^\d{4,6}$/.test(code)) return false;
+  const paceKey = `${code}:${memberId}`;
+  if (!shouldRefreshFamilyKeys(keysSyncedAt.get(paceKey), Date.now(), familyKeyRecord(localStorage, code) != null)) return true;
   const device = await ensureDevice(localStorage);
   let directory = await putRoomKeys(code, token, profileKey, { memberId, publicKey: device.publicKey });
   if (!directory) return familyKeyRecord(localStorage, code) != null;
@@ -462,7 +479,9 @@ export async function syncFamilyKeys(code: string, token: string, memberId: stri
       history: synced.history,
     });
   }
-  return familyKeyRecord(localStorage, code) != null;
+  const ready = familyKeyRecord(localStorage, code) != null;
+  if (ready) keysSyncedAt.set(paceKey, Date.now());
+  return ready;
 }
 
 async function sealQueuedPlace(place: { code: string; token: string; body: Record<string, unknown>; profileKey: string }) {
@@ -638,10 +657,10 @@ async function flushQueues() {
       });
       if (!ok) failed = true;
     }
-    retryMs = failed ? Math.min(retryMs * 2, 20000) : 3000;
+    retryMs = currentSyncPhase() === 'limited' ? QUOTA_RETRY_MS : (failed ? Math.min(retryMs * 2, 20000) : 3000);
   } catch {
     failed = true;
-    retryMs = Math.min(retryMs * 2, 20000);
+    retryMs = currentSyncPhase() === 'limited' ? QUOTA_RETRY_MS : Math.min(retryMs * 2, 20000);
     if (familySyncUrl()) setPhase('down');
     else setPhase('off');
   } finally {
@@ -664,7 +683,7 @@ export async function probeFamilySync() {
       return;
     }
     await flushQueues();
-    if (phase !== 'rejected' && !hasPending()) setPhase('live');
+    if (phase !== 'rejected' && phase !== 'limited' && !hasPending()) setPhase('live');
   } catch {
     setPhase('down');
   }
@@ -797,6 +816,10 @@ export function startAdminRemoteSync(
 
   const tick = async () => {
     if (stopped) return;
+    if (quotaPollPaused(currentSyncPhase(), Date.now(), limitedUntil)) {
+      schedule(Math.max(0, limitedUntil - Date.now()));
+      return;
+    }
     let delay = 2500;
     try {
       const token = await syncTokenFor(link.writeKey, link.readKey);
@@ -833,7 +856,7 @@ export function startAdminRemoteSync(
           if (alert.at > since) since = alert.at;
         }
       } else {
-        delay = 8000;
+        delay = error === 'quota' ? QUOTA_RETRY_MS : 8000;
       }
     } catch {
       if (!stopped) setPhase('down');
@@ -908,6 +931,10 @@ export function startManagedFamilySync(
 
   const tick = async () => {
     if (stopped) return;
+    if (quotaPollPaused(currentSyncPhase(), Date.now(), limitedUntil)) {
+      timer = window.setTimeout(() => void tick(), Math.max(0, limitedUntil - Date.now()));
+      return;
+    }
     let delay = 4000;
     try {
       for (const link of usable) {
@@ -927,7 +954,7 @@ export function startManagedFamilySync(
         }
         if (!response.ok) {
           noteDiag({ kind: 'http', dir: 'download', path: `/v1/rooms/${link.code}/family`, status: response.status, ok: false, places: 0 });
-          delay = 12000;
+          delay = error === 'quota' ? QUOTA_RETRY_MS : 12000;
           continue;
         }
         const body: unknown = await response.json();
@@ -1021,7 +1048,7 @@ export async function registerRoomPush(link: RoomPushLink): Promise<boolean> {
       headers,
       body: JSON.stringify({ endpoint, p256dh, auth, name }),
     });
-    await noteStatus(response);
+    await noteStatus(response, 'PUT');
     return response.ok;
   } catch {
     return false;
