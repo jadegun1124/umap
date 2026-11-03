@@ -1,17 +1,5 @@
 import { useState } from 'react';
 import {
-  COACH_NEXT,
-  OVERLAY_ALLOW,
-  OVERLAY_ASK_BODY,
-  OVERLAY_ASK_TITLE,
-  OVERLAY_SKIP,
-  PRECISE_HINT,
-  WHILE_USING_DENY,
-  WHILE_USING_LEAD,
-  WHILE_USING_MOCK_TITLE,
-  WHILE_USING_ONCE,
-  WHILE_USING_OPTION,
-  WHILE_USING_TITLE,
   nextAlwaysAllowAction,
   type ForegroundPhase,
 } from '../../lib/alwaysAllowFlow.mjs';
@@ -22,8 +10,6 @@ import {
   readLocationAccess,
   requestForegroundLocation,
 } from '../../services/umapLocation';
-
-const iconSrc = `${import.meta.env.BASE_URL}umap-icon.png`;
 
 export type AlwaysSetupResult = {
   location: 'always' | 'while-using' | 'denied' | 'unavailable';
@@ -100,46 +86,75 @@ export function AlwaysAllowSetup({
   };
 
   return (
-    <div className="absolute inset-0 z-[80] flex flex-col bg-white px-5 pb-8 pt-4">
-      <div className="flex justify-end">
-        <button type="button" onClick={onClose} className="px-2 py-1 text-sm font-bold text-slate-400" aria-label="닫기">
-          닫기
+    <div className="absolute inset-0 z-[80] flex flex-col bg-white">
+      <div className="flex items-center justify-between px-4 pt-3 pb-2">
+        <button type="button" onClick={onClose} className="p-2 text-slate-500" aria-label="닫기">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M18 6L6 18M6 6l12 12" />
+          </svg>
         </button>
+        <span className="text-base font-semibold text-slate-700">위치</span>
+        <div className="w-10" />
       </div>
+
       {phase !== 'overlay' ? (
-        <div className="flex flex-1 flex-col">
-          <h2 className="mt-2 text-center text-xl font-black leading-snug">{WHILE_USING_TITLE}</h2>
-          <p className="mt-2 text-center text-sm font-semibold text-slate-500">{WHILE_USING_LEAD}</p>
-          <div className="mx-auto mt-6 w-full max-w-sm rounded-3xl bg-slate-50 p-4 shadow-sm">
-            <div className="mb-3 flex items-center gap-2">
-              <img src={iconSrc} alt="" className="h-8 w-8 rounded-lg" />
-              <p className="text-sm font-bold leading-5 text-slate-800">{WHILE_USING_MOCK_TITLE}</p>
+        <div className="flex flex-1 flex-col px-6">
+          <h2 className="mt-4 text-center text-xl font-bold leading-snug text-[#0084FF]">
+            위치 권한을 '항상 허용'으로 설정하세요
+          </h2>
+          <p className="mt-3 text-center text-sm leading-relaxed text-slate-600">
+            Kinnex가 정상적으로 작동하려면 '항상'으로 설정해야 합니다.
+          </p>
+
+          <div className="mt-8 space-y-6">
+            <div>
+              <p className="mb-2 text-sm font-semibold text-slate-700">1. 설정에서 위치 선택</p>
+              <div className="flex items-center justify-between rounded-xl border-2 border-[#0084FF] bg-white px-4 py-3">
+                <div className="flex items-center gap-2">
+                  <div className="flex h-7 w-7 items-center justify-center rounded bg-[#0084FF]">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="white">
+                      <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z" />
+                    </svg>
+                  </div>
+                  <span className="text-sm font-medium text-slate-800">위치</span>
+                </div>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" strokeWidth="2">
+                  <path d="M9 18l6-6-6-6" />
+                </svg>
+              </div>
             </div>
-            <div className="relative">
-              <span className="absolute -left-1 top-1/2 -translate-y-1/2 animate-pulse text-lg font-black text-[#0084FF]" aria-hidden>»</span>
-              <p className="rounded-xl bg-white px-8 py-3 text-center text-sm font-black text-[#0084FF] ring-2 ring-[#0084FF]">{WHILE_USING_OPTION}</p>
-              <span className="absolute -right-1 top-1/2 -translate-y-1/2 animate-pulse text-lg font-black text-[#0084FF]" aria-hidden>«</span>
+
+            <div>
+              <p className="mb-2 text-sm font-semibold text-slate-700">2. 그런 다음 항상 탭</p>
+              <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                <span className="text-sm font-medium text-slate-800">항상</span>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#0084FF" strokeWidth="2.5">
+                  <path d="M20 6L9 17l-5-5" />
+                </svg>
+              </div>
             </div>
-            <p className="mt-2 py-2 text-center text-sm font-semibold text-slate-400">{WHILE_USING_ONCE}</p>
-            <p className="py-2 text-center text-sm font-semibold text-slate-400">{WHILE_USING_DENY}</p>
           </div>
-          <p className="mt-4 text-center text-sm font-bold text-slate-700">{PRECISE_HINT}</p>
-          {!native && <p className="mt-2 text-center text-xs font-semibold text-slate-400">브라우저에서는 위치 허용 창만 열립니다.</p>}
+
+          <p className="mt-auto mb-2 text-center text-xs leading-relaxed text-slate-400">
+            회원님의 위치 데이터는 개인정보처리방침 및 사용자 설정에 따라 연구, 맞춤형 광고, 분석 목적 등을 위해 제3자와 공유될 수 있습니다.
+          </p>
+
           <button
             type="button"
             disabled={phase === 'busy'}
             onClick={() => void onNext()}
-            className="mt-auto w-full rounded-full bg-[#0084FF] py-3.5 text-base font-black text-white disabled:opacity-40"
+            className="mb-6 w-full rounded-xl bg-[#0084FF] py-4 text-base font-bold text-white disabled:opacity-50"
           >
-            {phase === 'busy' ? '여는 중…' : COACH_NEXT}
+            {phase === 'busy' ? '여는 중…' : '설정으로 이동'}
           </button>
         </div>
       ) : (
-        <div className="flex flex-1 flex-col">
-          <h2 className="mt-6 text-center text-xl font-black">{OVERLAY_ASK_TITLE}</h2>
-          <p className="mt-3 text-center text-sm font-semibold leading-6 text-slate-600">{OVERLAY_ASK_BODY}</p>
-          <p className="mt-2 text-center text-sm font-bold text-slate-700">{PRECISE_HINT}</p>
-          <div className="mt-auto space-y-2">
+        <div className="flex flex-1 flex-col px-6">
+          <h2 className="mt-10 text-center text-xl font-bold text-slate-800">다른 앱 위에 표시</h2>
+          <p className="mt-3 text-center text-sm leading-relaxed text-slate-600">
+            설정 화면 위에 항상 허용 안내를 띄웁니다.
+          </p>
+          <div className="mt-auto space-y-3 pb-6">
             <button
               type="button"
               onClick={() => {
@@ -150,16 +165,16 @@ export function AlwaysAllowSetup({
                   await openSettings(granted, !granted);
                 })();
               }}
-              className="w-full rounded-full bg-[#0084FF] py-3.5 text-base font-black text-white"
+              className="w-full rounded-xl bg-[#0084FF] py-4 text-base font-bold text-white"
             >
-              {OVERLAY_ALLOW}
+              표시 허용
             </button>
             <button
               type="button"
               onClick={() => void openSettings(false, true)}
-              className="w-full py-3 text-sm font-bold text-slate-500"
+              className="w-full py-3 text-sm font-semibold text-slate-500"
             >
-              {OVERLAY_SKIP}
+              건너뛰기
             </button>
           </div>
         </div>
