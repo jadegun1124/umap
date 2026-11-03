@@ -1,5 +1,5 @@
 import { noteDiag } from '../lib/diagLog.mjs';
-import { QUOTA_RETRY_MS, shouldRefreshFamilyKeys } from '../lib/keySyncPace.mjs';
+import { QUOTA_RETRY_MS, shouldRefreshFamilyKeys, syncPhaseAfterResponse } from '../lib/keySyncPace.mjs';
 import { openJson, sealJson, mintFamilyKey, unwrapFamilyKey, wrapFamilyKey } from '../lib/familySeal.mjs';
 import { contentKeyBytes, ensureDevice, familyKeyRecord, rememberFamilyKey, syncHistoryDirectory } from '../lib/familyVault.mjs';
 import { rememberPlaceName } from '../lib/placeAlias.mjs';
@@ -106,7 +106,9 @@ async function request(path: string, init: RequestInit): Promise<Response> {
   return fetch(`${base}${path}`, { ...init, signal: timeoutSignal(8000), cache: 'no-store' });
 }
 
-async function noteStatus(response: Response): Promise<string> {
+let limitedUntil = 0;
+
+async function noteStatus(response: Response, method = 'GET'): Promise<string> {
   let error = '';
   if (response.status === 401 || response.status === 403 || response.status === 503) {
     try {
@@ -116,10 +118,18 @@ async function noteStatus(response: Response): Promise<string> {
       error = '';
     }
   }
-  if (response.ok || error === 'member') setPhase('live');
-  else if (error === 'quota') setPhase('limited');
-  else if (response.status === 401 || response.status === 403) setPhase('rejected');
-  else setPhase('down');
+  const next = syncPhaseAfterResponse(phase, {
+    ok: response.ok,
+    error,
+    status: response.status,
+    method,
+    now: Date.now(),
+    limitedUntil,
+  });
+  limitedUntil = next.limitedUntil;
+  if (next.phase === 'live' || next.phase === 'limited' || next.phase === 'rejected' || next.phase === 'down' || next.phase === 'off' || next.phase === 'connecting') {
+    setPhase(next.phase);
+  }
   return error;
 }
 
@@ -207,7 +217,7 @@ export async function publishChatRemote(
       headers: { 'content-type': 'application/json', 'x-umap-sync-key': syncToken },
       body: JSON.stringify({ id: message.id, from: message.from, to: message.to, text: message.text, at: message.at }),
     });
-    await noteStatus(response);
+    await noteStatus(response, 'POST');
     if (response.ok) return 'ok';
     return 'local';
   } catch {
@@ -316,7 +326,7 @@ export async function revokeFamilyPlace(link: {
   if (link.profileKey) headers['x-umap-profile-key'] = link.profileKey;
   try {
     const response = await request(`/v1/rooms/${link.code}/place`, { method: 'PUT', headers, body: JSON.stringify(body) });
-    await noteStatus(response);
+    await noteStatus(response, 'PUT');
   } catch {
     if (familySyncUrl()) setPhase('down');
   }
@@ -330,7 +340,7 @@ export async function deleteFamilyRoomRemote(code: string, writeKey: string, rea
       method: 'DELETE',
       headers: { 'x-umap-sync-key': token, 'x-umap-read-key': readKey },
     });
-    await noteStatus(response);
+    await noteStatus(response, 'DELETE');
     return response.ok ? 'ok' : 'failed';
   } catch {
     if (familySyncUrl()) setPhase('down');
@@ -342,8 +352,9 @@ async function sendQueued(path: string, token: string, body: unknown, drop: () =
   const epoch = syncEpoch;
   const headers: Record<string, string> = { 'content-type': 'application/json', 'x-umap-sync-key': token };
   if (profileKey) headers['x-umap-profile-key'] = profileKey;
+  const method = path.endsWith('/alert') ? 'POST' : 'PUT';
   const response = await request(path, {
-    method: path.endsWith('/alert') ? 'POST' : 'PUT',
+    method,
     headers,
     body: JSON.stringify(body),
   });
@@ -354,7 +365,7 @@ async function sendQueued(path: string, token: string, body: unknown, drop: () =
     return true;
   }
   const optionalMissing = optionalRouteMissing(path, response.status);
-  if (!optionalMissing) await noteStatus(response);
+  if (!optionalMissing) await noteStatus(response, method);
   if (response.ok || optionalMissing || response.status === 400 || response.status === 401 || response.status === 403 || response.status === 413) drop();
   return response.ok || optionalMissing;
 }
@@ -1037,7 +1048,7 @@ export async function registerRoomPush(link: RoomPushLink): Promise<boolean> {
       headers,
       body: JSON.stringify({ endpoint, p256dh, auth, name }),
     });
-    await noteStatus(response);
+    await noteStatus(response, 'PUT');
     return response.ok;
   } catch {
     return false;

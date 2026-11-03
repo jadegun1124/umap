@@ -299,6 +299,23 @@ function legacyStorageKey(place, name) {
   return place.audience === 'family' ? `family\u0000${name}` : name;
 }
 
+export function previousPlaceSharing(room, place) {
+  if (!place || !room || !room.places) return undefined;
+  const current = adoptCurrent(room.places, place);
+  if (!current || typeof current.sharing !== 'boolean') return undefined;
+  return current.sharing;
+}
+
+// Ordinary live fixes wait 8s between room rewrites. A stop, a leave, or any
+// sharing flip is not a live fix and must hit storage on this request.
+export function shouldHoldPlaceWrite({ previousSharing, sharing, lastPersistedAt, at }) {
+  if (sharing !== true) return false;
+  if (previousSharing === false) return false;
+  if (typeof lastPersistedAt !== 'number' || lastPersistedAt <= 0) return false;
+  if (typeof at !== 'number') return false;
+  return at >= lastPersistedAt && at - lastPersistedAt < 8000;
+}
+
 function placeStorageKey(place) {
   if (place.memberId) {
     return place.audience === 'family' ? `id\u0000family\u0000${place.memberId}` : `id\u0000${place.memberId}`;

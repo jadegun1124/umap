@@ -1,6 +1,6 @@
 import { PUBLIC_NAVER_CLIENT_ID } from '../src/lib/naverAuth.mjs';
 import { createMemoryAccountStore, handleAccountOperation } from './account.mjs';
-import { applyAlert, applyDirectMessage, applySubscription, alertPushPayload, chatPushPayload, commitKeys, commitPlace, commitProfile, commitTrail, emptyRoom, memberRoomToken, parseOperation, planForgetMember, pushesForAlert, pushesForChat, removeSubscriptions, storageQuotaResponse, viewDirectMessages, viewFamilyPlaces, viewMyThreads, viewRoom, withCors } from './protocol.mjs';
+import { applyAlert, applyDirectMessage, applySubscription, alertPushPayload, chatPushPayload, commitKeys, commitPlace, commitProfile, commitTrail, emptyRoom, memberRoomToken, parseOperation, planForgetMember, previousPlaceSharing, pushesForAlert, pushesForChat, removeSubscriptions, shouldHoldPlaceWrite, storageQuotaResponse, viewDirectMessages, viewFamilyPlaces, viewMyThreads, viewRoom, withCors } from './protocol.mjs';
 import { createVapidKeys, sendWebPush } from './webpush.mjs';
 
 // One Durable Object per family room. The id is a hash of the invite code,
@@ -77,10 +77,16 @@ export class FamilyRoom {
       if (next.error) return next.error;
       const memberId = typeof op.place?.memberId === 'string' ? op.place.memberId : '';
       const at = typeof op.place?.at === 'number' ? op.place.at : Date.now();
-      // One room rewrite per member per 8s. A 25m highway fix still returns ok,
-      // and the next fix after 8s is the one stored. Duplicate JS and native uploads collapse.
+      // One room rewrite per member per 8s for a live fix. A stop or a sharing
+      // change is written now; returning ok without storing it would leave the
+      // member shared. Duplicate JS and native uploads still collapse.
       const lastAt = memberId && this.persistedPlaceAt ? this.persistedPlaceAt.get(memberId) || 0 : 0;
-      const held = !next.ignored && memberId && lastAt > 0 && at >= lastAt && at - lastAt < 8000;
+      const held = !next.ignored && shouldHoldPlaceWrite({
+        previousSharing: previousPlaceSharing(room, op.place),
+        sharing: op.place?.sharing,
+        lastPersistedAt: lastAt,
+        at,
+      });
       if (!next.ignored && !held) {
         room = next.room;
         await this.ctx.storage.put('room', room);
@@ -320,6 +326,28 @@ async function purgeDisclosureLedger(env) {
   });
 }
 
+export async function quotaResponse(response) {
+  if (!response || response.status !== 503) return null;
+  const body = await response.clone().json().catch(() => null);
+  if (!body || body.error !== 'quota') return null;
+  return response;
+}
+
+export async function presentRoomResponse(kind, response) {
+  if (kind === 'alert' || kind === 'chat') {
+    const quota = await quotaResponse(response);
+    if (quota) return quota;
+    const data = await response.json();
+    if (kind === 'alert') return Response.json({ ok: data.ok === true });
+    return Response.json({ messages: Array.isArray(data.messages) ? data.messages : [] });
+  }
+  if (kind === 'place' || kind === 'trail' || kind === 'family' || kind === 'get') {
+    const data = await response.json();
+    return Response.json(data, { status: response.status });
+  }
+  return response;
+}
+
 export default {
   async scheduled(_event, env, ctx) {
     ctx.waitUntil(purgeDisclosureLedger(env).catch(() => undefined));
@@ -376,15 +404,17 @@ export default {
       if (limited) return withCors(limited);
       throw error;
     }
-    if (op.kind === 'place' || op.kind === 'trail' || op.kind === 'family' || op.kind === 'get') {
-      const data = await response.json();
-      await noteHandling(env, op, data).catch(() => undefined);
-      return withCors(Response.json(data, { status: response.status }));
+    if (op.kind === 'alert' || op.kind === 'chat') {
+      const quota = await quotaResponse(response);
+      if (!quota) {
+        const data = await response.clone().json().catch(() => null);
+        if (data) await deliverAlert(env, stub, data);
+      }
     }
-    if (op.kind !== 'alert' && op.kind !== 'chat') return withCors(response);
-    const data = await response.json();
-    await deliverAlert(env, stub, data);
-    if (op.kind === 'alert') return withCors(Response.json({ ok: data.ok === true }));
-    return withCors(Response.json({ messages: Array.isArray(data.messages) ? data.messages : [] }));
+    if (op.kind === 'place' || op.kind === 'trail' || op.kind === 'family' || op.kind === 'get') {
+      const data = await response.clone().json().catch(() => null);
+      if (data && response.status !== 503) await noteHandling(env, op, data).catch(() => undefined);
+    }
+    return withCors(await presentRoomResponse(op.kind, response));
   },
 };
