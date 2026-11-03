@@ -751,6 +751,7 @@ public class UmapLocationPlugin extends Plugin {
         intent.putExtra(Intent.EXTRA_PACKAGE_NAME, pkg);
         intent.putExtra(Settings.EXTRA_APP_PACKAGE, pkg);
         intent.putExtra("android.intent.extra.PERMISSION_GROUP_NAME", LOCATION_GROUP);
+        intent.putExtra("android.intent.extra.PERMISSION_NAME", android.Manifest.permission.ACCESS_BACKGROUND_LOCATION);
         intent.putExtra(Intent.EXTRA_USER, Process.myUserHandle());
         return intent;
     }
@@ -765,37 +766,37 @@ public class UmapLocationPlugin extends Plugin {
     private boolean openLocationRadio() {
         String pkg = getContext().getPackageName();
         Intent template = locationRadioIntent(pkg);
-        // Samsung's ManagePermissionsActivity is the host of 위치 액세스 권한
-        // (항상 허용 / 앱 사용 중에만 / 정확한 위치 사용). Name it before any
-        // other controller. A loose setPackage match can hit a trampoline.
-        String[][] targets = new String[][] {
-            {"com.samsung.android.permissioncontroller", "com.android.permissioncontroller.permission.ui.ManagePermissionsActivity"},
+
+        // Samsung first — these host the 위치 액세스 권한 page
+        String[][] samsungTargets = new String[][] {
             {"com.samsung.android.permissioncontroller", "com.android.permissioncontroller.permission.ui.ManageAppPermissionActivity"},
             {"com.samsung.android.permissioncontroller", "com.android.permissioncontroller.permission.ui.AppPermissionActivity"},
             {"com.samsung.android.permissioncontroller", "com.samsung.android.permissioncontroller.permission.ui.AppPermissionActivity"},
             {"com.samsung.android.permissioncontroller", "com.android.permissioncontroller.permission.ui.handheld.AppPermissionActivity"},
-            {"com.google.android.permissioncontroller", "com.android.permissioncontroller.permission.ui.ManagePermissionsActivity"},
+            {"com.samsung.android.permissioncontroller", "com.android.permissioncontroller.permission.ui.ManagePermissionsActivity"},
+        };
+        if (startExplicit(template, samsungTargets)) return true;
+
+        // Try with FINE_LOCATION as well on Samsung
+        Intent fineIntent = new Intent(template);
+        fineIntent.putExtra("android.intent.extra.PERMISSION_NAME", android.Manifest.permission.ACCESS_FINE_LOCATION);
+        if (startExplicit(fineIntent, samsungTargets)) return true;
+
+        // Then generic controllers
+        String[][] otherTargets = new String[][] {
             {"com.google.android.permissioncontroller", "com.android.permissioncontroller.permission.ui.ManageAppPermissionActivity"},
             {"com.google.android.permissioncontroller", "com.android.permissioncontroller.permission.ui.AppPermissionActivity"},
-            {"com.google.android.permissioncontroller", "com.android.permissioncontroller.permission.ui.handheld.AppPermissionActivity"},
-            {"com.android.permissioncontroller", "com.android.permissioncontroller.permission.ui.ManagePermissionsActivity"},
             {"com.android.permissioncontroller", "com.android.permissioncontroller.permission.ui.ManageAppPermissionActivity"},
             {"com.android.permissioncontroller", "com.android.permissioncontroller.permission.ui.AppPermissionActivity"},
-            {"com.android.permissioncontroller", "com.android.permissioncontroller.permission.ui.handheld.AppPermissionActivity"}
         };
-        if (startExplicit(template, targets)) return true;
-        String[] controllers = new String[] {
-            "com.samsung.android.permissioncontroller",
-            "com.google.android.permissioncontroller",
-            "com.android.permissioncontroller"
-        };
-        for (String controller : controllers) {
-            Intent intent = locationRadioIntent(pkg);
-            intent.setPackage(controller);
-            if (canStart(intent) && startExternal(intent)) return true;
-        }
-        Intent implicit = locationRadioIntent(pkg);
-        return canStart(implicit) && startExternal(implicit);
+        if (startExplicit(template, otherTargets)) return true;
+
+        // Package-only fallback for Samsung controller
+        Intent samsungPkg = new Intent(template);
+        samsungPkg.setPackage("com.samsung.android.permissioncontroller");
+        if (canStart(samsungPkg) && startExternal(samsungPkg)) return true;
+
+        return false;
     }
 
     private boolean openAppPermissions() {
