@@ -98,7 +98,7 @@ export async function signInWithKakao(
   if (!familySyncUrl()) return { ok: false, message: KAKAO_SERVER_MISSING_MESSAGE };
   let accessToken = '';
   if (Capacitor.isNativePlatform()) {
-    const result = await nativeAuth.signInKakao({ nativeAppKey: configuredKakaoNativeAppKey() }).catch(() => ({ ok: false as const, code: 'failed', detail: '' }));
+    const result: { ok: boolean; accessToken?: string; code?: string; detail?: string } = await nativeAuth.signInKakao({ nativeAppKey: configuredKakaoNativeAppKey() }).catch(() => ({ ok: false, code: 'failed', detail: '' }));
     if (!result.ok || !result.accessToken) {
       if (result.code === 'missing-client') return { ok: false, message: KAKAO_SETUP_MESSAGE };
       if (result.code === 'canceled') return { ok: false, message: KAKAO_CANCEL_MESSAGE };
