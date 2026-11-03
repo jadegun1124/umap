@@ -1,5 +1,5 @@
 import { noteDiag } from '../lib/diagLog.mjs';
-import { QUOTA_RETRY_MS, shouldRefreshFamilyKeys, syncPhaseAfterResponse } from '../lib/keySyncPace.mjs';
+import { QUOTA_RETRY_MS, quotaPollPaused, shouldRefreshFamilyKeys, syncPhaseAfterResponse } from '../lib/keySyncPace.mjs';
 import { openJson, sealJson, mintFamilyKey, unwrapFamilyKey, wrapFamilyKey } from '../lib/familySeal.mjs';
 import { contentKeyBytes, ensureDevice, familyKeyRecord, rememberFamilyKey, syncHistoryDirectory } from '../lib/familyVault.mjs';
 import { rememberPlaceName } from '../lib/placeAlias.mjs';
@@ -816,8 +816,8 @@ export function startAdminRemoteSync(
 
   const tick = async () => {
     if (stopped) return;
-    if (currentSyncPhase() === 'limited') {
-      schedule(QUOTA_RETRY_MS);
+    if (quotaPollPaused(currentSyncPhase(), Date.now(), limitedUntil)) {
+      schedule(Math.max(0, limitedUntil - Date.now()));
       return;
     }
     let delay = 2500;
@@ -931,8 +931,8 @@ export function startManagedFamilySync(
 
   const tick = async () => {
     if (stopped) return;
-    if (currentSyncPhase() === 'limited') {
-      timer = window.setTimeout(() => void tick(), QUOTA_RETRY_MS);
+    if (quotaPollPaused(currentSyncPhase(), Date.now(), limitedUntil)) {
+      timer = window.setTimeout(() => void tick(), Math.max(0, limitedUntil - Date.now()));
       return;
     }
     let delay = 4000;

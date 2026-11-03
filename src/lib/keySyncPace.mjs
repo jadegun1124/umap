@@ -12,6 +12,12 @@ export function shouldRefreshFamilyKeys(lastAt, now, hasKey) {
   return now - lastAt >= FAMILY_KEY_SYNC_MS;
 }
 
+// While the quota backoff is still running, map polls must not hit the server.
+// Once it has elapsed, the next response is allowed to leave `limited`.
+export function quotaPollPaused(phase, now, limitedUntil) {
+  return phase === 'limited' && typeof limitedUntil === 'number' && now < limitedUntil;
+}
+
 // A successful read must not clear a quota banner. A successful write does.
 // After the backoff, the next response is allowed to move the phase again.
 export function syncPhaseAfterResponse(phase, input) {
