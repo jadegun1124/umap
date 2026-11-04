@@ -5,8 +5,9 @@ import { accountNeedsDisplayName, clearStoredAccount, readStoredAccountKey, snap
 import { openAccountSecrets } from '../../lib/familyVault.mjs';
 import { KAKAO_SETUP_MESSAGE } from '../../lib/kakaoAuth.mjs';
 import { NAVER_SETUP_MESSAGE } from '../../lib/naverAuth.mjs';
-import { backupFamilyAccount, persistAccountResult, recoverFamilyAccount, type AccountSnapshot } from '../../services/familyAccount';
+import { backupFamilyAccount, linkKakaoAccount, persistAccountResult, recoverFamilyAccount, type AccountSnapshot } from '../../services/familyAccount';
 import { configuredKakaoLoginKey, signInWithKakao } from '../../services/kakaoSignIn';
+import { KakaoMergeSheet } from './KakaoMergeSheet';
 import { configuredNaverClientId, signInWithNaver } from '../../services/naverSignIn';
 import { KEEP_PERMISSION_ASKED_KEY, markSessionFlag } from '../../lib/systemSettings.mjs';
 import { askAlwaysLocation, askBattery, askMotion, askNotifications, askWhileUsing } from '../../services/systemPermissions';
@@ -91,6 +92,7 @@ function Login({ onSubmit }: { onSubmit: (profile: Profile) => void }) {
   const [message, setMessage] = useState<string | null>(null);
   const [detail, setDetail] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [kakaoMerge, setKakaoMerge] = useState<{ accessToken: string; snapshot: AccountSnapshot | null } | null>(null);
   const kakaoKey = configuredKakaoLoginKey();
   const naverId = configuredNaverClientId();
 
@@ -238,6 +240,11 @@ function Login({ onSubmit }: { onSubmit: (profile: Profile) => void }) {
             setDetail(null);
           const call = providerCall();
           void signInWithKakao(call.snapshot, { mode: call.mode, persist: true }).then((result) => {
+            if (result.conflict && result.accessToken) {
+              setBusy(false);
+              setKakaoMerge({ accessToken: result.accessToken, snapshot: call.snapshot });
+              return;
+            }
             finishProvider(result, '카카오 로그인을 마치지 못했습니다. 이 상태로 시작하지 않습니다.');
           });
         }}
@@ -335,6 +342,32 @@ function Login({ onSubmit }: { onSubmit: (profile: Profile) => void }) {
       </button>
       {message && <p className="mt-3 whitespace-pre-line text-sm leading-6 text-slate-600">{message}</p>}
       {detail && <p className="mt-1 text-xs leading-5 text-slate-400">{detail}</p>}
+      {kakaoMerge && (
+        <KakaoMergeSheet
+          busy={busy}
+          onCancel={() => {
+            setKakaoMerge(null);
+            setMessage('카카오 연결을 취소했습니다. 이 폰의 지도는 그대로입니다.');
+          }}
+          onMerge={() => {
+            const pendingMerge = kakaoMerge;
+            setBusy(true);
+            void linkKakaoAccount(pendingMerge.accessToken, pendingMerge.snapshot, 'link', true).then(async (linked) => {
+              setBusy(false);
+              if (!linked.ok || !linked.account) {
+                setMessage(linked.message || '기존 계정을 가져오지 못했습니다. 카카오 로그인을 다시 해 주세요.');
+                return;
+              }
+              setKakaoMerge(null);
+              await persistAccountResult(linked);
+              finishAccount(linked.account);
+            }).catch(() => {
+              setBusy(false);
+              setMessage('기존 계정을 가져오지 못했습니다. 위치 서버에 다시 연결해 주세요.');
+            });
+          }}
+        />
+      )}
     </div>
   );
 }

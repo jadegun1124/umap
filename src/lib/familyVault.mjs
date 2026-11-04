@@ -199,6 +199,13 @@ export async function syncHistoryDirectory({ history, pubs, memberId, privateKey
   return { history: refreshed, selfShare: selfShare || null };
 }
 
+export function historyShareToSave(memberId, history, mergedFrom, selfShare) {
+  const row = mergedFrom && history && typeof history === 'object' ? history[mergedFrom] : null;
+  const adopted = row && typeof row === 'object' ? row[memberId] : null;
+  if (adopted && adopted.epk && adopted.iv && adopted.ct) return adopted;
+  return selfShare || null;
+}
+
 const historyWrapCache = new Map();
 
 function historyWrapKey(holderId, ownerId, memberId, pub, key) {
@@ -252,8 +259,16 @@ export async function openAccountSecrets(account, storage, typedCode = '') {
     writeStoredRecoveryCode(storage, account.recoveryCode);
   }
   const code = known || normalizeRecoveryCode(readStoredRecoveryCode(storage));
+  let openedVault = false;
   if (account.vault && code) {
     const device = await unwrapVault(code, account.vault);
+    if (device) {
+      writeDevice(storage, device);
+      openedVault = true;
+    }
+  }
+  if (!openedVault && account.mergedVault && code) {
+    const device = await unwrapVault(code, account.mergedVault);
     if (device) writeDevice(storage, device);
   }
   if (!readDevice(storage)) await ensureDevice(storage);

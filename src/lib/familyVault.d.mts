@@ -17,6 +17,12 @@ export function syncHistoryDirectory(input: {
   privateKey: string;
   contentKey?: Uint8Array | null;
 }): Promise<{ history: Record<string, Record<string, { epk: string; iv: string; ct: string }>>; selfShare: { epk: string; iv: string; ct: string } | null }>;
+export function historyShareToSave(
+  memberId: string,
+  history: Record<string, Record<string, { epk: string; iv: string; ct: string }>> | null | undefined,
+  mergedFrom: string,
+  selfShare: { epk: string; iv: string; ct: string } | null,
+): { epk: string; iv: string; ct: string } | null;
 export function rewrapHistoryShares(input: {
   history?: Record<string, Record<string, { epk: string; iv: string; ct: string }>>;
   pubs?: Record<string, string>;
