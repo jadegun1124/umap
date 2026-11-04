@@ -122,6 +122,9 @@ public class LocationKeepService {
     private static final long FIX_STALE_MOVING_MS = 15_000L;
     /** No GPS fix while still. Also the banner threshold. */
     private static final long FIX_STALE_STILL_MS = 90_000L;
+    /** After a re-register, leave GNSS alone long enough to lock. */
+    private static final long GPS_REREGISTER_COOLDOWN_MS = 60_000L;
+    private static volatile long lastReregisterAt = 0L;
     private static final int JOURNAL_CAP = 120;
     private static volatile boolean starting = false;
     private static final int HEARTBEAT_CODE = REQUEST_CODE + 1;
@@ -305,16 +308,24 @@ public class LocationKeepService {
 
     /** Called every 15s from the foreground service, so a dead GPS listener is not left until the 2 minute alarm. */
     public static void pokeGps(Context context) {
-        if (context == null || !wanted(context) || !hasLocationPermission(context)) return;
-        long last = lastFixAt(context);
-        long quiet = last <= 0L ? Long.MAX_VALUE : System.currentTimeMillis() - last;
-        long due = movingStream ? FIX_STALE_MOVING_MS : FIX_STALE_STILL_MS;
-        if (quiet < due) return;
+        if (!shouldReregisterGps(context)) return;
         JSONObject config = readConfig(context);
-        if (config == null || !anySharing(config)) return;
+        if (config == null) return;
         synchronized (LOCK) {
             registerUpdates(context, config, true);
         }
+    }
+
+    private static boolean shouldReregisterGps(Context context) {
+        if (context == null || !wanted(context) || !hasLocationPermission(context)) return false;
+        long last = lastFixAt(context);
+        if (last <= 0L) return false;
+        long now = System.currentTimeMillis();
+        long due = movingStream ? FIX_STALE_MOVING_MS : FIX_STALE_STILL_MS;
+        if (now - last < due) return false;
+        if (now - lastReregisterAt < GPS_REREGISTER_COOLDOWN_MS) return false;
+        JSONObject config = readConfig(context);
+        return config != null && anySharing(config);
     }
 
     /** Re-register GPS after the foreground service is up. A background registration can be dropped. */
@@ -396,15 +407,12 @@ public class LocationKeepService {
                 boolean movingNow;
                 synchronized (LOCK) {
                     ensureFilter(context);
-                    long quiet = lastFixAt(context) <= 0L ? Long.MAX_VALUE : System.currentTimeMillis() - lastFixAt(context);
-                    long due = movingStream ? FIX_STALE_MOVING_MS : FIX_STALE_STILL_MS;
-                    JSONObject config = readConfig(context);
-                    boolean granted = hasLocationPermission(context);
                     if (!LocationKeepProcess.isAlive()) {
                         LocationKeepProcess.hold(context);
                     }
-                    if (granted && quiet >= due && anySharing(config)) {
-                        registerUpdates(context, config, true);
+                    if (shouldReregisterGps(context)) {
+                        JSONObject config = readConfig(context);
+                        if (config != null) registerUpdates(context, config, true);
                     }
                     last = lastPublished == null ? null : new Location(lastPublished);
                     movingNow = movingStream;
@@ -577,6 +585,7 @@ public class LocationKeepService {
             }
         }
         updatesRegistered = true;
+        lastReregisterAt = System.currentTimeMillis();
     }
 
     private static void removeUpdates(Context context) {
