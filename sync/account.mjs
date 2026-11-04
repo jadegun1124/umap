@@ -7,7 +7,7 @@ import { NAVER_REDIRECT, allowedNaverRedirect } from '../src/lib/naverAuth.mjs';
 import { listDisclosures, purgeExpiredDisclosureIndex, purgeExpiredDisclosures } from './disclosure.mjs';
 import { diagReadAuthorized, forgetDiagReports, listDiagReports, purgeDiagReports, putDiagReport, readDiagReport } from './diag.mjs';
 import { listHandling, recordHandling } from './handling.mjs';
-import { mintInvite, redeemInvite } from './invite.mjs';
+import { mintInvite, redeemInvite, revokeInvite } from './invite.mjs';
 
 const MEMBER_ID = /^local-[a-z0-9]{3,64}$/;
 const KEY_PART = /^[A-Za-z0-9_-]{16,64}$/;
@@ -1206,6 +1206,11 @@ export async function parseAccountOperation(request) {
     return json({ error: 'method' }, 405);
   }
 
+  const inviteRevoke = path.match(/^\/v1\/invites\/([A-Za-z0-9_-]{16,64})\/revoke$/);
+  if (inviteRevoke) {
+    if (request.method !== 'POST') return json({ error: 'method' }, 405);
+    return { kind: 'account-invite-revoke', ticket: inviteRevoke[1], accountKey };
+  }
   const inviteRedeem = path.match(/^\/v1\/invites\/([A-Za-z0-9_-]{16,64})\/redeem$/);
   if (inviteRedeem) {
     if (request.method !== 'POST') return json({ error: 'method' }, 405);
@@ -1244,6 +1249,8 @@ export async function parseAccountOperation(request) {
       code: typeof value.code === 'string' ? value.code : '',
       syncToken: typeof value.syncToken === 'string' ? value.syncToken : '',
       memberId: typeof value.memberId === 'string' ? value.memberId : '',
+      link: value.link === true,
+      accountKey,
     };
   }
 
@@ -1371,15 +1378,37 @@ export async function handleAccountOperation(store, op, options = {}) {
     return json({ ok: true, skipped: recorded.skipped === true });
   }
   if (op.kind === 'account-invite-mint') {
+    if (op.link === true) {
+      const record = await findBySession(store, op.accountKey);
+      if (!record || !record.room || record.room.code !== op.code) return accountError('account');
+      const minted = await mintInvite(store, { code: op.code, memberId: record.memberId, link: true }, options.now || Date.now());
+      if (minted.error) return json({ error: minted.error }, 400);
+      return json({ ok: true, ticket: minted.ticket, exp: minted.exp, link: true });
+    }
     const minted = await mintInvite(store, op, options.now || Date.now());
     if (minted.error) return json({ error: minted.error }, 400);
     return json({ ok: true, ticket: minted.ticket, exp: minted.exp });
   }
+  if (op.kind === 'account-invite-revoke') {
+    const record = await findBySession(store, op.accountKey);
+    if (!record) return accountError('account');
+    const revoked = await revokeInvite(store, op.ticket, record.memberId);
+    if (revoked.error) return json({ error: revoked.error }, revoked.error === 'account' ? 403 : 404);
+    return json({ ok: true });
+  }
   if (op.kind === 'account-invite-redeem') {
     const redeemed = await redeemInvite(store, op.ticket, options.now || Date.now());
     if (redeemed.error === 'expired') return json({ error: 'expired', message: '초대 링크가 만료되었습니다. 새 초대를 받아 주세요.' }, 410);
+    if (redeemed.error === 'revoked') return json({ error: 'revoked', message: '그룹장이 초대를 취소했습니다.' }, 410);
+    if (redeemed.error === 'limited') return json({ error: 'limited', message: '초대 확인이 잠시 많습니다. 조금 뒤에 다시 열어 주세요.' }, 429);
     if (redeemed.error) return json({ error: 'invite', message: '초대 링크를 확인하지 못했습니다. 한 번 쓴 링크는 다시 열 수 없습니다.' }, 404);
-    return json({ ok: true, code: redeemed.code, syncToken: redeemed.syncToken });
+    return json({
+      ok: true,
+      code: redeemed.code,
+      ...(redeemed.syncToken ? { syncToken: redeemed.syncToken } : {}),
+      ...(redeemed.ownerMemberId ? { ownerMemberId: redeemed.ownerMemberId } : {}),
+      ...(redeemed.link ? { link: true } : {}),
+    });
   }
   if (op.kind === 'account-diag-put') {
     const record = await findBySession(store, op.accountKey);

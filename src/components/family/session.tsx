@@ -16,7 +16,7 @@ import {
 import { cancelAccountBackup, loadFamilyAccount, scheduleAccountBackup } from '../../services/familyAccount';
 import { deviceProfileKey, localProfile } from '../../lib/localProfile.mjs';
 import { carryPlace, cleanPlace } from '../../lib/memberPlace.mjs';
-import { isSelfEchoPlace, mergePeerSessions, withoutSelfEcho } from '../../lib/peerFamily.mjs';
+import { ensureRoster, isSelfEchoPlace, mergePeerSessions, withoutSelfEcho } from '../../lib/peerFamily.mjs';
 import { resolveManagedTarget } from '../../lib/managedPlace.mjs';
 import { hiddenKeysForMember, placeHidden } from '../../lib/familyRoom.mjs';
 import { bindPlaceToMember, placeIsSelf, placeMemberId } from '../../lib/placeBinding.mjs';
@@ -661,7 +661,7 @@ type Action =
   | { type: 'clear-home' }
   | { type: 'add-member'; name: string; code: string }
   | { type: 'remove-member'; id: string }
-  | { type: 'accept-invite'; label: string; code: string; syncToken: string | null; rosterName: string | null; adminName: string | null }
+  | { type: 'accept-invite'; label: string; code: string; syncToken: string | null; rosterName: string | null; adminName: string | null; ownerMemberId: string | null }
   | { type: 'set-guardian-share'; code: string; share: 'allowed' | 'revoked' }
   | { type: 'leave-guardian'; id: string }
   | { type: 'dismiss-invite' }
@@ -876,6 +876,7 @@ function reduceSession(state: Session, action: Action): Session {
       const syncToken = cleanSyncToken(action.syncToken) || (state.pendingInvite === code ? cleanSyncToken(state.pendingSyncToken) : null);
       const rosterName = typeof action.rosterName === 'string' ? action.rosterName.trim().slice(0, 80) : '';
       const adminName = typeof action.adminName === 'string' ? action.adminName.trim().slice(0, 20) : '';
+      const ownerMemberId = typeof action.ownerMemberId === 'string' ? action.ownerMemberId.trim().slice(0, 80) : '';
       const link: GuardianLink = {
         id: `g-${Date.now()}`,
         label,
@@ -885,6 +886,7 @@ function reduceSession(state: Session, action: Action): Session {
         ...(syncToken ? { syncToken } : {}),
         ...(rosterName ? { rosterName } : {}),
         ...(adminName ? { adminName } : {}),
+        ...(ownerMemberId ? { ownerMemberId } : {}),
       };
       const alertNote = leaveAlert ? ` 집 반경 ${leaveAlert.radiusM}m를 나가면 가족 지도에 알림이 남습니다.` : '';
       const sharingNote = state.shareSelfWithFamily
@@ -1323,8 +1325,10 @@ function reduceSession(state: Session, action: Action): Session {
     case 'apply-shared-profiles': {
       const profiles = action.profiles.filter((profile) => isMemberId(profile.memberId) && profile.memberId !== state.profile?.id);
       if (profiles.length === 0) return state;
-      let members = state.members;
-      let changed = false;
+      const ownerMemberId = state.guardians.find((link) => link.code === action.code)?.ownerMemberId || '';
+      const ensured = ensureRoster(state.members, profiles, action.code, ownerMemberId);
+      let members = ensured.members;
+      let changed = ensured.joined.length > 0;
       for (const profile of profiles) {
         const index = memberIndexForProfile(members, profile, action.code);
         if (index < 0) continue;
@@ -1333,13 +1337,16 @@ function reduceSession(state: Session, action: Action): Session {
         if (!name) continue;
         const sentPhoto = typeof profile.photo === 'string' ? cleanPhoto(profile.photo) : undefined;
         const photo = typeof profile.photo === 'string' ? (sentPhoto || member.photo) : undefined;
-        if (member.name === name && (member.photo || '') === (photo || '') && member.publisherId === profile.memberId) continue;
+        const lead = ownerMemberId !== '' && profile.memberId === ownerMemberId;
+        if (member.name === name && (member.photo || '') === (photo || '') && member.publisherId === profile.memberId && member.lead === lead) continue;
         changed = true;
         members = members.map((item, itemIndex) => (itemIndex === index
-          ? { ...item, name, publisherId: profile.memberId, ...(photo ? { photo } : { photo: undefined }) }
+          ? { ...item, name, publisherId: profile.memberId, ...(photo ? { photo } : { photo: undefined }), ...(lead ? { lead: true } : {}) }
           : item));
       }
-      return changed ? { ...state, members } : state;
+      if (!changed) return state;
+      const notes = ensured.joined.map((name) => notice('가족이 들어왔습니다', `${name} 님이 초대 링크로 가족에 참여했습니다. 그룹장이 목록에서 지울 수 있습니다.`));
+      return { ...state, members, ...(notes.length ? { notices: [...notes, ...state.notices] } : {}) };
     }
     case 'merge-visits': {
       const now = Date.now();
@@ -1566,7 +1573,7 @@ interface FamilyApi {
   clearHome: () => void;
   addMember: (name: string, code: string) => void;
   removeMember: (id: string) => void;
-  acceptInvite: (label: string, code: string, syncToken?: string | null, rosterName?: string | null, adminName?: string | null) => void;
+  acceptInvite: (label: string, code: string, syncToken?: string | null, rosterName?: string | null, adminName?: string | null, ownerMemberId?: string | null) => void;
   setGuardianShare: (code: string, share: 'allowed' | 'revoked') => void;
   leaveGuardian: (id: string) => void;
   dismissInvite: () => void;
@@ -1776,9 +1783,9 @@ export function FamilyProvider({ children }: { children: React.ReactNode }) {
     clearHome: () => dispatch({ type: 'clear-home' }),
     addMember: (name, code) => dispatch({ type: 'add-member', name, code }),
     removeMember: (id) => dispatch({ type: 'remove-member', id }),
-    acceptInvite: (label, code, syncToken, rosterName, adminName) => {
+    acceptInvite: (label, code, syncToken, rosterName, adminName, ownerMemberId) => {
       resumeRoom(code);
-      dispatch({ type: 'accept-invite', label, code, syncToken: syncToken ?? null, rosterName: rosterName ?? null, adminName: adminName ?? null });
+      dispatch({ type: 'accept-invite', label, code, syncToken: syncToken ?? null, rosterName: rosterName ?? null, adminName: adminName ?? null, ownerMemberId: ownerMemberId ?? null });
     },
     setGuardianShare: (code, share) => dispatch({ type: 'set-guardian-share', code, share }),
     leaveGuardian: (id) => dispatch({ type: 'leave-guardian', id }),

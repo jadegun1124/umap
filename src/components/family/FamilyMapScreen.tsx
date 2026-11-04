@@ -5,8 +5,9 @@ import { looksLikePhone, localProfile } from '../../lib/localProfile.mjs';
 import { KAKAO_SETUP_MESSAGE } from '../../lib/kakaoAuth.mjs';
 import { NAVER_SETUP_MESSAGE } from '../../lib/naverAuth.mjs';
 import { ACCOUNT_LINKED_OTHER_MESSAGE, ACCOUNT_UNLINKED_MESSAGE, linkedAccountWouldSwitch, readStoredAccountKey, readStoredAccountLinks, readStoredRecoveryCode, rememberAccountSecrets, snapshotFromSession } from '../../lib/accountRestore.mjs';
-import { backupFamilyAccount, cancelAccountBackup, deleteFamilyAccount, linkKakaoAccount, loadOwnDisclosures, loadOwnHandling, mintFamilyInvite, persistAccountResult, redeemFamilyInvite, type AccountSnapshot, type DisclosureRecord, type HandlingEvent } from '../../services/familyAccount';
+import { backupFamilyAccount, cancelAccountBackup, deleteFamilyAccount, linkKakaoAccount, loadOwnDisclosures, loadOwnHandling, mintFamilyInvite, persistAccountResult, redeemFamilyInvite, revokeFamilyInvite, type AccountSnapshot, type DisclosureRecord, type HandlingEvent } from '../../services/familyAccount';
 import { buildInviteLink, formatClock, hasLocation, haversineMeters, shouldAlertLeave } from '../../lib/geo';
+import { buildGroupInviteLink, syncTokenFromInviteFragment } from '../../lib/inviteLink.mjs';
 import { ALWAYS_GUIDE_DISMISSED_KEY, CHAT_NOTIFY_ASKED_KEY, KEEP_PERMISSION_ASKED_KEY, KEEP_START_ASKED_KEY, keepEntryPrompt, markSessionFlag, readSessionFlag } from '../../lib/systemSettings.mjs';
 import { familyMapShowsTrail, memberLiveLines, recordsDayTrails } from '../../lib/mapTrail.mjs';
 import { noteDiag } from '../../lib/diagLog.mjs';
@@ -117,6 +118,21 @@ export function FamilyMapScreen() {
     placingRef.current = placingHome;
   }, [placingHome]);
   useEffect(() => startSyncMonitor(), []);
+  useEffect(() => {
+    const openInvite = () => {
+      const raw = (window as unknown as { __umapInviteUrl?: string }).__umapInviteUrl || '';
+      if (!raw) return;
+      try {
+        sessionStorage.setItem('umap_invite_url', raw);
+      } catch {
+        /* 저장이 거절돼도 화면의 초대 입력은 남습니다. */
+      }
+      setSheet('accept');
+    };
+    window.addEventListener('umap-invite', openInvite);
+    openInvite();
+    return () => window.removeEventListener('umap-invite', openInvite);
+  }, []);
   useEffect(() => {
     const tick = () => setNow(Date.now());
     const timer = window.setInterval(tick, 15_000);
@@ -1338,7 +1354,6 @@ export function FamilyMapScreen() {
             home={state.home}
             senderName={state.profile?.name || ''}
             onClose={() => setSheet(null)}
-            onCreate={(name) => family.addMember(name, state.inviteCode)}
             sharing={state.shareSelfWithFamily}
             onAllowShare={() => family.setShareSelf(true)}
           />
@@ -1352,7 +1367,7 @@ export function FamilyMapScreen() {
               family.dismissInvite();
               setSheet(null);
             }}
-            onAccept={(label, code, syncToken, rosterName, adminName) => family.acceptInvite(label, code, syncToken, rosterName, adminName)}
+            onAccept={(label, code, syncToken, rosterName, adminName, ownerMemberId) => family.acceptInvite(label, code, syncToken, rosterName, adminName, ownerMemberId)}
             alreadySharing={state.shareSelfWithFamily}
             onShare={() => family.setShareSelf(true)}
           />
@@ -2154,7 +2169,7 @@ function MemberCard({
         <MemberAvatar name={member.name} photo={member.photo} />
       )}
       <button type="button" onClick={onSelect} className="min-w-0 flex-1 text-left">
-        <span className="block truncate font-bold">{member.name}</span>
+        <span className="block truncate font-bold">{member.name}{(member.id === 'self' || member.lead) && <span className="ml-1 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-black text-slate-600">그룹장</span>}</span>
         <span className="block truncate text-xs text-slate-500">
           {disconnected ? '연결 끊김' : [personArea(member, home), live].filter(Boolean).join(' · ')}
         </span>
@@ -2271,7 +2286,6 @@ function AdminInviteSheet({
   sharing,
   onAllowShare,
   onClose,
-  onCreate,
 }: {
   code: string;
   writeKey: string;
@@ -2281,10 +2295,8 @@ function AdminInviteSheet({
   sharing: boolean;
   onAllowShare: () => void;
   onClose: () => void;
-  onCreate: (name: string) => void;
 }) {
-  const [name, setName] = useState('');
-  const [sentName, setSentName] = useState('');
+  const [sentName] = useState('가족');
   const [declinedShare, setDeclinedShare] = useState(false);
   const [copied, setCopied] = useState('');
   const [token, setToken] = useState('');
@@ -2305,7 +2317,7 @@ function AdminInviteSheet({
   useEffect(() => {
     if (!token || !syncReady) return undefined;
     let cancel = false;
-    void mintFamilyInvite(code, token, '').then((result) => {
+    void mintFamilyInvite(code, token, '', true).then((result) => {
       if (cancel) return;
       if (result.ok) setTicket(result.ticket);
       else setTicketNote(result.message);
@@ -2323,27 +2335,6 @@ function AdminInviteSheet({
       setCopied('복사하지 못했습니다');
     }
   };
-
-  if (!sentName) {
-    return (
-      <Sheet title="1. 누구를 초대할까요?" onClose={onClose}>
-        <p className="text-sm leading-6 text-slate-500">이름만 정합니다. 위치는 상대 폰에서 초대를 수락하고, 위치 공유를 따로 허용해야 보입니다. 전화번호로는 위치를 찾지 않습니다.</p>
-        <input value={name} onChange={(event) => setName(event.target.value)} placeholder="표시 이름" className="mt-4 w-full rounded-2xl border border-slate-200 px-3 py-3 outline-none focus:border-[#0084FF]" />
-        <button
-          type="button"
-          disabled={name.trim().length < 1}
-          onClick={() => {
-            const next = name.trim();
-            onCreate(next);
-            setSentName(next);
-          }}
-          className="mt-3 w-full rounded-full bg-[#ff8a34] py-3.5 font-bold text-white disabled:opacity-40"
-        >
-          초대 코드 만들기
-        </button>
-      </Sheet>
-    );
-  }
 
   if (!sharing && !declinedShare) {
     return (
@@ -2365,16 +2356,36 @@ function AdminInviteSheet({
     );
   }
 
+  const groupLink = ticket && token && familySyncUrl()
+    ? buildGroupInviteLink(familySyncUrl() || '', code, ticket, token)
+    : '';
+  const shareLink = async () => {
+    if (!groupLink) return;
+    try {
+      if (navigator.share) {
+        await navigator.share({ title: 'Kinnex 가족 초대', text: '이 링크로 들어오면 가족 구성원이 함께 보입니다.', url: groupLink });
+        setCopied('초대 링크를 보냈습니다');
+        return;
+      }
+    } catch {
+      /* 공유 시트를 닫아도 복사는 남깁니다. */
+    }
+    await copy(groupLink, '링크를 복사했습니다');
+  };
+
   return (
-    <Sheet title="2. 코드를 보내세요" onClose={onClose}>
+    <Sheet title="가족 초대 링크" onClose={onClose}>
       <p className="text-sm leading-6 text-slate-500">
-        {sentName} 님 폰에서 링크를 열고 가족으로 참여합니다.
-        {sharing ? ' 내 위치는 이미 이 가족에게 나가고 있습니다.' : ' 내 위치는 아직 나가지 않습니다. 가족 목록에서 위치 공유를 허용할 수 있습니다.'}
+        링크를 받은 사람은 지금 가족 전체를 함께 봅니다. 따로 한 사람씩 넣지 않습니다. QR은 가까이 있을 때 씁니다.
+        {sharing ? ' 내 위치는 이미 이 가족에게 나가고 있습니다.' : ' 내 위치는 아직 나가지 않습니다.'}
         {' '}전화번호로는 위치를 찾지 않습니다.
       </p>
       <p className="mt-4 text-center text-4xl font-black tracking-[0.25em] text-[#0084FF]">{code}</p>
-      {(ticket || !syncReady) && token && <InviteQrImage text={buildInviteLink(code, home, syncReady ? null : token, sentName, senderName, ticket || null)} />}
-      {token && <p className="mt-2 text-center text-[11px] leading-5 text-slate-400">초대 링크는 24시간 동안 한 번만 쓸 수 있습니다. 방 키와 전화번호는 들어 있지 않습니다.</p>}
+      <button type="button" disabled={!groupLink} onClick={() => void shareLink()} className="mt-4 w-full rounded-full bg-[#0084FF] py-3.5 font-bold text-white disabled:opacity-40">
+        링크로 보내기
+      </button>
+      {groupLink && <InviteQrImage text={groupLink} />}
+      {token && <p className="mt-2 text-center text-[11px] leading-5 text-slate-400">초대 링크는 7일 동안 여러 사람이 쓸 수 있습니다. 방 열쇠는 주소의 # 뒤에만 있어 서버로 전달되지 않습니다. 그룹장이 취소할 수 있습니다.</p>}
       {ticketNote && <p className="mt-2 text-center text-xs leading-5 text-amber-800">{ticketNote}</p>}
       <label className="mt-4 block text-xs font-bold text-slate-400" htmlFor="sync-token">
         동기화 키
@@ -2385,7 +2396,7 @@ function AdminInviteSheet({
           <Copy className="mr-1 inline h-3.5 w-3.5" />
           코드 복사
         </button>
-        <button type="button" disabled={syncReady ? !ticket : !token} onClick={() => copy(buildInviteLink(code, home, syncReady ? null : token, sentName, senderName, ticket || null), '링크를 복사했습니다')} className="rounded-full bg-slate-100 py-2 text-xs font-bold disabled:opacity-40">
+        <button type="button" disabled={!groupLink} onClick={() => copy(groupLink, '링크를 복사했습니다')} className="rounded-full bg-slate-100 py-2 text-xs font-bold disabled:opacity-40">
           링크 복사
         </button>
       </div>
@@ -2403,7 +2414,21 @@ function AdminInviteSheet({
         {home ? `링크에는 집 반경 ${home.radiusM}m가 들어 있습니다. 상대가 위치 공유를 허용한 뒤 그 원을 나가면 관리자 화면에 사이렌이 울립니다.` : '우리 집을 저장한 뒤 링크를 다시 복사하면 집 반경 이탈 사이렌이 연결됩니다.'}
         {' '}위치를 공유한 가족이 이 반경을 나가면 가족 방에 알림이 남습니다. SOS는 같은 방에서 울리고, 알림을 허용하면 앱을 닫아도 옵니다.
       </p>
-      <button type="button" onClick={onClose} className="mt-4 w-full rounded-full bg-[#0084FF] py-3.5 font-bold text-white">
+      {ticket && (
+        <button
+          type="button"
+          onClick={() => {
+            void revokeFamilyInvite(ticket).then((result) => {
+              setCopied(result.ok ? '초대를 취소했습니다' : result.message);
+              if (result.ok) setTicket('');
+            });
+          }}
+          className="mt-2 w-full py-2 text-xs font-bold text-slate-400"
+        >
+          초대 링크 취소
+        </button>
+      )}
+      <button type="button" onClick={onClose} className="mt-4 w-full rounded-full bg-slate-100 py-3.5 font-bold text-slate-800">
         완료
       </button>
     </Sheet>
@@ -2415,8 +2440,9 @@ function parseInviteDraft(value: string): { code: string; syncToken: string | nu
   if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
     try {
       const url = new URL(trimmed);
-      const code = (url.searchParams.get('invite') || '').replace(/\D/g, '').slice(0, 6);
-      const syncToken = splitSyncToken(url.searchParams.get('sync')) ? url.searchParams.get('sync') : null;
+      const code = (url.searchParams.get('invite') || url.searchParams.get('code') || '').replace(/\D/g, '').slice(0, 6);
+      const queryToken = splitSyncToken(url.searchParams.get('sync')) ? url.searchParams.get('sync') : null;
+      const syncToken = syncTokenFromInviteFragment(url.hash) || queryToken;
       const ticket = (url.searchParams.get('ticket') || '').trim() || null;
       const rosterName = (url.searchParams.get('who') || '').trim().slice(0, 80) || null;
       const adminName = (url.searchParams.get('from') || '').trim().slice(0, 20) || null;
@@ -2442,7 +2468,7 @@ function ManagedInviteSheet({
   guardians: GuardianLink[];
   alreadySharing: boolean;
   onClose: () => void;
-  onAccept: (label: string, code: string, syncToken: string | null, rosterName: string | null, adminName: string | null) => void;
+  onAccept: (label: string, code: string, syncToken: string | null, rosterName: string | null, adminName: string | null, ownerMemberId?: string | null) => void;
   onShare: () => void;
 }) {
   const [code, setCode] = useState(pending ?? '');
@@ -2453,6 +2479,7 @@ function ManagedInviteSheet({
   const [step, setStep] = useState<'join' | 'share'>('join');
   const [joinedCode, setJoinedCode] = useState('');
   const [inviteNote, setInviteNote] = useState('');
+  const [ownerMemberId, setOwnerMemberId] = useState('');
   const joined = guardians.find((link) => link.code === joinedCode);
 
   const applyParsed = (parsed: ReturnType<typeof parseInviteDraft>) => {
@@ -2467,13 +2494,22 @@ function ManagedInviteSheet({
         return;
       }
       setCode(result.code);
-      setSyncToken(result.syncToken);
+      if (result.syncToken) setSyncToken(result.syncToken);
+      if (result.ownerMemberId) setOwnerMemberId(result.ownerMemberId);
       setInviteNote('');
     });
   };
 
   const redeemedTicket = useRef('');
   useEffect(() => {
+    let stored = '';
+    try {
+      stored = sessionStorage.getItem('umap_invite_url') || '';
+      if (stored) sessionStorage.removeItem('umap_invite_url');
+    } catch {
+      stored = '';
+    }
+    if (stored) applyParsed(parseInviteDraft(stored));
     const ticket = new URLSearchParams(window.location.search).get('ticket');
     if (!ticket || redeemedTicket.current === ticket) return;
     redeemedTicket.current = ticket;
@@ -2521,7 +2557,7 @@ function ManagedInviteSheet({
             disabled={code.length < 4}
             onClick={() => {
               const token = splitSyncToken(syncToken) ? syncToken : null;
-              onAccept(label, code, token, rosterName.trim() || null, adminName.trim() || null);
+              onAccept(label, code, token, rosterName.trim() || null, adminName.trim() || null, ownerMemberId || null);
               if (alreadySharing) {
                 onClose();
                 return;

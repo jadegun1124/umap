@@ -234,13 +234,13 @@ export async function loadOwnHandling(accountKey = readStoredAccountKey(typeof l
   }
 }
 
-export async function mintFamilyInvite(code: string, syncToken: string, memberId: string) {
+export async function mintFamilyInvite(code: string, syncToken: string, memberId: string, link = false) {
   if (!familySyncUrl()) return { ok: false as const, message: '위치 서버가 없습니다.' };
   try {
     const response = await request('/v1/invites', {
       method: 'POST',
-      headers: accountHeaders(),
-      body: JSON.stringify({ code, syncToken, memberId }),
+      headers: accountHeaders(link ? readStoredAccountKey(typeof localStorage === 'undefined' ? null : localStorage) : ''),
+      body: JSON.stringify(link ? { code, link: true } : { code, syncToken, memberId }),
     });
     const body = await response.json().catch(() => null) as { ok?: boolean; ticket?: string; message?: string } | null;
     if (!response.ok || !body || body.ok !== true || typeof body.ticket !== 'string') {
@@ -252,6 +252,21 @@ export async function mintFamilyInvite(code: string, syncToken: string, memberId
   }
 }
 
+export async function revokeFamilyInvite(ticket: string) {
+  if (!familySyncUrl()) return { ok: false as const, message: '위치 서버가 없습니다.' };
+  try {
+    const response = await request(`/v1/invites/${encodeURIComponent(ticket)}/revoke`, {
+      method: 'POST',
+      headers: accountHeaders(readStoredAccountKey(typeof localStorage === 'undefined' ? null : localStorage)),
+      body: '{}',
+    });
+    if (!response.ok) return { ok: false as const, message: '초대를 취소하지 못했습니다.' };
+    return { ok: true as const };
+  } catch {
+    return { ok: false as const, message: '초대를 취소하지 못했습니다.' };
+  }
+}
+
 export async function redeemFamilyInvite(ticket: string) {
   if (!familySyncUrl()) return { ok: false as const, message: '위치 서버가 없습니다.' };
   try {
@@ -260,11 +275,16 @@ export async function redeemFamilyInvite(ticket: string) {
       headers: accountHeaders(),
       body: '{}',
     });
-    const body = await response.json().catch(() => null) as { ok?: boolean; code?: string; syncToken?: string; message?: string } | null;
-    if (!response.ok || !body || body.ok !== true || typeof body.syncToken !== 'string' || typeof body.code !== 'string') {
+    const body = await response.json().catch(() => null) as { ok?: boolean; code?: string; syncToken?: string; ownerMemberId?: string; message?: string } | null;
+    if (!response.ok || !body || body.ok !== true || typeof body.code !== 'string') {
       return { ok: false as const, message: body && typeof body.message === 'string' ? body.message : '초대 링크를 확인하지 못했습니다.' };
     }
-    return { ok: true as const, code: body.code, syncToken: body.syncToken };
+    return {
+      ok: true as const,
+      code: body.code,
+      syncToken: typeof body.syncToken === 'string' ? body.syncToken : '',
+      ownerMemberId: typeof body.ownerMemberId === 'string' ? body.ownerMemberId : '',
+    };
   } catch {
     return { ok: false as const, message: '초대 링크를 확인하지 못했습니다.' };
   }
