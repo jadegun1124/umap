@@ -23,6 +23,43 @@ export function rosterMembers(members, profileId, inviteCode, profileName) {
   return withoutSelfEcho(members, profileId, inviteCode, profileName).filter((member) => member && member.role !== 'guardian');
 }
 
+export function ensureRoster(members, profiles, code, ownerId = '', hidden = []) {
+  const next = Array.isArray(members) ? members.map((member) => ({ ...member })) : [];
+  const hiddenSet = new Set(Array.isArray(hidden) ? hidden : []);
+  const joined = [];
+  for (const profile of Array.isArray(profiles) ? profiles : []) {
+    if (!profile || typeof profile.memberId !== 'string' || typeof profile.name !== 'string') continue;
+    const cardId = `family:${code}:${profile.memberId}`;
+    if (hiddenSet.has(profile.memberId) || hiddenSet.has(cardId)) continue;
+    const name = profile.name.trim().slice(0, 20);
+    if (!name) continue;
+    const id = cardId;
+    const index = next.findIndex((member) => member && (member.publisherId === profile.memberId || member.id === id));
+    const lead = ownerId !== '' && profile.memberId === ownerId;
+    if (index >= 0) {
+      next[index] = { ...next[index], name, ...(lead ? { lead: true } : {}) };
+      continue;
+    }
+    next.push({
+      id,
+      name,
+      role: 'admin-share',
+      lat: null,
+      lng: null,
+      accuracyM: 0,
+      battery: null,
+      charging: null,
+      updatedAt: typeof profile.at === 'number' ? profile.at : 0,
+      moving: null,
+      share: 'allowed',
+      publisherId: profile.memberId,
+      ...(lead ? { lead: true } : {}),
+    });
+    joined.push(name);
+  }
+  return { members: next, joined };
+}
+
 export function mapMembers(members, profileId, inviteCode, profileName) {
   return rosterMembers(members, profileId, inviteCode, profileName).filter((member) => {
     if (member.id === 'self') return true;

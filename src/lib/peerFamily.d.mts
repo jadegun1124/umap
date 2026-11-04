@@ -15,6 +15,14 @@ export function withoutSelfEcho<T>(members: T[] | null | undefined, profileId?: 
 
 export function rosterMembers<T extends { role?: string; id?: string }>(members: T[] | null | undefined, profileId?: string, inviteCode?: string, profileName?: string): T[];
 
+export function ensureRoster<T extends { id?: string; publisherId?: string; name?: string; lead?: boolean }>(
+  members: T[] | null | undefined,
+  profiles: Array<{ memberId?: string; name?: string; at?: number }> | null | undefined,
+  code: string,
+  ownerId?: string,
+  hidden?: string[],
+): { members: T[]; joined: string[] };
+
 export function mapMembers<T extends { role?: string; id?: string; lat?: number | null; lng?: number | null; share?: string }>(
   members: T[] | null | undefined,
   profileId?: string,

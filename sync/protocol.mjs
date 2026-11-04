@@ -1311,6 +1311,9 @@ async function logLocationUse(accounts, viewerId, view, now) {
 
 export async function handleSyncRequest(store, request, extras = {}) {
   if (request.method === 'OPTIONS') return new Response(null, { status: 204 });
+  const { inviteLandingResponse } = await import('./invite.mjs');
+  const landing = inviteLandingResponse(request);
+  if (landing) return landing;
   const op = await parseOperation(request);
   if (op instanceof Response) return op;
   if (op.kind === 'health') return json({ ok: true, service: 'umap-family-sync' });

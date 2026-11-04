@@ -29,6 +29,7 @@ public class MainActivity extends BridgeActivity {
             webView.addJavascriptInterface(new UmapAndroidExit(this), "UmapAndroid");
         }
         captureChatIntent(getIntent());
+        captureInviteIntent(getIntent());
         getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
             @Override
             public void handleOnBackPressed() {
@@ -47,6 +48,22 @@ public class MainActivity extends BridgeActivity {
         super.onNewIntent(intent);
         setIntent(intent);
         captureChatIntent(intent);
+        captureInviteIntent(intent);
+    }
+
+    private void captureInviteIntent(Intent intent) {
+        if (intent == null || intent.getData() == null) return;
+        String raw = intent.getDataString();
+        if (raw == null || raw.isEmpty()) return;
+        boolean invite = raw.contains("/invite") || "invite".equals(intent.getData().getHost());
+        if (!invite) return;
+        WebView view = bridge != null ? bridge.getWebView() : null;
+        if (view == null) return;
+        String quoted = org.json.JSONObject.quote(raw);
+        view.post(() -> view.evaluateJavascript(
+            "window.__umapInviteUrl=" + quoted + ";try{window.dispatchEvent(new Event('umap-invite'))}catch(e){}",
+            null
+        ));
     }
 
     @Override

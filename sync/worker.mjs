@@ -354,6 +354,9 @@ export default {
   },
   async fetch(request, env) {
     if (request.method === 'OPTIONS') return withCors(new Response(null, { status: 204 }));
+    const { inviteLandingResponse } = await import('./invite.mjs');
+    const landing = inviteLandingResponse(request);
+    if (landing) return landing;
     const op = await parseOperation(request);
     if (op instanceof Response) return withCors(op);
     if (op.kind === 'health') {

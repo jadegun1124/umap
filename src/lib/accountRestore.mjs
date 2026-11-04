@@ -221,6 +221,7 @@ function rosterFromMembers(members) {
     if (typeof member.role === 'string' && member.role) row.role = member.role.slice(0, 20);
     if (typeof member.publisherId === 'string' && member.publisherId) row.publisherId = member.publisherId.slice(0, 80);
     if (typeof member.inviteCode === 'string' && member.inviteCode) row.inviteCode = member.inviteCode.slice(0, 6);
+    if (member.lead === true) row.lead = true;
     roster.push(row);
     if (roster.length >= 12) break;
   }
@@ -242,6 +243,7 @@ function restoredMember(row) {
     share: 'allowed',
     ...(row.publisherId ? { publisherId: row.publisherId } : {}),
     ...(row.inviteCode ? { inviteCode: row.inviteCode } : {}),
+    ...(row.lead === true ? { lead: true } : {}),
   };
 }
 

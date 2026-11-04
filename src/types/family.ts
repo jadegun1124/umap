@@ -64,6 +64,8 @@ export interface Member {
   placeLng?: number | null;
   inviteCode?: string;
   share: ShareState;
+  /** This card is the group owner (그룹장). */
+  lead?: boolean;
   /** The other phone still publishes a clear location, so it has not updated to 1.36. */
   needsAppUpdate?: boolean;
 }
@@ -86,6 +88,8 @@ export interface GuardianLink {
   rosterName?: string;
   /** Admin display name from the invite, used as the other side of a private chat. */
   adminName?: string;
+  /** Room owner member id from a link invite. The key itself is not stored here. */
+  ownerMemberId?: string;
 }
 
 export interface HomeZone {
