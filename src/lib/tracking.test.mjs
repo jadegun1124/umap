@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import {
   acceptFix,
@@ -1604,4 +1605,95 @@ test('a long gap stays one solid line, and one stored point still reaches the pi
   assert.equal(tip[0].points.length, 2);
   assert.equal(tip[0].points[1].lat, hole.lat);
   assert.equal(tip[0].points[1].lng, hole.lng);
+});
+
+test('a finished walk or ride leaves the live line and keeps the same points in records', () => {
+  const t = Date.UTC(2026, 10, 4, 7, 0, 0);
+  const origin = { lat: 37.62, lng: 127.05, at: t, accuracyM: 12, speedMps: 1.3, staying: false };
+  const walk = [origin];
+  for (let index = 1; index <= 40; index += 1) {
+    walk.push({
+      ...offset(origin, 0, index * 4, t + index * 2_500),
+      accuracyM: 12,
+      speedMps: 1.3,
+      staying: false,
+    });
+  }
+  const arrived = walk[walk.length - 1];
+  const hole = { ...offset(arrived, 0, 180, arrived.at + 8 * 60_000), accuracyM: 12, speedMps: 0, staying: true };
+  const withStay = (minutes) => {
+    const points = [...walk, hole];
+    for (let at = hole.at + 20_000; at <= hole.at + minutes * 60_000; at += 20_000) {
+      points.push({ ...hole, at, speedMps: 0, staying: true });
+    }
+    return points;
+  };
+  const early = withStay(4);
+  const earlyNow = early[early.length - 1].at;
+  const earlyArchived = storedTrackAfterArchive(early, earlyNow);
+  assert.equal(earlyArchived.journeys.length, 0);
+  assert.equal(earlyArchived.points.length, early.length);
+  assert.ok(displayLivePoints(early, earlyNow).some((point) => point.at === walk[0].at));
+
+  const closed = withStay(6);
+  const now = closed[closed.length - 1].at;
+  const archived = storedTrackAfterArchive(closed, now);
+  assert.equal(archived.journeys.length, 1);
+  const saved = archived.journeys[0].points;
+  for (const point of [...walk, hole]) {
+    const lat = Number(point.lat.toFixed(6));
+    const lng = Number(point.lng.toFixed(6));
+    assert.equal(saved.some((item) => item.at === point.at && item.lat === lat && item.lng === lng), true);
+  }
+  assert.equal(archived.points.some((point) => point.at === walk[0].at), false);
+  assert.equal(displayLivePoints(archived.points, now).some((point) => point.at === walk[0].at), false);
+  const next = [
+    ...archived.points,
+    { ...offset(hole, 0, 30, now + 30_000), accuracyM: 12, speedMps: 1.3, staying: false },
+    { ...offset(hole, 0, 60, now + 60_000), accuracyM: 12, speedMps: 1.3, staying: false },
+  ];
+  const drawn = trailDrawParts(displayLivePoints(next, now + 60_000)).flatMap((part) => part.points);
+  assert.equal(drawn.some((point) => point.at === walk[0].at), false);
+  assert.equal(drawn.some((point) => point.at === now + 60_000), true);
+
+  const rideOrigin = { ...origin, at: t + 3 * 60 * 60_000, speedMps: 8, staying: false };
+  const ride = [rideOrigin];
+  for (let index = 1; index <= 30; index += 1) {
+    ride.push({
+      ...offset(rideOrigin, 0, index * 25, rideOrigin.at + index * 2_500),
+      accuracyM: 12,
+      speedMps: 8,
+      staying: false,
+    });
+  }
+  const parked = ride[ride.length - 1];
+  const rideStay = (minutes) => {
+    const points = [...ride];
+    for (let at = parked.at + 20_000; at <= parked.at + minutes * 60_000; at += 20_000) {
+      points.push({ ...parked, at, speedMps: 0, staying: true });
+    }
+    return points;
+  };
+  const rideEarly = rideStay(5);
+  assert.equal(storedTrackAfterArchive(rideEarly, rideEarly[rideEarly.length - 1].at).journeys.length, 0);
+  assert.ok(displayLivePoints(rideEarly, rideEarly[rideEarly.length - 1].at).some((point) => point.at === ride[0].at));
+  const rideClosed = rideStay(12);
+  const rideNow = rideClosed[rideClosed.length - 1].at;
+  const rideArchived = storedTrackAfterArchive(rideClosed, rideNow);
+  assert.equal(rideArchived.journeys.length, 1);
+  for (const point of ride) {
+    assert.equal(rideArchived.journeys[0].points.some((item) => item.at === point.at), true);
+  }
+  assert.equal(rideArchived.points.some((point) => point.at === ride[0].at), false);
+
+  const screen = readFileSync(new URL('../components/family/FamilyMapScreen.tsx', import.meta.url), 'utf8');
+  const session = readFileSync(new URL('../components/family/session.tsx', import.meta.url), 'utf8');
+  const tracking = readFileSync(new URL('../components/family/useFamilyTracking.ts', import.meta.url), 'utf8');
+  assert.equal(screen.includes('saved.slice(0, -1)'), false);
+  assert.match(screen, /visibilitychange/);
+  assert.match(screen, /closeJourneys\(now\)/);
+  assert.match(session, /case 'update-self'/);
+  assert.match(session, /archiveJourneys\(/);
+  assert.match(session, /case 'close-journeys'/);
+  assert.match(tracking, /updateSelf\(fix\.lat/);
 });

@@ -2546,7 +2546,8 @@ export function displayLivePoints(points, now) {
   if (sorted.length < 2) return source;
   const closing = closingStays(sorted, now);
   if (closing.length === 0) {
-    if (indoorCloud(sorted, now)) return [];
+    const cloud = indoorCloudStart(sorted, now);
+    if (cloud) return cloud.start === 0 ? [] : cloud.drawn.slice(0, cloud.start);
     return sorted.length === source.length ? source : sorted;
   }
   const remainFrom = closing[closing.length - 1].startAt;
@@ -2567,9 +2568,9 @@ export function displayLivePoints(points, now) {
  * Spikes between nearby 동 do not have to sit inside the 50m stop radius.
  * A straight walk keeps a high net, so it is not this cloud.
  */
-function indoorCloud(points, now) {
+function indoorCloudStart(points, now) {
   const drawn = (Array.isArray(points) ? points : []).filter((point) => point && !point.stayEnd && Number.isFinite(point.lat) && Number.isFinite(point.at));
-  if (drawn.length < 2) return false;
+  if (drawn.length < 2) return null;
   let start = drawn.length - 1;
   while (start > 0) {
     const prev = drawn[start - 1];
@@ -2583,11 +2584,16 @@ function indoorCloud(points, now) {
     start -= 1;
   }
   const cloud = drawn.slice(start);
-  if (cloud.length < 2) return false;
+  if (cloud.length < 2) return null;
   const begin = cloud[0].at;
   const endAt = cloud[cloud.length - 1].at;
   const end = Number.isFinite(now) && now >= endAt ? now : endAt;
-  return end - begin >= WALK_JOURNEY_STAY_MS;
+  if (end - begin < WALK_JOURNEY_STAY_MS) return null;
+  return { drawn, start };
+}
+
+function indoorCloud(points, now) {
+  return indoorCloudStart(points, now) != null;
 }
 
 /** The open segment still has a line. A stay cluster and courtyard jitter do not. */
