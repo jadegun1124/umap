@@ -907,28 +907,44 @@ function roomPersistStamp(room) {
 }
 
 export const KEY_PUT_WINDOW_MS = 45_000;
+// One sync publishes the public key, then wraps, then history. A hard
+// single-write window drops those follow-ups. Four changed writes is enough
+// for that pass; a tight loop cannot store more until the window moves.
+export const KEY_PUT_BURST = 4;
 
 export function keyPutLimited(lastAt, now, windowMs = KEY_PUT_WINDOW_MS) {
   return typeof lastAt === 'number' && Number.isFinite(lastAt) && now - lastAt < windowMs;
 }
 
+function keyPutSlot(memory, memberId, now) {
+  if (!memory || !memberId) return null;
+  const stored = memory.get(memberId);
+  const slot = typeof stored === 'number'
+    ? { at: stored, writes: 1 }
+    : (stored && typeof stored.at === 'number' ? { at: stored.at, writes: stored.writes || 0 } : null);
+  if (!slot || !keyPutLimited(slot.at, now)) return null;
+  return slot;
+}
+
 export async function applyKeyPut(room, input, profileKey, memory, now = Date.now()) {
   const memberId = input && typeof input.memberId === 'string' ? input.memberId : '';
-  const last = memory && memberId ? memory.get(memberId) : undefined;
-  if (keyPutLimited(last, now)) {
-    return { error: null, room, directory: viewKeys(room), wrote: false, limited: true };
-  }
   const next = await commitKeys(room, input, profileKey);
   if (next.error) return { error: next.error, room: next.room || room, directory: null, wrote: false, limited: false };
-  if (memory && memberId) memory.set(memberId, now);
-  const wrote = next.unchanged !== true;
-  return {
-    error: null,
-    room: wrote ? next.room : room,
-    directory: next.directory,
-    wrote,
-    limited: false,
-  };
+  const slot = keyPutSlot(memory, memberId, now);
+  if (next.unchanged) {
+    if (memory && memberId && !slot) memory.set(memberId, { at: now, writes: 0 });
+    return { error: null, room, directory: next.directory, wrote: false, limited: false };
+  }
+  if (slot && slot.writes >= KEY_PUT_BURST) {
+    return { error: null, room, directory: viewKeys(room), wrote: false, limited: true };
+  }
+  if (memory && memberId) {
+    memory.set(memberId, {
+      at: slot ? slot.at : now,
+      writes: (slot ? slot.writes : 0) + 1,
+    });
+  }
+  return { error: null, room: next.room, directory: next.directory, wrote: true, limited: false };
 }
 
 export async function commitKeys(room, input, profileKey) {
@@ -1354,9 +1370,10 @@ export async function handleSyncRequest(store, request, extras = {}) {
     return json({ ok: true });
   }
   if (op.kind === 'keys') {
-    const next = await commitKeys(room, op.keys, op.profileKey || '');
+    if (!store.keyPutAt) store.keyPutAt = new Map();
+    const next = await applyKeyPut(room, op.keys, op.profileKey || '', store.keyPutAt, extras.now || Date.now());
     if (next.error) return next.error;
-    if (!next.unchanged) await store.write(op.token, next.room);
+    if (next.wrote) await store.write(op.token, next.room);
     return json({ ok: true, keys: next.directory });
   }
   if (op.kind === 'alert') {

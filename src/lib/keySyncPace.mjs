@@ -22,6 +22,8 @@ export function quotaPollPaused(phase, now, limitedUntil) {
 // A successful read must not clear a quota banner. A successful write does.
 // After the backoff, the next response is allowed to move the phase again.
 export const ROOM_POLL_MS = 10_000;
+/** Guardian links have a sync token and no read key, so they stay on GET /family. */
+export const FAMILY_POLL_MS = 30_000;
 export const CHAT_LIST_POLL_MS = 60_000;
 export const CHAT_OPEN_POLL_MS = 5_000;
 export const HEALTH_POLL_MS = 120_000;
@@ -45,6 +47,17 @@ export function resumeRoom(code) {
 
 export function roomBlocked(code) {
   return blockedRooms.has(String(code));
+}
+
+// A 403 from a room the phone can still join is the registration signal:
+// one key upload adds the member. Read-key, revoked, and a second member
+// refusal stop the poll until login or an explicit rejoin.
+export function roomPollAction(status, error, options = {}) {
+  if (status !== 403) return 'continue';
+  const canRegister = options.canRegister === true;
+  const attempted = options.attempted === true;
+  if (error === 'member' && canRegister && !attempted) return 'register';
+  return 'block';
 }
 
 export function resetBlockedRooms() {

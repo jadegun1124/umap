@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { applyKeyPut, createMemoryStore, emptyRoom, handleSyncRequest, syncTokenFor } from './protocol.mjs';
+import { KEY_PUT_BURST, applyKeyPut, createMemoryStore, emptyRoom, handleSyncRequest, syncTokenFor } from './protocol.mjs';
 
 test('a repeated family key upload does not rewrite the room', async () => {
   const store = createMemoryStore();
@@ -38,7 +38,15 @@ test('a repeated family key upload does not rewrite the room', async () => {
   assert.equal(writes, 1);
 });
 
-test('repeated key puts inside the room limit write the directory once', async () => {
+function wrapBytes(fill) {
+  return {
+    epk: Buffer.alloc(32, fill).toString('base64url'),
+    iv: Buffer.alloc(12, fill).toString('base64url'),
+    ct: Buffer.alloc(16, fill).toString('base64url'),
+  };
+}
+
+test('a wrap uploaded after the public key is stored, then the window holds', async () => {
   const memory = new Map();
   const body = {
     memberId: 'local-owner01',
@@ -49,11 +57,41 @@ test('repeated key puts inside the room limit write the directory once', async (
   assert.equal(first.error, null);
   assert.equal(first.wrote, true);
   assert.equal(first.limited, false);
-  const again = await applyKeyPut(first.room, { ...body, history: { 'local-owner01': {} } }, profileKey, memory, 20_000);
-  assert.equal(again.wrote, false);
-  assert.equal(again.limited, true);
-  assert.equal(again.directory.pubs['local-owner01'], body.publicKey);
-  const later = await applyKeyPut(first.room, body, profileKey, memory, 1_000 + 45_000);
+  const same = await applyKeyPut(first.room, body, profileKey, memory, 2_000);
+  assert.equal(same.wrote, false);
+  assert.equal(same.limited, false);
+  const follow = await applyKeyPut(first.room, {
+    ...body,
+    kid: 'dddddddddddddddd',
+    wraps: { 'local-owner01': wrapBytes(3) },
+  }, profileKey, memory, 3_000);
+  assert.equal(follow.limited, false);
+  assert.equal(follow.wrote, true);
+  assert.equal(follow.directory.wraps['local-owner01'].ct, wrapBytes(3).ct);
+  let room = follow.room;
+  let wrote = 2;
+  for (let index = 0; index < 6; index += 1) {
+    const next = await applyKeyPut(room, {
+      ...body,
+      kid: 'dddddddddddddddd',
+      wraps: { 'local-owner01': wrapBytes(10 + index) },
+    }, profileKey, memory, 4_000 + index);
+    if (next.wrote) {
+      wrote += 1;
+      room = next.room;
+    } else {
+      assert.equal(next.limited, true);
+      assert.equal(next.directory.pubs['local-owner01'], body.publicKey);
+    }
+  }
+  assert.equal(wrote, KEY_PUT_BURST);
+  const later = await applyKeyPut(room, {
+    ...body,
+    kid: 'eeeeeeeeeeeeeeee',
+    wraps: { 'local-owner01': wrapBytes(9) },
+    rotate: true,
+  }, profileKey, memory, 1_000 + 45_000);
   assert.equal(later.limited, false);
-  assert.equal(later.wrote, false);
+  assert.equal(later.wrote, true);
+  assert.equal(later.directory.kid, 'eeeeeeeeeeeeeeee');
 });

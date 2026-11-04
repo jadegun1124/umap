@@ -1,6 +1,6 @@
 import { Capacitor, CapacitorHttp } from '@capacitor/core';
 import { noteDiag } from '../lib/diagLog.mjs';
-import { BACKGROUND_POLL_MIN_MS, HEALTH_POLL_MS, QUOTA_RETRY_MS, ROOM_POLL_MS, blockRoom, quotaPollPaused, roomBlocked, shouldRefreshFamilyKeys, syncPhaseAfterResponse } from '../lib/keySyncPace.mjs';
+import { BACKGROUND_POLL_MIN_MS, FAMILY_POLL_MS, HEALTH_POLL_MS, QUOTA_RETRY_MS, ROOM_POLL_MS, blockRoom, quotaPollPaused, roomBlocked, roomPollAction, shouldRefreshFamilyKeys, syncPhaseAfterResponse } from '../lib/keySyncPace.mjs';
 import { openJson, sealJson, mintFamilyKey, unwrapFamilyKey, wrapFamilyKey } from '../lib/familySeal.mjs';
 import { contentKeyBytes, ensureDevice, familyKeyRecord, rememberFamilyKey, syncHistoryDirectory } from '../lib/familyVault.mjs';
 import { rememberPlaceName } from '../lib/placeAlias.mjs';
@@ -269,6 +269,7 @@ export async function fetchDirectChat(
   peer: string,
 ): Promise<FamilyChatMessage[] | null> {
   if (!syncToken || !splitSyncToken(syncToken) || !familySyncUrl() || !/^\d{4,6}$/.test(code) || !me.trim() || !peer.trim()) return null;
+  if (roomBlocked(code)) return null;
   const query = new URLSearchParams({ me: me.trim().slice(0, 20), with: peer.trim().slice(0, 20) });
   try {
     const response = await request(`/v1/rooms/${code}/chat?${query}`, {
@@ -294,6 +295,7 @@ export async function fetchMyDirectThreads(
   me: string,
 ): Promise<{ peer: string; messages: FamilyChatMessage[] }[] | null> {
   if (!syncToken || !splitSyncToken(syncToken) || !familySyncUrl() || !/^\d{4,6}$/.test(code) || !me.trim()) return null;
+  if (roomBlocked(code)) return [];
   const query = new URLSearchParams({ me: me.trim().slice(0, 20) });
   try {
     const response = await request(`/v1/rooms/${code}/chat?${query}`, {
@@ -301,7 +303,6 @@ export async function fetchMyDirectThreads(
       headers: { 'x-umap-sync-key': syncToken },
     });
     if (response.status === 404) return null;
-    if (roomBlocked(code)) return [];
     await noteStatus(response);
     if (response.status === 403) {
       blockRoom(code);
@@ -870,6 +871,7 @@ export function startAdminRemoteSync(
   let stopped = false;
   let since = 0;
   let timer = 0;
+  const registering = new Set<string>();
 
   const schedule = (delay: number) => {
     window.clearTimeout(timer);
@@ -898,14 +900,19 @@ export function startAdminRemoteSync(
         },
       });
       const error = await noteStatus(response);
-      if (response.status === 403) {
+      const action = roomPollAction(response.status, error, {
+        canRegister: !!(self?.memberId && self.profileKey),
+        attempted: registering.has(link.code),
+      });
+      if (action === 'block') {
         blockRoom(link.code);
         return;
       }
-      if (error === 'member' && self?.memberId && self.profileKey) {
+      if (action === 'register' && self?.memberId && self.profileKey) {
+        registering.add(link.code);
         await syncFamilyKeys(link.code, token, self.memberId, self.profileKey);
-      }
-      if (response.ok) {
+      } else if (response.ok) {
+        registering.delete(link.code);
         const body: unknown = await response.json();
         if (self?.memberId && self.profileKey) await syncFamilyKeys(link.code, token, self.memberId, self.profileKey);
         const places = body && typeof body === 'object' && Array.isArray((body as { places?: unknown[] }).places) ? (body as { places: unknown[] }).places : [];
@@ -922,7 +929,7 @@ export function startAdminRemoteSync(
           handlers.onAlert(alert);
           if (alert.at > since) since = alert.at;
         }
-      } else {
+      } else if (action !== 'register') {
         delay = error === 'quota' ? QUOTA_RETRY_MS : 8000;
       }
     } catch {
@@ -1003,6 +1010,7 @@ export function startManagedFamilySync(
   if (!familySyncUrl() || usable.length === 0) return () => {};
   let stopped = false;
   let timer = 0;
+  const registering = new Set<string>();
 
   const tick = async () => {
     if (stopped) return;
@@ -1010,12 +1018,12 @@ export function startManagedFamilySync(
       timer = window.setTimeout(() => void tick(), Math.max(0, limitedUntil - Date.now()));
       return;
     }
-    let delay = ROOM_POLL_MS;
+    let delay = FAMILY_POLL_MS;
     try {
       for (const link of usable) {
         if (stopped) return;
         if (roomBlocked(link.code)) continue;
-        const response = await request(`/v1/rooms/${link.code}`, {
+        const response = await request(`/v1/rooms/${link.code}/family`, {
           method: 'GET',
           headers: {
             'x-umap-sync-key': link.token,
@@ -1025,23 +1033,30 @@ export function startManagedFamilySync(
         });
         if (response.status === 404) continue;
         const error = await noteStatus(response);
-        if (response.status === 403) {
+        const action = roomPollAction(response.status, error, {
+          canRegister: !!(self?.memberId && self.profileKey),
+          attempted: registering.has(link.code),
+        });
+        if (action === 'block') {
           blockRoom(link.code);
           continue;
         }
-        if (error === 'member' && self?.memberId && self.profileKey) {
+        if (action === 'register' && self?.memberId && self.profileKey) {
+          registering.add(link.code);
           await syncFamilyKeys(link.code, link.token, self.memberId, self.profileKey);
-        }
-        if (!response.ok) {
-          noteDiag({ kind: 'http', dir: 'download', path: `/v1/rooms/${link.code}`, status: response.status, ok: false, places: 0 });
-          delay = error === 'quota' ? QUOTA_RETRY_MS : BACKGROUND_POLL_MIN_MS;
           continue;
         }
+        if (!response.ok) {
+          noteDiag({ kind: 'http', dir: 'download', path: `/v1/rooms/${link.code}/family`, status: response.status, ok: false, places: 0 });
+          delay = error === 'quota' ? QUOTA_RETRY_MS : FAMILY_POLL_MS;
+          continue;
+        }
+        registering.delete(link.code);
         const body: unknown = await response.json();
         const placeCount = body && typeof body === 'object' && Array.isArray((body as { places?: unknown }).places)
           ? (body as { places: unknown[] }).places.length
           : 0;
-        noteDiag({ kind: 'http', dir: 'download', path: `/v1/rooms/${link.code}`, status: response.status, ok: true, places: placeCount });
+        noteDiag({ kind: 'http', dir: 'download', path: `/v1/rooms/${link.code}/family`, status: response.status, ok: true, places: placeCount });
         if (self?.memberId && self.profileKey) await syncFamilyKeys(link.code, link.token, self.memberId, self.profileKey);
         const raw = body && typeof body === 'object' && Array.isArray((body as { places?: unknown[] }).places) ? (body as { places: unknown[] }).places : [];
         const places: SharedPlace[] = [];
