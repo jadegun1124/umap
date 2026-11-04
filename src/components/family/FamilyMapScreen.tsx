@@ -680,12 +680,14 @@ export function FamilyMapScreen() {
     }
     const lines = [];
     for (const member of state.members) {
+      const report = memberLiveLines(member, state.tracks, now, liveDay);
+      if (report.reason === 'share' || report.reason === 'stale' || report.reason === 'no-pin') continue;
       const saved = recordsDayTrails({
         journeys: (state.journeys[member.id] ?? []).filter((journey) => seoulDayKey(journey.endedAt) === liveDay),
         livePoints: [],
         liveDrawable: false,
       });
-      const open = overviewLinesFor(member, state.tracks, now, liveDay);
+      const open = report.lines;
       const pinLat = member.lat;
       const pinLng = member.lng;
       if (open.length === 0 && saved.length > 0 && pinLat != null && pinLng != null) {
