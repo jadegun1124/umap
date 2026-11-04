@@ -3,6 +3,7 @@ import { noteDiag } from '../lib/diagLog.mjs';
 import { BACKGROUND_POLL_MIN_MS, FAMILY_POLL_MS, HEALTH_POLL_MS, QUOTA_RETRY_MS, ROOM_POLL_MS, blockRoom, quotaPollPaused, roomBlocked, roomPollAction, shouldRefreshFamilyKeys, syncPhaseAfterResponse } from '../lib/keySyncPace.mjs';
 import { openJson, sealJson, mintFamilyKey, unwrapFamilyKey, wrapFamilyKey } from '../lib/familySeal.mjs';
 import { contentKeyBytes, ensureDevice, familyKeyRecord, rememberFamilyKey, syncHistoryDirectory } from '../lib/familyVault.mjs';
+import { mergeTrailPoints } from '../lib/trailParts.mjs';
 import { rememberPlaceName } from '../lib/placeAlias.mjs';
 import { optionalRouteMissing } from '../lib/syncRoute.mjs';
 import type { FamilyAlert } from './familyAlert';
@@ -605,7 +606,7 @@ async function revealTrails(code: string, body: unknown): Promise<SharedTrail[]>
   const trails: SharedTrail[] = [];
   for (const item of (body as { trails: unknown[] }).trails) {
     if (!item || typeof item !== 'object') continue;
-    const trail = item as { memberId?: unknown; at?: unknown; moving?: unknown; points?: unknown; journeys?: unknown; seal?: unknown };
+    const trail = item as { memberId?: unknown; at?: unknown; moving?: unknown; points?: unknown; journeys?: unknown; seal?: unknown; parts?: unknown };
     if (typeof trail.memberId !== 'string' || !/^local-[a-z0-9]{3,64}$/.test(trail.memberId)) continue;
     if (typeof trail.at !== 'number' || !Number.isFinite(trail.at)) continue;
     let points = trail.points;
@@ -616,6 +617,17 @@ async function revealTrails(code: string, body: unknown): Promise<SharedTrail[]>
       if (!opened) continue;
       points = opened.points;
       journeys = opened.journeys;
+    }
+    if (Array.isArray(trail.parts) && trail.parts.length) {
+      const record = typeof localStorage === 'undefined' ? null : familyKeyRecord(localStorage, code);
+      const extra: unknown[] = [];
+      if (record) {
+        for (const part of trail.parts) {
+          const opened = await openJson(record.key, part) as { points?: unknown } | null;
+          if (opened && Array.isArray(opened.points)) extra.push(...opened.points);
+        }
+      }
+      points = mergeTrailPoints(Array.isArray(points) ? points : [], extra);
     }
     const readable = {
       memberId: trail.memberId,

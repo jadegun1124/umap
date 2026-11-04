@@ -14,6 +14,8 @@ import android.app.AlarmManager;
 import android.os.BatteryManager;
 import android.os.Build;
 import android.util.Base64;
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.security.SecureRandom;
 import javax.crypto.Cipher;
@@ -31,37 +33,24 @@ import org.json.JSONObject;
 
 /**
  * Background location publisher. Started only after the user turns on the
- * in-app keep-alive control. Registers LocationManager updates with a
- * PendingIntent so the process does not need a foreground service.
+ * in-app keep-alive control. LocationKeepProcess is a location foreground
+ * service so GPS continues after the UI is closed or swiped away.
+ * LocationManager GPS_PROVIDER is the high-accuracy stream (the same role as
+ * FusedLocationProvider PRIORITY_HIGH_ACCURACY). Network is only the fallback
+ * when GPS is off.
  *
- * Android 12 and later always show a foreground-service notification, even
- * when the channel importance is minimum and the title is empty. That is the
- * blank Umap row 1.6.0 left in the shade. This class does not post one and
- * does not create a location channel.
+ * Verified on 1.54 before this change: a stay asked GPS at 30s, then 60s,
+ * and still 60s after 7 minutes, with a 120s ceiling that the normal path
+ * did not use. The 2 minute gap was PUBLISH_STILL_MS, the family upload,
+ * not the GPS period. The 7 minute constant only selected that same 60s tier.
  *
- * Updates keep the requested interval while the app is in the foreground or
- * on the battery-optimization allowlist (배터리 제한 없음) with 항상 허용.
- * Without that allowlist, Android 8+ may throttle a background app to a few
- * fixes an hour. The system location-in-use glyph is not an app notification.
- *
- * Thresholds match src/lib/tracking.mjs: drop fixes older than 30s and jumps
- * faster than 350 m/s. A precise fix above 80m is kept when the last good
- * fix is already 20s old, up to 400m, so a network fallback can leave a
- * stale pin. A fresh precise fix still wins over a coarser one.
- * Coordinates are the real fix. The live pin's stay bubble is applied in JS.
- * Keep-alive is not a continuous GNSS stream. A walk requests GPS every
- * 2.5s once the step is clear (about 8m at a walking pace, or a reported
- * speed with real displacement) and switches to that stream on the detecting
- * fix. A bike or vehicle (about 7 km/h) requests every 1s. Those moving fixes
- * are the recorded trail. The 8s/25m family publish gap does not drop them.
- * A short light does not drop a walk: the stream stays dense until the phone
- * has barely moved for 45s. An inconclusive step uses a 20s bridge instead of
- * the stay interval. After a ride, a stop holds 12s fixes for 3 minutes.
- * A stay asks for a fix after 30s, then every 60s, and still every 60s after
- * 7 minutes. Nothing here asks slower than 120s. Those stay fixes only detect
- * movement: they are not emitted, so the pin and the trail stay on one point.
- * The first request starts at 30s. Battery cost of the shorter stay checks
- * is not measured on a device.
+ * A walk requests GPS every 2s once the step is clear and switches on the
+ * detecting fix. A bike or vehicle (about 7 km/h) requests every 1s. A stay
+ * asks every 20s and never slower than 30s. Stay fixes are not trail points;
+ * the pin stays on the stay anchor. Family uploads are one sealed batch:
+ * every 30s while moving, every 60s while still, and immediately when the
+ * phone changes between stay and journey. Distance does not trigger an upload.
+ * A partial wake lock is held only while the moving stream is on.
  */
 public class LocationKeepService {
     public static final String ACTION_FIX = "kr.co.umap.tracker.LOCATION_FIX";
@@ -82,24 +71,24 @@ public class LocationKeepService {
     private static Location stableFix;
     private static Location lastPublished;
     private static long lastPublishedAt;
-    /** Walk samples once the step is clear. */
-    private static final long GPS_MOVING_MS = 2_500L;
+    /** Walk samples once the step is clear. Denser than the 1.54 2.5s stream. */
+    private static final long GPS_MOVING_MS = 2_000L;
     /** Bike and vehicle. Denser than a walk, still above a same-second provider burst. */
     private static final long GPS_RIDE_MS = 1_000L;
-    /** First stay check. The next quiet check widens the request. */
-    private static final long GPS_STILL_PROBE_MS = 30_000L;
-    /** Confirmed stay, including after 7 minutes. */
-    private static final long GPS_STILL_MS = 60_000L;
-    /** After 7 minutes still. Same pace as a confirmed stay; the cap is the ceiling. */
-    private static final long GPS_STILL_LONG_MS = 60_000L;
+    /** First stay check, and every later stay check. No 60s or 120s tier. */
+    private static final long GPS_STILL_PROBE_MS = 20_000L;
+    /** Confirmed stay. Same 20s, including after 7 minutes. */
+    private static final long GPS_STILL_MS = 20_000L;
+    /** After 7 minutes still. Does not slow down. */
+    private static final long GPS_STILL_LONG_MS = 20_000L;
     /** No stay request is slower than this. */
-    private static final long GPS_STILL_MAX_MS = 120_000L;
+    private static final long GPS_STILL_MAX_MS = 30_000L;
     private static final long STILL_LONG_AFTER_MS = 7 * 60_000L;
     /**
      * Not a clear walk and not a quiet stay. Faster than the stay check,
      * slower than 2.5s. Inside the 15–30s bridge.
      */
-    private static final long GPS_AMBIGUOUS_MS = 20_000L;
+    private static final long GPS_AMBIGUOUS_MS = 15_000L;
     /** Hold 2.5s through a short light. A real stop is most of a minute. */
     private static final long MOVING_HOLD_MS = 45_000L;
     /** A shorter step than 1.51, so a still probe can arm 2.5s on this fix. */
@@ -118,20 +107,22 @@ public class LocationKeepService {
      * After a ride, sample faster than the 20s dash hole, slower than 2.5s.
      * Three minutes covers a signal. A longer park returns to 2 minutes, then 5.
      */
-    private static final long RIDE_BRIDGE_MS = 12_000L;
+    private static final long RIDE_BRIDGE_MS = 15_000L;
     private static final long RIDE_BRIDGE_FOR_MS = 3 * 60_000L;
     /** Drop a second provider's burst. 1s ride fixes and 2.5s walk fixes sit outside this window. */
     private static final long SAMPLE_GAP_MS = 800L;
-    /** Family server. Local emit() is not throttled by these. */
-    private static final long PUBLISH_MOVING_MS = 8_000L;
-    private static final long PUBLISH_STILL_MS = 120_000L;
+    /** One sealed family batch. Local emit() is not throttled by these. */
+    private static final long UPLOAD_MOVING_MS = 30_000L;
+    private static final long UPLOAD_STILL_MS = 60_000L;
+    /** A service with no fix newer than this is treated as stopped. */
+    private static final long KEEP_HEARTBEAT_FRESH_MS = 90_000L;
+    private static final int JOURNAL_CAP = 120;
     /** Fresher than the 10 minute family stale window, even when GPS is quiet. */
     private static final long HEARTBEAT_MS = 3 * 60 * 1000L;
     /** No accepted fix for this long, with permission still granted, re-registers GPS. */
     private static final long WATCHDOG_QUIET_MS = 3 * 60 * 1000L;
     private static volatile boolean starting = false;
     private static final int HEARTBEAT_CODE = REQUEST_CODE + 1;
-    private static final float PUBLISH_MOVING_M = 25f;
     private static long requestedGpsMs = GPS_STILL_PROBE_MS;
     private static long stillSinceMs = 0;
     private static long lastRideAt = 0L;
@@ -147,6 +138,9 @@ public class LocationKeepService {
     private static long lastSampleAt = 0;
     private static Location motionAnchor;
     private static Location lastSample;
+    private static final JSONArray pendingPoints = new JSONArray();
+    private static final JSONArray journal = new JSONArray();
+    private static long lastEmittedAt = 0L;
 
     public static void attach(Context context) {
         appContext = context.getApplicationContext();
@@ -154,17 +148,42 @@ public class LocationKeepService {
 
     public static void setSink(Sink next) {
         sink = next;
+        if (next != null) replayJournal();
     }
 
     public static boolean isRunning() {
         return isRunning(appContext);
     }
 
-    /** Reads the registration even before this process has attached the service. */
+    public static boolean wanted(Context context) {
+        Context current = context != null ? context.getApplicationContext() : appContext;
+        if (current == null) return false;
+        SharedPreferences stored = prefs(current);
+        return stored.getBoolean("keepWanted", false) || stored.getBoolean("registered", false);
+    }
+
+    public static void noteHeartbeat(Context context) {
+        if (context == null) return;
+        prefs(context).edit().putLong("heartbeatAt", System.currentTimeMillis()).apply();
+    }
+
+    public static long heartbeatAt(Context context) {
+        if (context == null) return 0L;
+        return prefs(context).getLong("heartbeatAt", 0L);
+    }
+
+    /**
+     * True when the foreground service is in this process, or its last fix
+     * is still inside KEEP_HEARTBEAT_FRESH_MS. A leftover "registered" pref
+     * without a fresh beat is not running.
+     */
     public static boolean isRunning(Context context) {
         Context current = context != null ? context.getApplicationContext() : appContext;
         if (current == null) return false;
-        return prefs(current).getBoolean("registered", false);
+        if (!wanted(current)) return false;
+        if (LocationKeepProcess.isAlive()) return true;
+        long beat = heartbeatAt(current);
+        return beat > 0L && System.currentTimeMillis() - beat < KEEP_HEARTBEAT_FRESH_MS;
     }
 
     public static String lastError() {
@@ -219,6 +238,7 @@ public class LocationKeepService {
         } else {
             prefs(context).edit().putBoolean("registered", true).commit();
         }
+        noteHeartbeat(context);
         synchronized (LOCK) {
             if (!anySharing(config)) {
                 removeUpdates(context);
@@ -265,6 +285,17 @@ public class LocationKeepService {
         return prefs(context).getBoolean("userStopped", false);
     }
 
+    /** Re-register GPS after the foreground service is up. A background registration can be dropped. */
+    public static void ensureRunning(Context context) {
+        if (context == null || !wanted(context) || !hasLocationPermission(context)) return;
+        JSONObject config = readConfig(context);
+        if (config == null || !anySharing(config)) return;
+        synchronized (LOCK) {
+            registerUpdates(context, config);
+        }
+        scheduleHeartbeat(context);
+    }
+
     /** Boot and an APK update drop the LocationManager registration. The saved config starts it again. */
     public static void restartIfWanted(Context context) {
         if (context == null) return;
@@ -295,11 +326,18 @@ public class LocationKeepService {
                 disarm(context);
                 return;
             }
-            Location publishFix;
+            Upload upload;
             synchronized (LOCK) {
-                publishFix = handleFix(context, location);
+                upload = handleFix(context, location);
             }
-            if (publishFix != null) publish(context, publishFix);
+            if (upload != null) {
+                int posted = publish(context, upload);
+                if (posted >= 0) {
+                    synchronized (LOCK) {
+                        commitUpload(context, upload, posted == 1);
+                    }
+                }
+            }
         } finally {
                 if (pending != null) pending.finish();
             }
@@ -312,6 +350,8 @@ public class LocationKeepService {
             removeUpdates(context);
             cancelHeartbeat(context);
         }
+        LocationKeepProcess.setMovingWake(context, false);
+        LocationKeepProcess.release(context);
     }
 
     public static void onHeartbeat(Context context, BroadcastReceiver.PendingResult pending) {
@@ -320,6 +360,7 @@ public class LocationKeepService {
             try {
                 if (!prefs(context).getBoolean("registered", false)) return;
                 Location last;
+                boolean movingNow;
                 synchronized (LOCK) {
                     ensureFilter(context);
                     long quiet = lastSampleAt <= 0L ? Long.MAX_VALUE : System.currentTimeMillis() - lastSampleAt;
@@ -333,8 +374,28 @@ public class LocationKeepService {
                         registerUpdates(context, config);
                     }
                     last = lastPublished == null ? null : new Location(lastPublished);
+                    movingNow = movingStream;
                 }
-                if (last != null && anySharing(readConfig(context))) publish(context, last);
+                noteHeartbeat(context);
+                if (last != null && anySharing(readConfig(context))) {
+                    long since = lastPublishedAt <= 0L ? Long.MAX_VALUE : System.currentTimeMillis() - lastPublishedAt;
+                    long gap = movingNow ? UPLOAD_MOVING_MS : UPLOAD_STILL_MS;
+                    if (since >= gap) {
+                        Upload upload = new Upload();
+                        upload.pin = last;
+                        upload.moving = movingNow;
+                        upload.flush = false;
+                        upload.at = System.currentTimeMillis();
+                        upload.sent = 0;
+                        int posted = publish(context, upload);
+                        if (posted >= 0) {
+                            synchronized (LOCK) {
+                                lastPublishedAt = upload.at;
+                                rememberFilter(context);
+                            }
+                        }
+                    }
+                }
             } finally {
                 scheduleHeartbeat(context);
                 if (pending != null) pending.finish();
@@ -528,9 +589,12 @@ public class LocationKeepService {
         lastSampleAt = 0L;
         motionAnchor = null;
         lastSample = null;
+        lastEmittedAt = 0L;
+        while (pendingPoints.length() > 0) pendingPoints.remove(0);
+        while (journal.length() > 0) journal.remove(0);
         filterLoaded = true;
         prefs(context).edit()
-            .remove("stable").remove("last").remove("lastAt")
+            .remove("stable").remove("last").remove("lastAt").remove("heartbeatAt")
             .remove("beatLatE6").remove("beatLngE6").remove("beatAcc")
             .apply();
     }
@@ -575,7 +639,16 @@ public class LocationKeepService {
         }
     }
 
-    private static Location handleFix(Context context, Location location) {
+    private static final class Upload {
+        Location pin;
+        JSONArray trail;
+        boolean flush;
+        boolean moving;
+        long at;
+        int sent;
+    }
+
+    private static Upload handleFix(Context context, Location location) {
         ensureFilter(context);
         JSONObject config = readConfig(context);
         if (config == null) return null;
@@ -609,7 +682,9 @@ public class LocationKeepService {
                 return null;
             }
         }
+        boolean wasMoving = movingStream;
         boolean moving = noteMovement(location, fixAt);
+        boolean stateChanged = wasMoving != moving;
         long want = gpsInterval(moving, now);
         if (want != requestedGpsMs) {
             requestedGpsMs = want;
@@ -617,27 +692,93 @@ public class LocationKeepService {
         }
         lastSample = new Location(location);
         lastSampleAt = now;
-        if (!recordFix(moving)) {
+        noteHeartbeat(context);
+        LocationKeepProcess.setMovingWake(context, movingStream);
+        boolean record = recordFix(moving);
+        if (record) rememberPoint(location, fixAt);
+        long gap = moving ? UPLOAD_MOVING_MS : UPLOAD_STILL_MS;
+        boolean due = lastPublishedAt <= 0L || now - lastPublishedAt >= gap;
+        if (!stateChanged && !due) {
             rememberFilter(context);
             scheduleHeartbeat(context);
             return null;
         }
-        emit(location, fixAt);
-        if (lastPublishedAt > 0) {
-            long since = now - lastPublishedAt;
-            float moved = lastPublished == null ? 9999f : lastPublished.distanceTo(location);
-            long publishGap = moving ? PUBLISH_MOVING_MS : PUBLISH_STILL_MS;
-            float publishMove = moving ? PUBLISH_MOVING_M : stayGate(lastPublished, location);
-            if (since + 1_000L < publishGap && moved < publishMove) {
-                rememberFilter(context);
-                return null;
-            }
-        }
-        lastPublished = new Location(location);
-        lastPublishedAt = now;
+        Upload upload = new Upload();
+        upload.pin = !moving && motionAnchor != null ? new Location(motionAnchor) : new Location(location);
+        upload.moving = moving;
+        upload.flush = stateChanged;
+        upload.at = now;
+        upload.trail = copyPending();
+        upload.sent = upload.trail.length();
         rememberFilter(context);
         scheduleHeartbeat(context);
-        return new Location(location);
+        return upload;
+    }
+
+    private static void commitUpload(Context context, Upload upload, boolean dropPending) {
+        if (dropPending) {
+            for (int index = 0; index < upload.sent && pendingPoints.length() > 0; index += 1) {
+                pendingPoints.remove(0);
+            }
+        }
+        if (upload.pin != null) lastPublished = new Location(upload.pin);
+        lastPublishedAt = upload.at;
+        rememberFilter(context);
+    }
+
+    private static void rememberPoint(Location location, long fixAt) {
+        try {
+            JSONObject point = new JSONObject();
+            point.put("lat", location.getLatitude());
+            point.put("lng", location.getLongitude());
+            point.put("at", fixAt);
+            point.put("accuracyM", Math.round(Math.max(0f, location.getAccuracy())));
+            if (location.hasSpeed() && location.getSpeed() >= 0f && location.getSpeed() < 400f) {
+                point.put("speedMps", location.getSpeed());
+            }
+            pendingPoints.put(point);
+            journal.put(new JSONObject(point.toString()));
+            while (pendingPoints.length() > JOURNAL_CAP) pendingPoints.remove(0);
+            while (journal.length() > JOURNAL_CAP) journal.remove(0);
+            if (sink != null) {
+                emit(location, fixAt);
+                lastEmittedAt = fixAt;
+            }
+        } catch (Exception ignored) {
+            /* The next fix tries again. */
+        }
+    }
+
+    private static JSONArray copyPending() {
+        JSONArray copy = new JSONArray();
+        for (int index = 0; index < pendingPoints.length(); index += 1) {
+            JSONObject point = pendingPoints.optJSONObject(index);
+            if (point != null) copy.put(point);
+        }
+        return copy;
+    }
+
+    private static void replayJournal() {
+        Sink current = sink;
+        if (current == null) return;
+        for (int index = 0; index < journal.length(); index += 1) {
+            JSONObject point = journal.optJSONObject(index);
+            if (point == null || point.optLong("at") <= lastEmittedAt) continue;
+            try {
+                JSONObject fix = new JSONObject();
+                fix.put("lat", point.getDouble("lat"));
+                fix.put("lng", point.getDouble("lng"));
+                fix.put("accuracyM", point.optInt("accuracyM"));
+                if (point.has("speedMps")) fix.put("speedMps", point.getDouble("speedMps"));
+                else fix.put("speedMps", JSONObject.NULL);
+                fix.put("at", point.getLong("at"));
+                fix.put("provider", "gps");
+                current.onFix(fix);
+                lastEmittedAt = point.getLong("at");
+            } catch (Exception ignored) {
+                /* Skip a damaged journal row. */
+            }
+        }
     }
 
     /**
@@ -652,7 +793,7 @@ public class LocationKeepService {
     }
 
     /**
-     * True only while the 2.5s or 1s stream should stay on.
+     * True only while the 2s or 1s stream should stay on.
      * A still probe that has actually walked arms that stream on this fix.
      */
     private static boolean noteMovement(Location fix, long fixAt) {
@@ -769,9 +910,15 @@ public class LocationKeepService {
         }
     }
 
-    private static boolean publish(Context context, Location location) {
+    /** 1 when every sealed target accepted the batch, 0 when the clock should move but points stay, -1 when nothing was attempted. */
+    private static int publish(Context context, Upload upload) {
+        Location location = upload == null ? null : upload.pin;
+        return publishBody(context, location, upload);
+    }
+
+    private static int publishBody(Context context, Location location, Upload upload) {
         JSONObject current = readConfig(context);
-        if (current == null) return location == null;
+        if (current == null) return location == null ? 0 : -1;
         String base = current.optString("baseUrl", "").replaceAll("/+$", "");
         String name = current.optString("name", "가족").trim();
         if (name.isEmpty()) name = "가족";
@@ -782,8 +929,10 @@ public class LocationKeepService {
         long at = System.currentTimeMillis();
         int battery = batteryPct(context);
         boolean charging = chargingNow(context);
-        if (!prefs(context).getBoolean("registered", false)) return false;
+        if (!prefs(context).getBoolean("registered", false)) return -1;
         boolean changed = false;
+        boolean wantedShare = false;
+        boolean heldBack = false;
         for (JSONObject target : targets(current)) {
             boolean sharing = target.optBoolean("sharing", false);
             if (sharing && location == null) continue;
@@ -808,24 +957,40 @@ public class LocationKeepService {
                     secret.put("lng", location.getLongitude());
                     secret.put("accuracyM", Math.round(Math.max(0f, location.getAccuracy())));
                     JSONObject envelope = sealInfo == null ? null : sealCoordinates(sealInfo.optString("key"), sealInfo.optString("kid"), secret.toString());
-                    if (envelope == null) continue;
+                    wantedShare = true;
+                    if (envelope == null) {
+                        heldBack = true;
+                        continue;
+                    }
                     body.put("lat", JSONObject.NULL);
                     body.put("lng", JSONObject.NULL);
                     body.put("accuracyM", 0);
                     body.put("seal", envelope);
                     if (battery >= 0) body.put("batteryPct", battery);
                     body.put("charging", charging);
+                    body.put("moving", upload != null && upload.moving);
+                    if (upload != null && upload.flush) body.put("flush", true);
+                    JSONObject trail = upload == null ? null : sealTrail(sealInfo, upload.trail);
+                    if (upload != null && upload.trail != null && upload.trail.length() > 0 && trail == null) {
+                        heldBack = true;
+                        continue;
+                    }
+                    if (trail != null) body.put("trail", trail);
                 }
-                if (putWithRetry(base, target.optString("token"), body, identified ? profileKey : "")) {
+                boolean posted = putWithRetry(base, target.optString("token"), body, identified ? profileKey : "");
+                if (posted) {
                     target.put("revokeSent", !sharing);
                     changed = true;
+                } else if (sharing && location != null) {
+                    heldBack = true;
                 }
             } catch (Exception ignored) {
-                /* 다음 위치에서 다시 보낸다 */
+                if (sharing && location != null) heldBack = true;
             }
         }
         if (changed) prefs(context).edit().putString("config", current.toString()).apply();
-        return true;
+        if (!wantedShare) return 0;
+        return heldBack ? 0 : 1;
     }
 
     private static String sealKidFingerprint(JSONObject config) {
@@ -870,6 +1035,18 @@ public class LocationKeepService {
         }
     }
 
+    private static JSONObject sealTrail(JSONObject sealInfo, JSONArray points) {
+        if (sealInfo == null || points == null || points.length() == 0) return null;
+        try {
+            JSONObject secret = new JSONObject();
+            secret.put("points", points);
+            secret.put("journeys", new JSONArray());
+            return sealCoordinates(sealInfo.optString("key"), sealInfo.optString("kid"), secret.toString());
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
     private static boolean putWithRetry(String base, String token, JSONObject body, String profileKey) {
         for (int attempt = 0; attempt < 3; attempt += 1) {
             if (put(base, token, body, profileKey)) return true;
@@ -881,6 +1058,19 @@ public class LocationKeepService {
             }
         }
         return false;
+    }
+
+    private static String readStream(InputStream stream) throws Exception {
+        if (stream == null) return "";
+        ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+        byte[] chunk = new byte[256];
+        int count;
+        int total = 0;
+        while ((count = stream.read(chunk)) >= 0 && total < 4096) {
+            buffer.write(chunk, 0, count);
+            total += count;
+        }
+        return buffer.toString(StandardCharsets.UTF_8);
     }
 
     private static boolean put(String base, String token, JSONObject body, String profileKey) {
@@ -902,7 +1092,14 @@ public class LocationKeepService {
                 stream.write(bytes);
             }
             int status = connection.getResponseCode();
-            return status >= 200 && status < 300;
+            if (status < 200 || status >= 300) return false;
+            String response = "";
+            try {
+                response = readStream(connection.getInputStream());
+            } catch (Exception ignored) {
+                response = "";
+            }
+            return !response.contains("\"collected\":false");
         } catch (Exception error) {
             return false;
         } finally {

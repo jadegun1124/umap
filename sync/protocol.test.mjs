@@ -948,7 +948,7 @@ test('member id keeps the fix across a rename and only the profile key can chang
   assert.equal(hugeBody.status, 413);
   const hugePlace = await call(store, 'PUT', `/v1/rooms/${code}/place`, {
     token,
-    raw: `{"name":"${'a'.repeat(5000)}"}`,
+    raw: `{"name":"${'a'.repeat(40_000)}"}`,
   });
   assert.equal(hugePlace.status, 413);
 

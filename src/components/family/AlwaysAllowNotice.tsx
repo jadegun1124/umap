@@ -69,7 +69,7 @@ export function AlwaysAllowNotice({
       )}
       {live && (
         <p className="mt-2 text-[11px] font-semibold leading-4 text-slate-500">
-          걷는 동안은 2.5초, 차나 자전거는 1초마다 기록합니다. 머무는 동안은 30초에서 1분마다 움직임만 확인합니다.
+          걷는 동안은 2초, 차나 자전거는 1초마다 기록합니다. 머무는 동안은 20초마다 움직임만 확인합니다. 삼성 절전 앱·수면 중 앱에서는 Kinnex를 제외해 주세요.
         </p>
       )}
       {note && <p className="mt-1 text-[11px] font-semibold leading-4 text-slate-500">{note}</p>}

@@ -18,6 +18,7 @@ const PHOTO_URL = /^data:image\/(?:jpeg|webp);base64,[A-Za-z0-9+/]+={0,2}$/;
 const CODE_PART = /^\d{4,6}$/;
 const ALERT_ID = /^[A-Za-z0-9_-]{8,80}$/;
 const MAX_BODY = 4096;
+const MAX_PLACE_BODY = 32 * 1024;
 const MAX_PROFILE_BODY = 32_768;
 const MAX_TRAIL_BODY = 160 * 1024;
 const MAX_TRAIL_POINTS = 800;
@@ -230,6 +231,9 @@ function cleanPlace(input, code, now) {
       ...(memberId ? { memberId } : {}),
       ...(priorName ? { priorName } : {}),
       ...(seal ? { seal } : {}),
+      ...(input.flush === true ? { flush: true } : {}),
+      ...(input.moving === true ? { moving: true } : {}),
+      ...(isSeal(input.trail) ? { trailSeal: { v: 1, alg: 'A256GCM', kid: input.trail.kid, iv: input.trail.iv, ct: input.trail.ct } } : {}),
     },
   };
 }
@@ -314,6 +318,37 @@ export function shouldHoldPlaceWrite({ previousSharing, sharing, lastPersistedAt
   if (typeof lastPersistedAt !== 'number' || lastPersistedAt <= 0) return false;
   if (typeof at !== 'number') return false;
   return at >= lastPersistedAt && at - lastPersistedAt < 8000;
+}
+
+/** A state-change flush or a trail batch must be stored. A plain 1.54 fix still waits 8s. */
+export function placeWriteHeld(place, lastPersistedAt, at, previousSharing) {
+  if (place && place.flush === true) return false;
+  if (place && place.trailSeal) return false;
+  return shouldHoldPlaceWrite({
+    previousSharing,
+    sharing: place ? place.sharing : false,
+    lastPersistedAt,
+    at,
+  });
+}
+
+const MAX_TRAIL_PARTS = 40;
+
+export function appendTrailPart(room, memberId, at, moving, seal) {
+  if (!memberId || !isSeal(seal)) return { room, ignored: true };
+  const trails = { ...(room.trails && typeof room.trails === 'object' ? room.trails : {}) };
+  const current = trails[memberId] && typeof trails[memberId] === 'object' ? trails[memberId] : {};
+  const parts = Array.isArray(current.parts) ? current.parts.filter(isSeal).slice(-(MAX_TRAIL_PARTS - 1)) : [];
+  const nextSeal = { v: 1, alg: 'A256GCM', kid: seal.kid, iv: seal.iv, ct: seal.ct };
+  parts.push(nextSeal);
+  trails[memberId] = {
+    ...current,
+    memberId,
+    at: Math.round(at),
+    moving: moving === true,
+    parts,
+  };
+  return { room: { ...room, trails }, ignored: false };
 }
 
 function placeStorageKey(place) {
@@ -1055,7 +1090,7 @@ export async function parseOperation(request) {
   }
 
   if (request.method === 'PUT' && action === '/place') {
-    const body = await readJson(request);
+    const body = await readJson(request, MAX_PLACE_BODY);
     if (body.error) return body.error;
     const cleaned = cleanPlace(body.value, code, Date.now());
     if (cleaned.error) return cleaned.error;
@@ -1330,8 +1365,15 @@ export async function handleSyncRequest(store, request, extras = {}) {
   if (op.kind === 'place') {
     const next = await commitPlace(room, op.place, op.profileKey || '');
     if (next.error) return next.error;
-    if (!next.ignored) {
-      await store.write(op.token, next.room);
+    let stored = next.room;
+    let ignored = next.ignored;
+    if (op.place.trailSeal && op.place.memberId) {
+      const trailed = appendTrailPart(stored, op.place.memberId, op.place.at, op.place.moving === true, op.place.trailSeal);
+      stored = trailed.room;
+      ignored = ignored && trailed.ignored;
+    }
+    if (!ignored) {
+      await store.write(op.token, stored);
       if (extras.accounts && op.place && op.place.memberId) {
         const { recordHandling } = await import('./handling.mjs');
         await recordHandling(extras.accounts, {

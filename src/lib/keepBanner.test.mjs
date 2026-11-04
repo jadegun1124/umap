@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { keepBanner } from './keepBanner.mjs';
+import { keepBanner, serviceAlive } from './keepBanner.mjs';
 
 test('an open map does not warn when background keep was never turned on', () => {
   assert.equal(keepBanner({
@@ -65,6 +65,32 @@ test('a stopped keep says when the permission or the battery is what blocked it'
   });
   assert.equal(battery.action, 'battery');
   assert.match(battery.text, /제한 없음/);
+});
+
+test('a fresh heartbeat hides the stopped banner, and a stale one shows it', () => {
+  const now = 1_700_000_000_000;
+  assert.equal(serviceAlive({ serviceRunning: false, heartbeatAt: now - 10_000, now }), true);
+  assert.equal(serviceAlive({ serviceRunning: true, heartbeatAt: now - 120_000, now }), false);
+  assert.equal(keepBanner({
+    native: true,
+    onMap: true,
+    serviceRunning: false,
+    keepAlive: true,
+    locationMode: 'always',
+    heartbeatAt: now - 10_000,
+    now,
+  }), null);
+  const dead = keepBanner({
+    native: true,
+    onMap: true,
+    serviceRunning: true,
+    keepAlive: true,
+    locationMode: 'always',
+    heartbeatAt: now - 120_000,
+    now,
+  });
+  assert.equal(dead.action, 'start');
+  assert.match(dead.text, /위치 유지가 꺼져 있습니다/);
 });
 
 test('a running keep service only warns when the battery is restricted', () => {

@@ -53,53 +53,41 @@ test('keep-alive notification is asked at entry until allowed, and started only 
   assert.equal(keepEntryPrompt({ ...base, notifications: 'granted', locationMode: 'always', keepAlive: true }), 'none');
 });
 
-test('location keep does not post an ongoing shade card', () => {
+test('location keep is a foreground service that restarts with the task and the phone', () => {
   const location = readFileSync(new URL('../../android/app/src/main/java/kr/co/umap/tracker/LocationKeepService.java', import.meta.url), 'utf8');
   const watch = readFileSync(new URL('../../android/app/src/main/java/kr/co/umap/tracker/AlertWatchService.java', import.meta.url), 'utf8');
   const cleanup = readFileSync(new URL('../../android/app/src/main/java/kr/co/umap/tracker/OngoingNotificationCleanup.java', import.meta.url), 'utf8');
   const manifest = readFileSync(new URL('../../android/app/src/main/AndroidManifest.xml', import.meta.url), 'utf8');
-  assert.equal(location.includes('Umap 위치 공유'), false);
-  assert.equal(location.includes('위치를 보내는 중'), false);
-  assert.equal(location.includes('위치 유지 끄기'), false);
-  assert.equal(location.includes('startForeground('), false);
-  assert.equal(watch.includes('startForeground('), false);
-  assert.equal(location.includes('IMPORTANCE_MIN'), false);
-  assert.equal(watch.includes('IMPORTANCE_MIN'), false);
-  assert.equal(location.includes('\\u2060'), false);
-  assert.equal(watch.includes('\\u2060'), false);
-  assert.match(location, /requestLocationUpdates/);
-  assert.match(watch, /setExactAndAllowWhileIdle/);
-  assert.match(watch, /IMPORTANCE_HIGH/);
-  assert.match(watch, /SOS/);
-  assert.match(cleanup, /deleteNotificationChannel\(LOCATION_CHANNEL\)/);
-  assert.match(cleanup, /deleteNotificationChannel\(QUIET_CHANNEL\)/);
-  assert.match(cleanup, /deleteNotificationChannel\(WATCH_CHANNEL\)/);
-  assert.match(cleanup, /umap_location_quiet/);
-  assert.match(cleanup, /umap_alert_watch/);
-  assert.match(cleanup, /"umap_location"/);
   const process = readFileSync(new URL('../../android/app/src/main/java/kr/co/umap/tracker/LocationKeepProcess.java', import.meta.url), 'utf8');
   const plugin = readFileSync(new URL('../../android/app/src/main/java/kr/co/umap/tracker/UmapLocationPlugin.java', import.meta.url), 'utf8');
+  assert.equal(watch.includes('startForeground('), false);
+  assert.match(location, /requestLocationUpdates/);
+  assert.match(location, /GPS_PROVIDER/);
+  assert.match(process, /startForeground\(/);
+  assert.match(process, /FOREGROUND_SERVICE_TYPE_LOCATION/);
   assert.match(process, /return START_STICKY/);
-  assert.match(process, /fromKeep/);
-  assert.match(process, /intent == null/);
   assert.match(process, /onTaskRemoved/);
-  assert.match(process, /restartIfWanted/);
-  assert.equal(process.includes('startForeground('), false);
-  assert.match(manifest, /LocationKeepProcess/);
+  assert.match(process, /PARTIAL_WAKE_LOCK/);
+  assert.match(process, /위치 유지 중/);
+  assert.match(manifest, /android:foregroundServiceType="location"/);
+  assert.match(manifest, /FOREGROUND_SERVICE_LOCATION/);
+  assert.match(manifest, /WAKE_LOCK/);
+  assert.match(manifest, /REQUEST_IGNORE_BATTERY_OPTIMIZATIONS/);
   assert.match(manifest, /stopWithTask="false"/);
   assert.match(manifest, /BOOT_COMPLETED/);
   assert.match(manifest, /MY_PACKAGE_REPLACED/);
-  assert.match(location, /WATCHDOG_QUIET_MS = 3 \* 60 \* 1000L/);
-  assert.match(location, /quiet >= WATCHDOG_QUIET_MS/);
+  assert.match(plugin, /ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS/);
+  assert.match(plugin, /isIgnoringBatteryOptimizations/);
+  assert.match(plugin, /heartbeatAt/);
+  assert.match(location, /KEEP_HEARTBEAT_FRESH_MS = 90_000L/);
   assert.match(location, /LocationKeepProcess\.hold/);
+  assert.match(watch, /setExactAndAllowWhileIdle/);
+  assert.match(watch, /SOS/);
+  assert.match(cleanup, /deleteNotificationChannel\(LOCATION_CHANNEL\)/);
   const statusBody = plugin.slice(plugin.indexOf('public void status'), plugin.indexOf('public void ackStopped'));
   assert.match(statusBody, /while-using/);
   assert.match(statusBody, /isIgnoringBatteryOptimizations/);
-  assert.match(statusBody, /versionCode/);
-  assert.equal(manifest.includes('foregroundServiceType'), false);
-  assert.match(manifest, /LocationKeepReceiver/);
-  assert.match(manifest, /AlertWatchReceiver/);
-  assert.match(manifest, /USE_EXACT_ALARM/);
+  assert.match(statusBody, /heartbeatAt/);
 });
 
 test('motion start and stop are one shade each and do not raise an ongoing card', () => {
@@ -110,9 +98,9 @@ test('motion start and stop are one shade each and do not raise an ongoing card'
   assert.match(watch, /CATEGORY_STATUS/);
   assert.match(watch, /notifyMotion/);
   assert.equal(watch.includes('startForeground('), false);
-  assert.match(location, /GPS_MOVING_MS = 2_500L/);
+  assert.match(location, /GPS_MOVING_MS = 2_000L/);
   assert.match(location, /GPS_RIDE_MS = 1_000L/);
-  assert.equal(location.includes('GPS_MOVING_MS = 1_000L'), false);
+  assert.equal(location.includes('GPS_MOVING_MS = 2_500L'), false);
 });
 
 test('chat shade notification is one event and opens that conversation', () => {
@@ -133,47 +121,28 @@ test('chat shade notification is one event and opens that conversation', () => {
   assert.match(plugin, /notifyListeners\("chat"/);
 });
 
-test('gps is 2.5s while walking, 1s while riding, and a stay probe never becomes a trail point', () => {
+test('gps is 2s while walking, 1s while riding, and a stay probe never becomes a trail point', () => {
   const location = readFileSync(new URL('../../android/app/src/main/java/kr/co/umap/tracker/LocationKeepService.java', import.meta.url), 'utf8');
-  assert.match(location, /GPS_MOVING_MS = 2_500L/);
+  assert.match(location, /GPS_MOVING_MS = 2_000L/);
   assert.match(location, /GPS_RIDE_MS = 1_000L/);
+  assert.match(location, /UPLOAD_MOVING_MS = 30_000L/);
+  assert.match(location, /UPLOAD_STILL_MS = 60_000L/);
+  assert.equal(location.includes('PUBLISH_MOVING_M'), false);
   assert.match(location, /requestedGpsMs < GPS_RIDE_MS \? GPS_RIDE_MS/);
   assert.match(location, /SAMPLE_GAP_MS = 800L/);
-  assert.match(location, /GPS_STILL_PROBE_MS = 30_000L/);
-  assert.match(location, /GPS_STILL_MS = 60_000L/);
-  assert.match(location, /GPS_STILL_LONG_MS = 60_000L/);
-  assert.match(location, /GPS_STILL_MAX_MS = 120_000L/);
-  assert.match(location, /GPS_AMBIGUOUS_MS = 20_000L/);
+  assert.match(location, /GPS_STILL_PROBE_MS = 20_000L/);
+  assert.match(location, /GPS_STILL_MS = 20_000L/);
+  assert.match(location, /GPS_STILL_LONG_MS = 20_000L/);
+  assert.match(location, /GPS_STILL_MAX_MS = 30_000L/);
+  assert.match(location, /GPS_AMBIGUOUS_MS = 15_000L/);
   assert.match(location, /STILL_LONG_AFTER_MS = 7 \* 60_000L/);
-  assert.match(location, /MOVING_HOLD_MS = 45_000L/);
-  assert.match(location, /WALK_DISPLACE_M = 8f/);
-  assert.match(location, /WALK_PACE_MAX_MS = 120_000L/);
-  assert.match(location, /WALK_IMPLIED_MIN_MPS = 0\.6f/);
-  assert.match(location, /RIDE_MIN_MPS = 7f \/ 3.6f/);
-  assert.match(location, /RIDE_STEP_M = 8f/);
-  assert.match(location, /RIDE_STAY_STEP_M = 18f/);
-  assert.match(location, /RIDE_BRIDGE_MS = 12_000L/);
-  assert.match(location, /RIDE_BRIDGE_FOR_MS = 3 \* 60_000L/);
-  assert.match(location, /lastRideAt = 0L/);
-  assert.match(location, /PUBLISH_MOVING_MS = 8_000L/);
-  assert.match(location, /PUBLISH_STILL_MS = 120_000L/);
-  assert.match(location, /PUBLISH_MOVING_M = 25f/);
-  assert.match(location, /requestedGpsMs = GPS_STILL_PROBE_MS/);
-  assert.match(location, /if \(!recordFix\(moving\)\)/);
+  assert.match(location, /RIDE_BRIDGE_MS = 15_000L/);
+  assert.match(location, /recordFix\(moving\)/);
   assert.match(location, /return moving;/);
-  assert.match(location, /emit\(location, fixAt\)/);
-  assert.match(location, /updatesRegistered && incoming\.equals\(registeredConfig\)/);
-  assert.match(location, /movingStream = false/);
   assert.match(location, /GPS_PROVIDER, gpsMs, 0f/);
-  assert.match(location, /quiet >= WATCHDOG_QUIET_MS && anySharing\(config\)/);
-  assert.match(location, /quiet > due && anySharing\(config\)/);
-  assert.equal(location.includes('GPS_STILL_MS = 120_000L'), false);
-  assert.equal(location.includes('GPS_STILL_LONG_MS = 300_000L'), false);
-  assert.equal(location.includes('GPS_MOVING_MS = 1_000L'), false);
-  assert.equal(location.includes('SAMPLE_GAP_MS = 1_200L'), false);
-  const emitAt = location.indexOf('emit(location, fixAt)');
-  const publishGap = location.indexOf('since + 1_000L < publishGap');
-  assert.ok(emitAt > 0 && publishGap > emitAt);
+  assert.equal(location.includes('GPS_STILL_MS = 60_000L'), false);
+  assert.equal(location.includes('GPS_STILL_MAX_MS = 120_000L'), false);
+  assert.equal(location.includes('GPS_MOVING_MS = 2_500L'), false);
 });
 
 test('browser permission buttons stay inside the browser prompt', () => {

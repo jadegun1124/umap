@@ -8,11 +8,11 @@ const java = readFileSync(new URL('../../android/app/src/main/java/kr/co/umap/tr
 const keepCopy = readFileSync(new URL('../components/family/FamilyMapScreen.tsx', import.meta.url), 'utf8');
 
 function passesDenseWalkStart(result) {
-  return result.msToMoving <= 120_000
-    && result.openingChordM <= 120 * 1.2 + 1
+  return result.msToMoving <= 30_000
+    && result.openingChordM <= 30 * 1.2 + 1
     && result.stayPoints === 1
     && result.movingGaps.length >= 20
-    && result.movingGaps.every((gap) => gap === 2_500);
+    && result.movingGaps.every((gap) => gap === 2_000);
 }
 
 test('the walk-start test runs the JS mirror, and Java gpsInterval cannot reorder without this failing', () => {
@@ -44,17 +44,17 @@ test('the walk-start test runs the JS mirror, and Java gpsInterval cannot reorde
   assert.equal(java.includes('class LocationKeepServiceTest'), false);
 });
 
-test('a walk that starts after a long stay is sampled at 2.5s, and the 1.51 intervals fail that', () => {
+test('a walk that starts after a long stay is sampled at 2s, and the 1.51 intervals fail that', () => {
   const current = policyFromJava(java);
-  assert.equal(current.movingMs, 2_500);
+  assert.equal(current.movingMs, 2_000);
   assert.equal(current.rideMs, 1_000);
-  assert.equal(current.stillProbeMs, 30_000);
-  assert.equal(current.stillMs, 60_000);
-  assert.equal(current.stillLongMs, 60_000);
-  assert.equal(current.stillMaxMs, 120_000);
+  assert.equal(current.stillProbeMs, 20_000);
+  assert.equal(current.stillMs, 20_000);
+  assert.equal(current.stillLongMs, 20_000);
+  assert.equal(current.stillMaxMs, 30_000);
   assert.ok(current.ambiguousMs >= 15_000 && current.ambiguousMs <= 30_000);
-  assert.match(keepCopy, /걷는 동안은 2\.5초, 차나 자전거는 1초마다 기록합니다/);
-  assert.match(keepCopy, /30초에서 1분마다 움직임만 확인/);
+  assert.match(keepCopy, /걷는 동안은 2초, 차나 자전거는 1초마다 받습니다/);
+  assert.match(keepCopy, /20초마다 움직임만 확인/);
   assert.equal(keepCopy.includes('2분에서 5분으로 줄입니다'), false);
   assert.equal(current.sampleGapMs, 800);
   assert.ok(current.sampleGapMs < current.rideMs);
@@ -83,39 +83,40 @@ test('a walk that starts after a long stay is sampled at 2.5s, and the 1.51 inte
   assert.ok(parts.some((part) => !part.dashed && part.points.length >= 10));
 });
 
-test('a quiet stay widens from 30s to 60s, and an unclear step uses the 20s bridge', () => {
+test('a quiet stay stays at 20s, and an unclear step uses the 15s bridge', () => {
   const policy = policyFromJava(java);
   const home = { lat: 37.55, lng: 127.05 };
   const still = replayFixes(policy, [
     { ...home, at: 0, speedMps: 0 },
-    { ...home, at: 30_000, speedMps: 0 },
+    { ...home, at: 20_000, speedMps: 0 },
   ]);
   assert.equal(still.stayConfirmed, true);
-  assert.equal(still.interval, 60_000);
+  assert.equal(still.interval, 20_000);
   assert.equal(still.recorded, 1);
   const hint = replayFixes(policy, [
     { ...home, at: 0, speedMps: 0 },
-    { ...eastOf(home.lat, home.lng, 5), at: 30_000, speedMps: 0.4 },
+    { ...eastOf(home.lat, home.lng, 5), at: 10_000, speedMps: 0.4 },
   ]);
   assert.equal(hint.moving, false);
-  assert.equal(hint.interval, 20_000);
+  assert.equal(hint.interval, 15_000);
   assert.equal(hint.recorded, 1);
   const armed = replayFixes(policy, [
     { ...home, at: 0, speedMps: 0 },
-    { ...home, at: 60_000, speedMps: 0 },
-    { ...eastOf(home.lat, home.lng, 72), at: 120_000, speedMps: 1.2 },
+    { ...home, at: 20_000, speedMps: 0 },
+    { ...eastOf(home.lat, home.lng, 24), at: 40_000, speedMps: 1.2 },
   ]);
   assert.equal(armed.moving, true);
-  assert.equal(armed.interval, 2_500);
+  assert.equal(armed.interval, 2_000);
   assert.equal(armed.recorded, 2);
   const noisy = replayFixes(policy, [
     { ...home, at: 0, speedMps: 0 },
-    { ...home, at: 30_000, speedMps: 0 },
-    { ...eastOf(home.lat, home.lng, 2), at: 90_000, speedMps: 0.6 },
+    { ...home, at: 20_000, speedMps: 0 },
+    { ...eastOf(home.lat, home.lng, 2), at: 8 * 60_000, speedMps: 0.6 },
   ]);
   assert.equal(noisy.stayConfirmed, true);
-  assert.equal(noisy.interval, 60_000);
+  assert.equal(noisy.interval, 20_000);
   assert.equal(noisy.moving, false);
+  assert.ok(noisy.interval <= 30_000);
 });
 
 test('1s ride samples and 2.5s walk samples stay in the stored trail', () => {
@@ -140,7 +141,7 @@ test('1s ride samples and 2.5s walk samples stay in the stored trail', () => {
   for (let index = 1; index <= 40; index += 1) {
     walk.push({
       ...eastOf(home.lat, home.lng, index * 3),
-      at: t + index * 2_500,
+      at: t + index * 2_000,
       accuracyM: 12,
       speedMps: 1.2,
       staying: false,
