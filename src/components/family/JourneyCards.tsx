@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, type RefObject } from 'rea
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { Bike, Car, ChevronRight, Footprints, Pause, Plane, Play } from 'lucide-react';
-import { classifyJourneyMode, formatJourneyDistance, formatJourneyWhen, journeyPathDistance, modeLabel, playbackAnchor, visibleTrail, type TravelMode } from '../../lib/tracking.mjs';
+import { classifyJourneyMode, formatJourneyDistance, formatJourneyWhen, journeyPathDistance, modeLabel, playbackAnchor, trailDrawParts, visibleTrail, type TravelMode } from '../../lib/tracking.mjs';
 import { VWORLD_ATTRIBUTION, vworldApiKey, vworldBaseTileUrl } from '../../services/vworld';
 import type { Journey } from '../../types/family';
 
@@ -211,10 +211,11 @@ function RoutePreview({ points }: { points: Sample[] }) {
     const group = trailRef.current;
     if (!map || !group) return;
     group.clearLayers();
-    const drawn = visibleTrail(pointsRef.current).filter((point) => Number.isFinite(point.lat) && Number.isFinite(point.lng));
+    const segments = trailDrawParts(pointsRef.current).filter((part) => !part.dashed && part.points.length >= 2);
+    const drawn = segments.flatMap((part) => part.points).filter((point) => Number.isFinite(point.lat) && Number.isFinite(point.lng));
     const stroke = { smoothFactor: 0, interactive: false, lineCap: 'round' as const, lineJoin: 'round' as const };
-    if (drawn.length >= 2) {
-      const latlngs = drawn.map((point) => [point.lat, point.lng] as [number, number]);
+    for (const part of segments) {
+      const latlngs = part.points.map((point) => [point.lat, point.lng] as [number, number]);
       L.polyline(latlngs, { ...stroke, color: '#ffffff', weight: 8, opacity: 0.95 }).addTo(group);
       L.polyline(latlngs, { ...stroke, color: '#0084FF', weight: 4.5, opacity: 1 }).addTo(group);
     }

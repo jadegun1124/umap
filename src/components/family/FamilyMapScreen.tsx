@@ -8,7 +8,7 @@ import { ACCOUNT_LINKED_OTHER_MESSAGE, ACCOUNT_UNLINKED_MESSAGE, linkedAccountWo
 import { backupFamilyAccount, cancelAccountBackup, deleteFamilyAccount, linkKakaoAccount, loadOwnDisclosures, loadOwnHandling, mintFamilyInvite, persistAccountResult, redeemFamilyInvite, type AccountSnapshot, type DisclosureRecord, type HandlingEvent } from '../../services/familyAccount';
 import { buildInviteLink, formatClock, hasLocation, haversineMeters, shouldAlertLeave } from '../../lib/geo';
 import { ALWAYS_GUIDE_DISMISSED_KEY, CHAT_NOTIFY_ASKED_KEY, KEEP_PERMISSION_ASKED_KEY, KEEP_START_ASKED_KEY, keepEntryPrompt, markSessionFlag, readSessionFlag } from '../../lib/systemSettings.mjs';
-import { familyMapShowsTrail, memberLiveLines, recordsDayTrails } from '../../lib/mapTrail.mjs';
+import { familyMapShowsTrail, mainOverviewTrails, memberLiveLines, recordsDayTrails } from '../../lib/mapTrail.mjs';
 import { noteDiag } from '../../lib/diagLog.mjs';
 import { shouldAutoFitRecord } from '../../lib/recordMapFit.mjs';
 import { shouldDeleteCreatedRoom } from '../../lib/familyRoom.mjs';
@@ -680,10 +680,32 @@ export function FamilyMapScreen() {
     }
     const lines = [];
     for (const member of state.members) {
-      for (const line of overviewLinesFor(member, state.tracks, now, liveDay)) lines.push(line);
+      const saved = recordsDayTrails({
+        journeys: (state.journeys[member.id] ?? []).filter((journey) => seoulDayKey(journey.endedAt) === liveDay),
+        livePoints: [],
+        liveDrawable: false,
+      });
+      const open = overviewLinesFor(member, state.tracks, now, liveDay);
+      const pinLat = member.lat;
+      const pinLng = member.lng;
+      if (open.length === 0 && saved.length > 0 && pinLat != null && pinLng != null) {
+        const extended = mainOverviewTrails({
+          points: saved[saved.length - 1],
+          pin: {
+            lat: pinLat,
+            lng: pinLng,
+            at: member.updatedAt || now,
+            accuracyM: member.accuracyM,
+          },
+          withPin: true,
+        });
+        lines.push(...saved.slice(0, -1), ...(extended.length ? extended : saved.slice(-1)));
+      } else {
+        lines.push(...saved, ...open);
+      }
     }
     return lines;
-  }, [dayJourneys, detailOpen, detailPoints, liveDay, now, pathDay, selected, showPath, state.members, state.tracks, viewingRecords]);
+  }, [dayJourneys, detailOpen, detailPoints, liveDay, now, pathDay, selected, showPath, state.journeys, state.members, state.tracks, viewingRecords]);
   useEffect(() => {
     if (viewingRecords) return;
     for (const member of state.members) {

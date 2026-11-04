@@ -44,6 +44,7 @@ import {
   RIDE_JOURNEY_STAY_MS,
   collapseIndoorStayDisplay,
   visibleTrail,
+  appendLiveTip,
   trailDrawParts,
   trailSegmentDashed,
   JOURNEY_STAY_MS,
@@ -1108,7 +1109,7 @@ test('a walk after a GPS hole stays in the raw track and later becomes a card', 
   const opened = storedTrackAfterArchive(points, hole.at + 1_000);
   assert.equal(opened.journeys.length, 0);
   assert.equal(opened.points, points);
-  assert.equal(splitClosedJourneys(points, hole.at + 1_000).remaining.length < points.length, true);
+  assert.equal(splitClosedJourneys(points, hole.at + 1_000).remaining.some((point) => point.at === hole.at), true);
 
   const after = [];
   for (let index = 1; index <= 40; index += 1) {
@@ -1565,4 +1566,42 @@ test('a stay-to-stay hole adds nothing to the trip distance', () => {
   const origin = { lat: 37.6365, lng: 127.0678, at: start, accuracyM: 16, speedMps: 0, staying: true };
   const hole = [origin, { ...offset(origin, 0, 140, end), accuracyM: 16, speedMps: 0, staying: true }];
   assert.ok(journeyPathDistance(hole) < 20);
+});
+
+test('a long gap stays one solid line, and one stored point still reaches the pin', () => {
+  const t = Date.UTC(2026, 10, 4, 6, 0, 0);
+  const origin = { lat: 37.63, lng: 127.06, at: t, accuracyM: 12, speedMps: 1.3, staying: false };
+  const walk = [origin];
+  for (let index = 1; index <= 30; index += 1) {
+    walk.push({
+      ...offset(origin, 0, index * 4, t + index * 2_500),
+      accuracyM: 12,
+      speedMps: 1.3,
+      staying: false,
+    });
+  }
+  const last = walk[walk.length - 1];
+  const hole = { ...offset(last, 0, 180, last.at + 8 * 60_000), accuracyM: 12, speedMps: 0, staying: true };
+  const points = [hole];
+  for (let minute = 0; minute <= 6; minute += 1) {
+    points.push({ ...hole, at: hole.at + minute * 60_000, speedMps: 0, staying: true });
+  }
+  const trail = [...walk, ...points];
+  const now = hole.at + 6 * 60_000;
+  const before = displayLivePoints([...walk, hole], hole.at + 1_000);
+  assert.ok(before.some((point) => point.at === hole.at), 'the straight gap is on the line before the stay closes');
+  const split = splitClosedJourneys(trail, now);
+  assert.equal(split.journeys.length, 1);
+  assert.equal(split.journeys[0].points.some((point) => point.at === hole.at), true);
+  const parts = trailDrawParts(split.journeys[0].points);
+  assert.equal(parts.length, 1);
+  assert.equal(parts[0].dashed, false);
+  assert.ok(parts[0].points.length >= 2);
+  assert.equal(displayLivePoints(trail, now).length, 0);
+  const tip = appendLiveTip(trailDrawParts([origin]), hole);
+  assert.equal(tip.length, 1);
+  assert.equal(tip[0].dashed, false);
+  assert.equal(tip[0].points.length, 2);
+  assert.equal(tip[0].points[1].lat, hole.lat);
+  assert.equal(tip[0].points[1].lng, hole.lng);
 });

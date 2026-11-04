@@ -145,6 +145,13 @@ const TRAIL_SPUR_WINDOW_MS = 180_000;
 export const TRAIL_GAP_M = 48;
 export const TRAIL_GAP_MS = 20_000;
 /**
+ * A chord at least this long stays on the drawn line.
+ * Shorter than the old gap rule, a 50m stay wobble is still not a step.
+ * 100m is past that wobble and short of a neighborhood relocation, so an
+ * 8 minute, 180m GPS hole is not clipped off the trip.
+ */
+export const TRAIL_KEEP_CHORD_M = 100;
+/**
  * Walk: hand the open segment to 기록 after this stay.
  * Shorter than a ride. The linger is the same 50m stay cluster as a stop,
  * and it must already have been observed for STOP_MIN_MS before the wall
@@ -1333,9 +1340,14 @@ export function appendLiveTip(parts, trailEnd) {
   const painted = (Array.isArray(parts) ? parts : []).filter((part) => part && Array.isArray(part.points) && part.points.length >= 2);
   const previous = painted[painted.length - 1];
   const paintedEnd = previous ? previous.points[previous.points.length - 1] : null;
-  if (!trailEnd || !paintedEnd || !Number.isFinite(trailEnd.lat) || !Number.isFinite(trailEnd.lng)) return painted;
-  const sameTip = Math.abs(paintedEnd.lat - trailEnd.lat) < 1e-5 && Math.abs(paintedEnd.lng - trailEnd.lng) < 1e-5;
-  if (sameTip || isImpossibleJump(paintedEnd, trailEnd)) return painted;
+  const lone = !paintedEnd
+    ? (Array.isArray(parts) ? parts : []).find((part) => part && Array.isArray(part.points) && part.points.length === 1)?.points[0]
+    : null;
+  const anchor = paintedEnd || lone;
+  if (!trailEnd || !anchor || !Number.isFinite(trailEnd.lat) || !Number.isFinite(trailEnd.lng)) return painted;
+  const sameTip = Math.abs(anchor.lat - trailEnd.lat) < 1e-5 && Math.abs(anchor.lng - trailEnd.lng) < 1e-5;
+  if (sameTip || isImpossibleJump(anchor, trailEnd)) return painted;
+  if (!previous) return [{ points: [anchor, trailEnd], dashed: false }];
   if (!previous.dashed) {
     previous.points = previous.points.concat([trailEnd]);
     return painted;
@@ -2015,9 +2027,12 @@ function stableJourneyId(startedAt, lat, lng) {
 function isSlowGap(prev, point, prior) {
   if (!prev || !point || prev.stayEnd || point.stayEnd) return false;
   if (isImpossibleJump(prev, point)) return true;
+  const pace = stepPace(prev, point);
+  // A long chord is the line, not a hole to trim. TRAIL_GAP_M / TRAIL_GAP_MS
+  // used to drop it, and the map then had nothing left to draw.
+  if (pace && pace.moved >= TRAIL_KEEP_CHORD_M) return false;
   if (!trailDrawDashed(prev, point, prior)) return false;
   if (isRideStep(prev, point)) return false;
-  const pace = stepPace(prev, point);
   if (pace && pace.speed >= TRAIL_RIDE_MIN_MPS) return false;
   return true;
 }
@@ -2199,6 +2214,9 @@ function isMovingStep(prev, point) {
   if (isRideStep(prev, point)) return true;
   if (accurateWalkStep(prev, point)) return true;
   const pace = stepPace(prev, point);
+  // Far fixes stay on the trip even when the clock gap exceeds TRAIL_GAP_MS
+  // and the phone still reports stay. Clipping them removed the straight line.
+  if (pace && pace.moved >= TRAIL_KEEP_CHORD_M && pace.dt >= 800 && pace.speed <= 45) return true;
   if (!pace || pace.dt < 800 || pace.moved < TRAIL_WALK_VERTEX_M || pace.speed < 0.7 || pace.speed > 12) return false;
   if (point.staying === true && !speedShowsMoving(point)) return false;
   if (pointSpeed(point) != null && pointSpeed(point) < TRAIL_STAY_SPEED_MPS) return false;
