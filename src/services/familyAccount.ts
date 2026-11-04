@@ -51,6 +51,8 @@ export interface AccountSnapshot {
   vault?: unknown;
   sealedHistory?: unknown;
   historyLocked?: boolean;
+  mergedFrom?: string;
+  mergedVault?: unknown;
   keepHistory?: boolean;
   dropRecovery?: boolean;
 }
@@ -74,11 +76,16 @@ function accountHeaders(accountKey?: string): Headers {
   return headers;
 }
 
-async function readAccountBody(response: Response): Promise<{ ok: boolean; account?: AccountSnapshot; restored?: boolean; created?: boolean; message?: string; detail?: string }> {
+async function readAccountBody(response: Response): Promise<{ ok: boolean; account?: AccountSnapshot; restored?: boolean; created?: boolean; message?: string; detail?: string; conflict?: boolean }> {
   const body = await response.json().catch(() => null) as { ok?: boolean; account?: AccountSnapshot; restored?: boolean; message?: string; reason?: string; error?: string } | null;
   if (!response.ok || !body || body.ok !== true || !body.account) {
     const detail = body && typeof body.reason === 'string' ? body.reason : (body && body.error === 'upstream' ? 'upstream' : undefined);
-    return { ok: false, message: body && typeof body.message === 'string' ? body.message : '계정을 불러오지 못했습니다.', detail };
+    return {
+      ok: false,
+      conflict: body?.error === 'member',
+      message: body && typeof body.message === 'string' ? body.message : '계정을 불러오지 못했습니다.',
+      detail,
+    };
   }
   return {
     ok: true,
@@ -318,8 +325,9 @@ export async function linkKakaoAccount(
   accessToken: string,
   snapshot?: AccountSnapshot | null,
   mode: 'login' | 'link' = 'login',
+  merge = false,
 ) {
-  const accountKey = mode === 'link'
+  const accountKey = mode === 'link' || merge
     ? readStoredAccountKey(typeof localStorage === 'undefined' ? null : localStorage)
     : '';
   const response = await request('/v1/account/kakao', {
@@ -328,6 +336,7 @@ export async function linkKakaoAccount(
     body: JSON.stringify({
       accessToken,
       mode,
+      ...(merge ? { merge: true } : {}),
       ...(snapshot ? { snapshot: await sealedSnapshot(snapshot) } : {}),
       ...(accountKey ? { accountKey } : {}),
     }),

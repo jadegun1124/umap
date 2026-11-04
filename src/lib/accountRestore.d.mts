@@ -1,6 +1,7 @@
 export const ACCOUNT_KEY_STORAGE: string;
 export const RECOVERY_CODE_STORAGE: string;
 export const ACCOUNT_LINKS_STORAGE: string;
+export const MERGED_FROM_STORAGE: string;
 
 type StorageLike = {
   getItem: (key: string) => string | null;
@@ -22,6 +23,8 @@ export type AccountSnapshot = {
   googleLinked?: boolean;
   kakaoLinked?: boolean;
   naverLinked?: boolean;
+  mergedFrom?: string;
+  mergedVault?: unknown;
   nameChosen?: boolean;
   created?: boolean;
 };
@@ -31,6 +34,7 @@ export function writeStoredAccountKey(storage: StorageLike, key: string): void;
 export function readStoredRecoveryCode(storage: StorageLike): string;
 export function readStoredAccountLinks(storage: StorageLike): { kakao: boolean; naver: boolean };
 export function writeStoredRecoveryCode(storage: StorageLike, code: string): void;
+export function readMergedFromMember(storage: StorageLike): string;
 export function clearStoredAccount(storage: StorageLike): void;
 export function currentAccountBackupEpoch(): number;
 export function invalidateAccountBackup(): number;

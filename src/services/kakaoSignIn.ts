@@ -20,6 +20,8 @@ export interface ProviderSignInResult {
   created?: boolean;
   message?: string;
   detail?: string;
+  conflict?: boolean;
+  accessToken?: string;
 }
 
 export function configuredKakaoNativeAppKey() {
@@ -91,7 +93,7 @@ async function browserAccessToken(appKey: string): Promise<string> {
 
 export async function signInWithKakao(
   snapshot?: AccountSnapshot | null,
-  options: { persist?: boolean; mode?: 'login' | 'link' } = {},
+  options: { persist?: boolean; mode?: 'login' | 'link'; merge?: boolean } = {},
 ): Promise<ProviderSignInResult> {
   const appKey = configuredKakaoLoginKey();
   if (!appKey) return { ok: false, message: KAKAO_SETUP_MESSAGE };
@@ -116,8 +118,16 @@ export async function signInWithKakao(
       return { ok: false, message: KAKAO_VERIFY_MESSAGE };
     }
   }
-  const linked = await linkKakaoAccount(accessToken, snapshot, options.mode || 'login').catch(() => ({ ok: false as const, message: KAKAO_SERVER_UNREACHABLE_MESSAGE, detail: undefined as string | undefined }));
-  if (!linked.ok || !linked.account) return { ok: false, message: linked.message || KAKAO_VERIFY_MESSAGE, detail: linked.detail };
+  const linked = await linkKakaoAccount(accessToken, snapshot, options.mode || 'login', options.merge === true).catch(() => ({ ok: false as const, message: KAKAO_SERVER_UNREACHABLE_MESSAGE, detail: undefined as string | undefined, conflict: false }));
+  if (!linked.ok || !linked.account) {
+    return {
+      ok: false,
+      message: linked.message || KAKAO_VERIFY_MESSAGE,
+      detail: linked.detail,
+      conflict: linked.conflict === true,
+      ...(linked.conflict === true ? { accessToken } : {}),
+    };
+  }
   if (options.mode === 'link' && linked.account.kakaoLinked !== true) {
     return { ok: false, message: ACCOUNT_UNLINKED_MESSAGE };
   }

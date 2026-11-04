@@ -140,6 +140,7 @@ export interface Session {
   historyLocked: boolean;
   sealedHistory: unknown;
   accountVault: unknown;
+  mergedVault?: unknown;
   backgroundKeepAlive: boolean;
   home: HomeZone | null;
   /** True after the person clears 우리 집, so an empty backup does not mean "no home loaded". */

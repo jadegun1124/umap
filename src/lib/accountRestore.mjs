@@ -13,6 +13,7 @@ export {
 export const ACCOUNT_KEY_STORAGE = 'umap_account_key_v1';
 export const RECOVERY_CODE_STORAGE = 'umap_recovery_code_v1';
 export const ACCOUNT_LINKS_STORAGE = 'umap_account_links_v1';
+export const MERGED_FROM_STORAGE = 'umap_merged_from_v1';
 const LEFTOVER_GOOGLE_ACCOUNT_KEY = 'umap_google_account_v1';
 
 const MEMBER_ID = /^local-[a-z0-9]{3,64}$/;
@@ -63,11 +64,18 @@ function writeStoredAccountLinks(storage, links) {
   }));
 }
 
+export function readMergedFromMember(storage) {
+  if (!storage) return '';
+  const value = storage.getItem(MERGED_FROM_STORAGE);
+  return typeof value === 'string' && MEMBER_ID.test(value) ? value : '';
+}
+
 export function clearStoredAccount(storage) {
   if (!storage) return;
   storage.removeItem(ACCOUNT_KEY_STORAGE);
   storage.removeItem(RECOVERY_CODE_STORAGE);
   storage.removeItem(ACCOUNT_LINKS_STORAGE);
+  storage.removeItem(MERGED_FROM_STORAGE);
 }
 
 let accountBackupEpoch = 0;
@@ -151,6 +159,10 @@ export function rememberAccountSecrets(storage, account) {
       kakao: typeof account.kakaoLinked === 'boolean' ? account.kakaoLinked : current.kakao,
       naver: typeof account.naverLinked === 'boolean' ? account.naverLinked : current.naver,
     });
+  }
+  if (storage && typeof account.mergedFrom === 'string') {
+    if (MEMBER_ID.test(account.mergedFrom)) storage.setItem(MERGED_FROM_STORAGE, account.mergedFrom);
+    else storage.removeItem(MERGED_FROM_STORAGE);
   }
 }
 
@@ -269,8 +281,10 @@ export function applyAccountSnapshot(state, account) {
   const journeys = Array.isArray(account.journeys) ? account.journeys : [];
   const visits = Array.isArray(account.visits) ? account.visits : [];
   const roster = Array.isArray(account.roster) ? account.roster : [];
+  const mergedFrom = typeof account.mergedFrom === 'string' && MEMBER_ID.test(account.mergedFrom) ? account.mergedFrom : '';
   const others = roster
     .filter((row) => row && row.id && row.id !== 'self' && row.name)
+    .filter((row) => !mergedFrom || (row.id !== mergedFrom && row.publisherId !== mergedFrom))
     .map((row) => restoredMember(row));
   const nextStage = account.created === true
     ? (state.permissions?.completed ? 'map' : 'survey')
@@ -288,14 +302,17 @@ export function applyAccountSnapshot(state, account) {
     visits: visits.length ? { self: visits } : {},
     tracks: {},
     trailRevisions: {},
-    hiddenMemberIds: [],
     pendingInvite: null,
     pendingLeaveAlert: null,
     pendingSyncToken: null,
     shareSelfWithFamily: state.permissions?.completed === true,
-    historyLocked: account.historyLocked === true,
+    historyLocked: account.historyLocked === false
+      ? false
+      : account.historyLocked === true || (!!mergedFrom && !!account.sealedHistory),
+    hiddenMemberIds: mergedFrom ? [mergedFrom] : [],
     sealedHistory: account.sealedHistory || null,
     accountVault: account.vault || null,
+    mergedVault: account.mergedVault || null,
     mode: null,
     stage: nextStage,
     tab: 'map',

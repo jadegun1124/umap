@@ -5,7 +5,7 @@ import { looksLikePhone, localProfile } from '../../lib/localProfile.mjs';
 import { KAKAO_SETUP_MESSAGE } from '../../lib/kakaoAuth.mjs';
 import { NAVER_SETUP_MESSAGE } from '../../lib/naverAuth.mjs';
 import { ACCOUNT_LINKED_OTHER_MESSAGE, ACCOUNT_UNLINKED_MESSAGE, linkedAccountWouldSwitch, readStoredAccountKey, readStoredAccountLinks, readStoredRecoveryCode, rememberAccountSecrets, snapshotFromSession } from '../../lib/accountRestore.mjs';
-import { backupFamilyAccount, cancelAccountBackup, deleteFamilyAccount, loadOwnDisclosures, loadOwnHandling, mintFamilyInvite, persistAccountResult, redeemFamilyInvite, type AccountSnapshot, type DisclosureRecord, type HandlingEvent } from '../../services/familyAccount';
+import { backupFamilyAccount, cancelAccountBackup, deleteFamilyAccount, linkKakaoAccount, loadOwnDisclosures, loadOwnHandling, mintFamilyInvite, persistAccountResult, redeemFamilyInvite, type AccountSnapshot, type DisclosureRecord, type HandlingEvent } from '../../services/familyAccount';
 import { buildInviteLink, formatClock, hasLocation, haversineMeters, shouldAlertLeave } from '../../lib/geo';
 import { ALWAYS_GUIDE_DISMISSED_KEY, CHAT_NOTIFY_ASKED_KEY, KEEP_PERMISSION_ASKED_KEY, KEEP_START_ASKED_KEY, keepEntryPrompt, markSessionFlag, readSessionFlag } from '../../lib/systemSettings.mjs';
 import { familyMapShowsTrail, memberLiveLines, recordsDayTrails } from '../../lib/mapTrail.mjs';
@@ -46,6 +46,7 @@ import { useFamilyTracking } from './useFamilyTracking';
 import { useFamily } from './session';
 import { consumeAndroidBack } from '../../platform/androidExit';
 import { configuredKakaoLoginKey, signInWithKakao } from '../../services/kakaoSignIn';
+import { KakaoMergeSheet } from './KakaoMergeSheet';
 import { configuredNaverClientId, signInWithNaver } from '../../services/naverSignIn';
 
 export function FamilyMapScreen() {
@@ -1160,7 +1161,9 @@ export function FamilyMapScreen() {
                   setHistoryNote('');
                   void openAccountSecrets({
                     vault: state.accountVault,
+                    mergedVault: state.mergedVault,
                     sealedHistory: state.sealedHistory,
+                    memberId: state.profile?.id,
                     journeys: [],
                     visits: [],
                     home: null,
@@ -2802,6 +2805,7 @@ function RecoveryCodePanel() {
   const [linkDetail, setLinkDetail] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [links, setLinks] = useState(() => readStoredAccountLinks(typeof localStorage === 'undefined' ? null : localStorage));
+  const [kakaoMerge, setKakaoMerge] = useState<{ accessToken: string; snapshot: AccountSnapshot | null } | null>(null);
   const code = readStoredRecoveryCode(typeof localStorage === 'undefined' ? null : localStorage);
   const kakaoKey = configuredKakaoLoginKey();
   const naverId = configuredNaverClientId();
@@ -2825,7 +2829,7 @@ function RecoveryCodePanel() {
   };
 
   const linkProvider = (
-    start: (snapshot: AccountSnapshot | null) => Promise<{ ok: boolean; snapshot?: AccountSnapshot; message?: string; detail?: string }>,
+    start: (snapshot: AccountSnapshot | null) => Promise<{ ok: boolean; snapshot?: AccountSnapshot; message?: string; detail?: string; conflict?: boolean; accessToken?: string }>,
     setup: string,
     configured: string,
     missing: string,
@@ -2837,9 +2841,13 @@ function RecoveryCodePanel() {
     setBusy(true);
     setNote(null);
     setLinkDetail(null);
-    void prepareLinkSnapshot().then((snapshot) => start(snapshot)).then((result) => {
+    void prepareLinkSnapshot().then(async (snapshot) => ({ snapshot, result: await start(snapshot) })).then(({ snapshot, result }) => {
       setBusy(false);
       if (!result.ok) {
+        if (result.conflict && result.accessToken) {
+          setKakaoMerge({ accessToken: result.accessToken, snapshot });
+          return;
+        }
         setNote(result.message || missing);
         setLinkDetail(result.detail || null);
         return;
@@ -2917,6 +2925,35 @@ function RecoveryCodePanel() {
       </div>
       {note && <p className="mt-2 whitespace-pre-line text-xs leading-5 text-slate-600">{note}</p>}
       {linkDetail && <p className="mt-1 text-xs leading-5 text-slate-400">{linkDetail}</p>}
+      {kakaoMerge && (
+        <KakaoMergeSheet
+          busy={busy}
+          onCancel={() => {
+            setKakaoMerge(null);
+            setNote('카카오 연결을 취소했습니다. 이 폰의 지도는 그대로입니다.');
+          }}
+          onMerge={() => {
+            const pendingMerge = kakaoMerge;
+            setBusy(true);
+            void linkKakaoAccount(pendingMerge.accessToken, pendingMerge.snapshot, 'link', true).then(async (linked) => {
+              setBusy(false);
+              if (!linked.ok || !linked.account) {
+                setNote(linked.message || '기존 계정을 가져오지 못했습니다. 카카오 로그인을 다시 해 주세요.');
+                return;
+              }
+              setKakaoMerge(null);
+              rememberAccountSecrets(localStorage, linked.account);
+              setLinks(readStoredAccountLinks(localStorage));
+              const opened = await openAccountSecrets(linked.account, localStorage);
+              setNote('기존 계정의 가족 방을 이 계정으로 가져왔습니다. 카카오 로그인은 이제 이 계정입니다. 암호화된 지난 기록은 가족 폰이 열쇠를 다시 감쌀 때까지 열리지 않을 수 있습니다.');
+              family.restoreAccount(opened);
+            }).catch(() => {
+              setBusy(false);
+              setNote('기존 계정을 가져오지 못했습니다. 위치 서버에 다시 연결해 주세요.');
+            });
+          }}
+        />
+      )}
     </section>
   );
 }

@@ -2,7 +2,8 @@ import { Capacitor, CapacitorHttp } from '@capacitor/core';
 import { noteDiag } from '../lib/diagLog.mjs';
 import { BACKGROUND_POLL_MIN_MS, FAMILY_POLL_MS, HEALTH_POLL_MS, QUOTA_RETRY_MS, ROOM_POLL_MS, blockRoom, quotaPollPaused, roomBlocked, roomPollAction, shouldRefreshFamilyKeys, syncPhaseAfterResponse } from '../lib/keySyncPace.mjs';
 import { openJson, sealJson, mintFamilyKey, unwrapFamilyKey, wrapFamilyKey } from '../lib/familySeal.mjs';
-import { contentKeyBytes, ensureDevice, familyKeyRecord, rememberFamilyKey, syncHistoryDirectory } from '../lib/familyVault.mjs';
+import { contentKeyBytes, ensureDevice, familyKeyRecord, historyShareToSave, rememberFamilyKey, syncHistoryDirectory } from '../lib/familyVault.mjs';
+import { readMergedFromMember } from '../lib/accountRestore.mjs';
 import { mergeTrailPoints } from '../lib/trailParts.mjs';
 import { rememberPlaceName } from '../lib/placeAlias.mjs';
 import { optionalRouteMissing } from '../lib/syncRoute.mjs';
@@ -528,8 +529,14 @@ async function runSyncFamilyKeys(code: string, token: string, memberId: string, 
     privateKey: device.privateKey,
     contentKey: content,
   });
-  if (synced.selfShare) {
-    const nextShare = JSON.stringify({ memberId, wrap: synced.selfShare });
+  const adoptedShare = historyShareToSave(
+    memberId,
+    synced.history,
+    readMergedFromMember(localStorage),
+    synced.selfShare,
+  );
+  if (adoptedShare) {
+    const nextShare = JSON.stringify({ memberId, wrap: adoptedShare });
     const priorShare = localStorage.getItem('umap_history_share_v1');
     if (priorShare !== nextShare) {
       localStorage.setItem('umap_history_share_v1', nextShare);

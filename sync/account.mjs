@@ -363,9 +363,11 @@ export function publicAccount(record, extras = {}) {
     visits: record.sealedHistory ? [] : (record.visits || []),
     recoveryCode: record.recoveryCode ? formatRecoveryCode(record.recoveryCode) : '',
     vault: record.vault || null,
+    ...(record.mergedVault ? { mergedVault: record.mergedVault } : {}),
     sealedHistory: record.sealedHistory || null,
     ...(Array.isArray(record.roster) && record.roster.length ? { roster: record.roster } : {}),
     ...(record.historyShares ? { historyShares: record.historyShares } : {}),
+    ...(typeof record.mergedFrom === 'string' && MEMBER_ID.test(record.mergedFrom) ? { mergedFrom: record.mergedFrom } : {}),
     googleLinked: typeof record.googleSub === 'string' && record.googleSub.length > 0,
     kakaoLinked: typeof record.kakaoId === 'string' && record.kakaoId.length > 0,
     naverLinked: typeof record.naverId === 'string' && record.naverId.length > 0,
@@ -413,7 +415,7 @@ async function readRecord(store, id) {
   return record && typeof record === 'object' ? record : null;
 }
 
-async function writeRecord(store, record, previous = null) {
+async function writeRecord(store, record, previous = null, options = {}) {
   const keys = accountKeys(record);
   await store.put(keys.record, record);
   await store.put(keys.member, record.id);
@@ -425,7 +427,7 @@ async function writeRecord(store, record, previous = null) {
   if (previous?.googleSub && previous.googleSub !== record.googleSub) {
     await store.delete(`google:${previous.googleSub}`);
   }
-  if (previous?.kakaoId && previous.kakaoId !== record.kakaoId) {
+  if (!options.keepKakaoIndex && previous?.kakaoId && previous.kakaoId !== record.kakaoId) {
     await store.delete(`kakao:${previous.kakaoId}`);
   }
   if (previous?.naverId && previous.naverId !== record.naverId) {
@@ -930,17 +932,84 @@ async function attachLinkedProvider(store, {
   return { record: minted.record, accountKey: minted.accountKey, created: true };
 }
 
-export async function linkKakaoAccount(store, { accessToken, snapshot, accountKey, mode }, options = {}) {
+function unionGuardians(primary, secondary) {
+  const guardians = [];
+  for (const entry of [...(primary || []), ...(secondary || [])]) {
+    if (!entry || typeof entry.code !== 'string') continue;
+    if (guardians.some((item) => item.code === entry.code)) continue;
+    guardians.push(entry);
+    if (guardians.length >= 8) break;
+  }
+  return guardians;
+}
+
+function adoptFamilyRecord(current, source, kakaoId, now) {
+  const next = { ...current, kakaoId, updatedAt: now };
+  if (source.room && typeof source.room.code === 'string') next.room = source.room;
+  next.guardians = unionGuardians(source.guardians, current.guardians);
+  const emptyList = (value) => !Array.isArray(value) || value.length === 0;
+  if (!current.home && source.home) next.home = source.home;
+  if (emptyList(current.journeys) && !emptyList(source.journeys)) next.journeys = source.journeys;
+  if (emptyList(current.visits) && !emptyList(source.visits)) next.visits = source.visits;
+  // A seal makes the public account return empty trip lists. Keep this
+  // account's plaintext trips instead of hiding them behind that seal.
+  const currentPlainEmpty = emptyList(next.journeys) && emptyList(next.visits);
+  if (!current.sealedHistory && source.sealedHistory && currentPlainEmpty) {
+    next.sealedHistory = source.sealedHistory;
+    if (source.vault) next.mergedVault = source.vault;
+    if (!current.historyShares && source.historyShares) next.historyShares = source.historyShares;
+  }
+  if (emptyList(current.roster) && !emptyList(source.roster)) next.roster = source.roster;
+  if (source.memberId && source.memberId !== current.memberId) next.mergedFrom = source.memberId;
+  return next;
+}
+
+async function clearKakaoOnOther(store, current, kakaoId, now) {
+  const oldId = current.mergedFrom;
+  if (!oldId) return;
+  const old = await findByMember(store, oldId);
+  if (!old || old.id === current.id || old.kakaoId !== kakaoId) return;
+  const cleared = { ...old, kakaoId: '', mergedInto: current.memberId, updatedAt: now };
+  await writeRecord(store, cleared, old, { keepKakaoIndex: true });
+}
+
+async function mergeKakaoAccounts(store, current, existing, kakaoId, accountKey, now) {
+  if (current.kakaoId === kakaoId) {
+    await store.put(`kakao:${kakaoId}`, current.id);
+    await clearKakaoOnOther(store, current, kakaoId, now);
+    const fresh = await findByMember(store, current.memberId);
+    return { record: fresh || current, accountKey, merged: true };
+  }
+  const next = adoptFamilyRecord(current, existing, kakaoId, now);
+  await writeRecord(store, next, current);
+  await clearKakaoOnOther(store, next, kakaoId, now);
+  const fresh = await findByMember(store, next.memberId);
+  return { record: fresh || next, accountKey, merged: true };
+}
+
+export async function linkKakaoAccount(store, { accessToken, snapshot, accountKey, mode, merge }, options = {}) {
   const verified = await verifyKakaoAccessToken(accessToken, options);
   if (!verified.ok) return { error: 'token', failure: verified };
+  const now = options.now || Date.now();
+  const existing = await findByKakao(store, verified.id);
+  const current = accountKey ? await findBySession(store, accountKey) : null;
+  if (merge === true) {
+    if (!current) return { error: 'account' };
+    if (current.kakaoId === verified.id) {
+      return mergeKakaoAccounts(store, current, existing || current, verified.id, accountKey, now);
+    }
+    if (existing && existing.id !== current.id) {
+      return mergeKakaoAccounts(store, current, existing, verified.id, accountKey, now);
+    }
+  }
   return attachLinkedProvider(store, {
-    existing: await findByKakao(store, verified.id),
+    existing,
     currentKey: accountKey,
     snapshot,
     displayName: verified.name,
     field: 'kakaoId',
     providerId: verified.id,
-    now: options.now || Date.now(),
+    now,
     mode,
   });
 }
@@ -1203,6 +1272,7 @@ export async function parseAccountOperation(request) {
       snapshot: cleaned.snapshot,
       accountKey: typeof value.accountKey === 'string' ? value.accountKey : accountKey,
       mode: value.mode === 'link' ? 'link' : 'login',
+      merge: value.merge === true,
     };
   }
 
