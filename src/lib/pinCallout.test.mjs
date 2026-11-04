@@ -70,7 +70,7 @@ test('the release notes do not promise dashed walks or a diag code', () => {
   assert.equal(workflow.includes('걸음 구멍은 점선'), false);
   assert.equal(workflow.includes('진단 코드를 보여 줍니다'), false);
   assert.equal(workflow.includes('코드만 있으면 그 기록을 볼 수 있습니다'), false);
-  assert.match(workflow, /저장 한도/);
-  assert.match(workflow, /배경 위치/);
-  assert.match(workflow, /1\.53\.0/);
+  assert.match(workflow, /키 업로드/);
+  assert.match(workflow, /10초/);
+  assert.match(workflow, /1\.54\.0/);
 });

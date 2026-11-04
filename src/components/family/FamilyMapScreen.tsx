@@ -19,6 +19,7 @@ import { readSharedPlaces, subscribeSharedPlaces } from '../../services/familySh
 import { openAccountSecrets } from '../../lib/familyVault.mjs';
 import { isMemberId } from '../../lib/sharedIdentity.mjs';
 import { Capacitor } from '@capacitor/core';
+import { CHAT_LIST_POLL_MS } from '../../lib/keySyncPace.mjs';
 import { abandonFamilySync, currentSyncPhase, deleteFamilyRoomRemote, familySyncConfigured, familySyncUrl, fetchMyDirectThreads, registerRoomPush, revokeFamilyPlace, rotateRemovedMember, splitSyncToken, startAdminRemoteSync, startSyncMonitor, subscribeSyncPhase, syncTokenFor, type SyncPhase } from '../../services/familySync';
 import { keepBanner } from '../../lib/keepBanner.mjs';
 import { OLD_APP_PLACE_LABEL, syncBannerText } from '../../lib/syncBanner.mjs';
@@ -385,10 +386,13 @@ export function FamilyMapScreen() {
       }
     };
     void tick();
-    const timer = window.setInterval(() => void tick(), 12000);
+    const timer = window.setInterval(() => void tick(), CHAT_LIST_POLL_MS);
+    const onResume = () => { void tick(); };
+    window.addEventListener('umap-room-resume', onResume);
     return () => {
       cancel = true;
       window.clearInterval(timer);
+      window.removeEventListener('umap-room-resume', onResume);
     };
   }, [dmRoomKey, state.tab]);
 

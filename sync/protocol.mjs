@@ -906,6 +906,31 @@ function roomPersistStamp(room) {
   });
 }
 
+export const KEY_PUT_WINDOW_MS = 45_000;
+
+export function keyPutLimited(lastAt, now, windowMs = KEY_PUT_WINDOW_MS) {
+  return typeof lastAt === 'number' && Number.isFinite(lastAt) && now - lastAt < windowMs;
+}
+
+export async function applyKeyPut(room, input, profileKey, memory, now = Date.now()) {
+  const memberId = input && typeof input.memberId === 'string' ? input.memberId : '';
+  const last = memory && memberId ? memory.get(memberId) : undefined;
+  if (keyPutLimited(last, now)) {
+    return { error: null, room, directory: viewKeys(room), wrote: false, limited: true };
+  }
+  const next = await commitKeys(room, input, profileKey);
+  if (next.error) return { error: next.error, room: next.room || room, directory: null, wrote: false, limited: false };
+  if (memory && memberId) memory.set(memberId, now);
+  const wrote = next.unchanged !== true;
+  return {
+    error: null,
+    room: wrote ? next.room : room,
+    directory: next.directory,
+    wrote,
+    limited: false,
+  };
+}
+
 export async function commitKeys(room, input, profileKey) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return { error: json({ error: 'keys' }, 400) };
   if (typeof input.memberId !== 'string' || !MEMBER_ID.test(input.memberId)) return { error: json({ error: 'member' }, 400) };

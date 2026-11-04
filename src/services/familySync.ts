@@ -1,5 +1,6 @@
+import { Capacitor, CapacitorHttp } from '@capacitor/core';
 import { noteDiag } from '../lib/diagLog.mjs';
-import { QUOTA_RETRY_MS, quotaPollPaused, shouldRefreshFamilyKeys, syncPhaseAfterResponse } from '../lib/keySyncPace.mjs';
+import { BACKGROUND_POLL_MIN_MS, HEALTH_POLL_MS, QUOTA_RETRY_MS, ROOM_POLL_MS, blockRoom, quotaPollPaused, roomBlocked, shouldRefreshFamilyKeys, syncPhaseAfterResponse } from '../lib/keySyncPace.mjs';
 import { openJson, sealJson, mintFamilyKey, unwrapFamilyKey, wrapFamilyKey } from '../lib/familySeal.mjs';
 import { contentKeyBytes, ensureDevice, familyKeyRecord, rememberFamilyKey, syncHistoryDirectory } from '../lib/familyVault.mjs';
 import { rememberPlaceName } from '../lib/placeAlias.mjs';
@@ -100,10 +101,45 @@ function timeoutSignal(ms: number): AbortSignal {
   return controller.signal;
 }
 
+function headerRecord(headers: HeadersInit | undefined): Record<string, string> {
+  const record: Record<string, string> = {};
+  if (!headers || typeof headers !== 'object' || Array.isArray(headers)) return record;
+  for (const [key, value] of Object.entries(headers as Record<string, string>)) {
+    if (typeof value === 'string') record[key] = value;
+  }
+  return record;
+}
+
 async function request(path: string, init: RequestInit): Promise<Response> {
   const base = familySyncUrl();
   if (!base) throw new Error('off');
-  return fetch(`${base}${path}`, { ...init, signal: timeoutSignal(8000), cache: 'no-store' });
+  const url = `${base}${path}`;
+  // Native HTTP keeps the same auth headers and skips the browser CORS preflight.
+  // A custom header on fetch is what doubled PUT /keys into OPTIONS + PUT.
+  if (Capacitor.isNativePlatform()) {
+    const method = init.method || 'GET';
+    let data: unknown;
+    if (typeof init.body === 'string' && init.body) {
+      try {
+        data = JSON.parse(init.body);
+      } catch {
+        data = init.body;
+      }
+    }
+    const response = await CapacitorHttp.request({
+      url,
+      method,
+      headers: headerRecord(init.headers),
+      data,
+    });
+    const payload = response.data == null
+      ? ''
+      : typeof response.data === 'string'
+        ? response.data
+        : JSON.stringify(response.data);
+    return new Response(payload, { status: response.status });
+  }
+  return fetch(url, { ...init, signal: timeoutSignal(8000), cache: 'no-store' });
 }
 
 let limitedUntil = 0;
@@ -241,6 +277,10 @@ export async function fetchDirectChat(
     });
     if (response.status === 404) return null;
     await noteStatus(response);
+    if (response.status === 403) {
+      blockRoom(code);
+      return null;
+    }
     if (!response.ok) return null;
     return readChatMessages(await response.json());
   } catch {
@@ -261,7 +301,12 @@ export async function fetchMyDirectThreads(
       headers: { 'x-umap-sync-key': syncToken },
     });
     if (response.status === 404) return null;
+    if (roomBlocked(code)) return [];
     await noteStatus(response);
+    if (response.status === 403) {
+      blockRoom(code);
+      return [];
+    }
     if (!response.ok) return null;
     const body: unknown = await response.json();
     if (!body || typeof body !== 'object' || !Array.isArray((body as { threads?: unknown }).threads)) return [];
@@ -399,11 +444,24 @@ async function putRoomKeys(code: string, token: string, profileKey: string, body
 }
 
 const keysSyncedAt = new Map<string, number>();
+const keySyncFlights = new Map<string, Promise<boolean>>();
 
 export async function syncFamilyKeys(code: string, token: string, memberId: string, profileKey: string): Promise<boolean> {
   if (typeof localStorage === 'undefined' || !memberId || !profileKey || !splitSyncToken(token) || !/^\d{4,6}$/.test(code)) return false;
   const paceKey = `${code}:${memberId}`;
-  if (!shouldRefreshFamilyKeys(keysSyncedAt.get(paceKey), Date.now(), familyKeyRecord(localStorage, code) != null)) return true;
+  const flight = keySyncFlights.get(paceKey);
+  if (flight) return flight;
+  const run = runSyncFamilyKeys(code, token, memberId, profileKey, paceKey).finally(() => {
+    if (keySyncFlights.get(paceKey) === run) keySyncFlights.delete(paceKey);
+  });
+  keySyncFlights.set(paceKey, run);
+  return run;
+}
+
+async function runSyncFamilyKeys(code: string, token: string, memberId: string, profileKey: string, paceKey: string): Promise<boolean> {
+  const hasKey = familyKeyRecord(localStorage, code) != null;
+  if (!shouldRefreshFamilyKeys(keysSyncedAt.get(paceKey), Date.now(), hasKey)) return hasKey;
+  keysSyncedAt.set(paceKey, Date.now());
   const device = await ensureDevice(localStorage);
   let directory = await putRoomKeys(code, token, profileKey, { memberId, publicKey: device.publicKey });
   if (!directory) return familyKeyRecord(localStorage, code) != null;
@@ -469,19 +527,23 @@ export async function syncFamilyKeys(code: string, token: string, memberId: stri
     contentKey: content,
   });
   if (synced.selfShare) {
-    localStorage.setItem('umap_history_share_v1', JSON.stringify({ memberId, wrap: synced.selfShare }));
-    window.dispatchEvent(new Event('umap-family-keys'));
+    const nextShare = JSON.stringify({ memberId, wrap: synced.selfShare });
+    const priorShare = localStorage.getItem('umap_history_share_v1');
+    if (priorShare !== nextShare) {
+      localStorage.setItem('umap_history_share_v1', nextShare);
+      window.dispatchEvent(new Event('umap-family-keys'));
+    }
   }
-  if (Object.keys(synced.history).length) {
+  const beforeHistory = JSON.stringify(directory.history || {});
+  const afterHistory = JSON.stringify(synced.history || {});
+  if (afterHistory !== beforeHistory && Object.keys(synced.history).length) {
     await putRoomKeys(code, token, profileKey, {
       memberId,
       publicKey: device.publicKey,
       history: synced.history,
     });
   }
-  const ready = familyKeyRecord(localStorage, code) != null;
-  if (ready) keysSyncedAt.set(paceKey, Date.now());
-  return ready;
+  return familyKeyRecord(localStorage, code) != null;
 }
 
 async function sealQueuedPlace(place: { code: string; token: string; body: Record<string, unknown>; profileKey: string }) {
@@ -695,7 +757,7 @@ export function startSyncMonitor(): () => void {
     return () => {};
   }
   void probeFamilySync();
-  const timer = window.setInterval(() => void probeFamilySync(), 20000);
+  const timer = window.setInterval(() => void probeFamilySync(), HEALTH_POLL_MS);
   return () => window.clearInterval(timer);
 }
 
@@ -820,7 +882,8 @@ export function startAdminRemoteSync(
       schedule(Math.max(0, limitedUntil - Date.now()));
       return;
     }
-    let delay = 2500;
+    if (roomBlocked(link.code)) return;
+    let delay = ROOM_POLL_MS;
     try {
       const token = await syncTokenFor(link.writeKey, link.readKey);
       // `since` filters alerts only. Places are always the latest consented points,
@@ -835,6 +898,10 @@ export function startAdminRemoteSync(
         },
       });
       const error = await noteStatus(response);
+      if (response.status === 403) {
+        blockRoom(link.code);
+        return;
+      }
       if (error === 'member' && self?.memberId && self.profileKey) {
         await syncFamilyKeys(link.code, token, self.memberId, self.profileKey);
       }
@@ -863,21 +930,29 @@ export function startAdminRemoteSync(
       delay = 8000;
     }
     if (stopped) return;
-    if (document.visibilityState === 'hidden') delay = Math.max(delay, 12000);
+    if (document.visibilityState === 'hidden') delay = Math.max(delay, BACKGROUND_POLL_MIN_MS);
     schedule(delay);
   };
 
   void tick();
   const onVisible = () => {
-    if (document.visibilityState !== 'visible' || stopped) return;
+    if (document.visibilityState !== 'visible' || stopped || roomBlocked(link.code)) return;
+    window.clearTimeout(timer);
+    void tick();
+  };
+  const onResume = (event: Event) => {
+    const detail = (event as CustomEvent<string>).detail;
+    if (stopped || (detail && detail !== link.code)) return;
     window.clearTimeout(timer);
     void tick();
   };
   document.addEventListener('visibilitychange', onVisible);
+  window.addEventListener('umap-room-resume', onResume);
   return () => {
     stopped = true;
     window.clearTimeout(timer);
     document.removeEventListener('visibilitychange', onVisible);
+    window.removeEventListener('umap-room-resume', onResume);
   };
 }
 
@@ -935,11 +1010,12 @@ export function startManagedFamilySync(
       timer = window.setTimeout(() => void tick(), Math.max(0, limitedUntil - Date.now()));
       return;
     }
-    let delay = 4000;
+    let delay = ROOM_POLL_MS;
     try {
       for (const link of usable) {
         if (stopped) return;
-        const response = await request(`/v1/rooms/${link.code}/family`, {
+        if (roomBlocked(link.code)) continue;
+        const response = await request(`/v1/rooms/${link.code}`, {
           method: 'GET',
           headers: {
             'x-umap-sync-key': link.token,
@@ -949,19 +1025,23 @@ export function startManagedFamilySync(
         });
         if (response.status === 404) continue;
         const error = await noteStatus(response);
+        if (response.status === 403) {
+          blockRoom(link.code);
+          continue;
+        }
         if (error === 'member' && self?.memberId && self.profileKey) {
           await syncFamilyKeys(link.code, link.token, self.memberId, self.profileKey);
         }
         if (!response.ok) {
-          noteDiag({ kind: 'http', dir: 'download', path: `/v1/rooms/${link.code}/family`, status: response.status, ok: false, places: 0 });
-          delay = error === 'quota' ? QUOTA_RETRY_MS : 12000;
+          noteDiag({ kind: 'http', dir: 'download', path: `/v1/rooms/${link.code}`, status: response.status, ok: false, places: 0 });
+          delay = error === 'quota' ? QUOTA_RETRY_MS : BACKGROUND_POLL_MIN_MS;
           continue;
         }
         const body: unknown = await response.json();
         const placeCount = body && typeof body === 'object' && Array.isArray((body as { places?: unknown }).places)
           ? (body as { places: unknown[] }).places.length
           : 0;
-        noteDiag({ kind: 'http', dir: 'download', path: `/v1/rooms/${link.code}/family`, status: response.status, ok: true, places: placeCount });
+        noteDiag({ kind: 'http', dir: 'download', path: `/v1/rooms/${link.code}`, status: response.status, ok: true, places: placeCount });
         if (self?.memberId && self.profileKey) await syncFamilyKeys(link.code, link.token, self.memberId, self.profileKey);
         const raw = body && typeof body === 'object' && Array.isArray((body as { places?: unknown[] }).places) ? (body as { places: unknown[] }).places : [];
         const places: SharedPlace[] = [];
@@ -975,10 +1055,10 @@ export function startManagedFamilySync(
       }
     } catch {
       if (!stopped && familySyncUrl()) setPhase('down');
-      delay = 12000;
+      delay = BACKGROUND_POLL_MIN_MS;
     }
     if (stopped) return;
-    if (document.visibilityState === 'hidden') delay = Math.max(delay, 20000);
+    if (document.visibilityState === 'hidden') delay = Math.max(delay, BACKGROUND_POLL_MIN_MS);
     timer = window.setTimeout(() => void tick(), delay);
   };
 
@@ -988,11 +1068,18 @@ export function startManagedFamilySync(
     window.clearTimeout(timer);
     void tick();
   };
+  const onResume = () => {
+    if (stopped) return;
+    window.clearTimeout(timer);
+    void tick();
+  };
   document.addEventListener('visibilitychange', onVisible);
+  window.addEventListener('umap-room-resume', onResume);
   return () => {
     stopped = true;
     window.clearTimeout(timer);
     document.removeEventListener('visibilitychange', onVisible);
+    window.removeEventListener('umap-room-resume', onResume);
   };
 }
 

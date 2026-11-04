@@ -329,9 +329,9 @@ export function useFamilyTracking(onFirstFix: (lat: number, lng: number) => void
     state.guardians.map((link) => `${link.code}:${link.share}:${link.syncToken ?? ''}`).join('|'),
   ].join('~');
 
-  const syncKeepAlive = useRef<() => Promise<void>>(async () => {});
+  const syncKeepAlive = useRef<(refreshKeys?: boolean) => Promise<void>>(async () => {});
   useEffect(() => {
-    syncKeepAlive.current = async () => {
+    syncKeepAlive.current = async (refreshKeys = true) => {
       try {
       const current = familyRef.current.state;
       const status = await umapLocation.status().catch(() => ({ running: false, userStopped: false, native: false as const }));
@@ -370,7 +370,7 @@ export function useFamilyTracking(onFirstFix: (lat: number, lng: number) => void
       if (memberId && profileKey) {
         for (const target of targets) {
           if (!target.sharing) continue;
-          await syncFamilyKeys(target.code, target.token, memberId, profileKey);
+          if (refreshKeys) await syncFamilyKeys(target.code, target.token, memberId, profileKey);
           const record = familyKeyRecord(localStorage, target.code);
           if (record) seals[target.code] = { kid: record.kid, key: bytesToBase64Url(record.key) };
         }
@@ -400,13 +400,17 @@ export function useFamilyTracking(onFirstFix: (lat: number, lng: number) => void
     const timer = window.setInterval(() => void syncKeepAlive.current(), 20_000);
     document.addEventListener('visibilitychange', onVisible);
     document.addEventListener('resume', onVisible);
-    window.addEventListener('umap-family-keys', onVisible);
+    const onKeys = () => {
+      if (document.visibilityState === 'hidden') return;
+      void syncKeepAlive.current(false);
+    };
+    window.addEventListener('umap-family-keys', onKeys);
     window.addEventListener('umap-retry-keep', onVisible);
     return () => {
       window.clearInterval(timer);
       document.removeEventListener('visibilitychange', onVisible);
       document.removeEventListener('resume', onVisible);
-      window.removeEventListener('umap-family-keys', onVisible);
+      window.removeEventListener('umap-family-keys', onKeys);
       window.removeEventListener('umap-retry-keep', onVisible);
     };
   }, [keepKey]);

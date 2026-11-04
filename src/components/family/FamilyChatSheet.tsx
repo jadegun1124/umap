@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { CHAT_OPEN_POLL_MS } from '../../lib/keySyncPace.mjs';
 import { looksLikePhone } from '../../lib/localProfile.mjs';
 import {
   chatName,
@@ -74,7 +75,7 @@ export function FamilyChatSheet({
       markDirectChatRead(open.code, openMe, openPeer);
     };
     void pull();
-    const timer = window.setInterval(() => void pull(), 4000);
+    const timer = window.setInterval(() => void pull(), CHAT_OPEN_POLL_MS);
     return () => {
       cancel = true;
       window.clearInterval(timer);
