@@ -357,6 +357,7 @@ public class LocationKeepService {
             try {
                 if (!prefs(context).getBoolean("registered", false)) return;
                 Location last;
+                boolean movingNow;
                 synchronized (LOCK) {
                     ensureFilter(context);
                     long quiet = lastSampleAt <= 0L ? Long.MAX_VALUE : System.currentTimeMillis() - lastSampleAt;
@@ -370,14 +371,16 @@ public class LocationKeepService {
                         registerUpdates(context, config);
                     }
                     last = lastPublished == null ? null : new Location(lastPublished);
+                    movingNow = movingStream;
                 }
                 noteHeartbeat(context);
                 if (last != null && anySharing(readConfig(context))) {
                     long since = lastPublishedAt <= 0L ? Long.MAX_VALUE : System.currentTimeMillis() - lastPublishedAt;
-                    if (since >= UPLOAD_STILL_MS) {
+                    long gap = movingNow ? UPLOAD_MOVING_MS : UPLOAD_STILL_MS;
+                    if (since >= gap) {
                         Upload upload = new Upload();
                         upload.pin = last;
-                        upload.moving = false;
+                        upload.moving = movingNow;
                         upload.flush = false;
                         upload.at = System.currentTimeMillis();
                         upload.sent = 0;
@@ -946,7 +949,10 @@ public class LocationKeepService {
                     secret.put("lng", location.getLongitude());
                     secret.put("accuracyM", Math.round(Math.max(0f, location.getAccuracy())));
                     JSONObject envelope = sealInfo == null ? null : sealCoordinates(sealInfo.optString("key"), sealInfo.optString("kid"), secret.toString());
-                    if (envelope == null) continue;
+                    if (envelope == null) {
+                        ok = false;
+                        continue;
+                    }
                     body.put("lat", JSONObject.NULL);
                     body.put("lng", JSONObject.NULL);
                     body.put("accuracyM", 0);
@@ -956,6 +962,10 @@ public class LocationKeepService {
                     body.put("moving", upload != null && upload.moving);
                     if (upload != null && upload.flush) body.put("flush", true);
                     JSONObject trail = upload == null ? null : sealTrail(sealInfo, upload.trail);
+                    if (upload != null && upload.trail != null && upload.trail.length() > 0 && trail == null) {
+                        ok = false;
+                        continue;
+                    }
                     if (trail != null) body.put("trail", trail);
                 }
                 boolean posted = putWithRetry(base, target.optString("token"), body, identified ? profileKey : "");
@@ -966,7 +976,7 @@ public class LocationKeepService {
                     ok = false;
                 }
             } catch (Exception ignored) {
-                /* 다음 위치에서 다시 보낸다 */
+                if (sharing && location != null) ok = false;
             }
         }
         if (changed) prefs(context).edit().putString("config", current.toString()).apply();
