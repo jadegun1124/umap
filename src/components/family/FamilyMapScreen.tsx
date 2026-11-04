@@ -681,7 +681,7 @@ export function FamilyMapScreen() {
     const lines = [];
     for (const member of state.members) {
       const report = memberLiveLines(member, state.tracks, now, liveDay);
-      if (report.reason === 'share' || report.reason === 'stale' || report.reason === 'no-pin') continue;
+      if (report.reason === 'share' || report.reason === 'no-pin') continue;
       const saved = recordsDayTrails({
         journeys: (state.journeys[member.id] ?? []).filter((journey) => seoulDayKey(journey.endedAt) === liveDay),
         livePoints: [],
