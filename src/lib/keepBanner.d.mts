@@ -1,10 +1,14 @@
 export const KEEP_HEARTBEAT_FRESH_MS: number;
 
+export const FIX_STALE_STILL_MS: number;
+
 export function serviceAlive(input?: {
   serviceRunning?: boolean;
   heartbeatAt?: number;
+  lastFixAt?: number;
   now?: number;
   freshMs?: number;
+  fixFreshMs?: number;
 }): boolean;
 
 export function keepBanner(input?: {
@@ -17,5 +21,6 @@ export function keepBanner(input?: {
   batteryUnrestricted?: boolean;
   reason?: string;
   heartbeatAt?: number;
+  lastFixAt?: number;
   now?: number;
 }): { action: 'start' | 'always' | 'battery'; text: string } | null;

@@ -114,19 +114,24 @@ public class LocationKeepService {
     /** One sealed family batch. Local emit() is not throttled by these. */
     private static final long UPLOAD_MOVING_MS = 30_000L;
     private static final long UPLOAD_STILL_MS = 60_000L;
-    /** A service with no fix newer than this is treated as stopped. */
+    /** Process heartbeat. A fresh beat without a GPS fix is not a healthy keep. */
     private static final long KEEP_HEARTBEAT_FRESH_MS = 90_000L;
+    /** Alarm that brings the process back. Inside the 1–5 minute revival window. */
+    private static final long WATCHDOG_ALARM_MS = 2 * 60 * 1000L;
+    /** No GPS fix while the moving stream is on: drop and re-register providers. */
+    private static final long FIX_STALE_MOVING_MS = 15_000L;
+    /** No GPS fix while still. Also the banner threshold. */
+    private static final long FIX_STALE_STILL_MS = 90_000L;
+    /** After a re-register, leave GNSS alone long enough to lock. */
+    private static final long GPS_REREGISTER_COOLDOWN_MS = 60_000L;
+    private static volatile long lastReregisterAt = 0L;
     private static final int JOURNAL_CAP = 120;
-    /** Fresher than the 10 minute family stale window, even when GPS is quiet. */
-    private static final long HEARTBEAT_MS = 3 * 60 * 1000L;
-    /** No accepted fix for this long, with permission still granted, re-registers GPS. */
-    private static final long WATCHDOG_QUIET_MS = 3 * 60 * 1000L;
     private static volatile boolean starting = false;
     private static final int HEARTBEAT_CODE = REQUEST_CODE + 1;
     private static long requestedGpsMs = GPS_STILL_PROBE_MS;
     private static long stillSinceMs = 0;
     private static long lastRideAt = 0L;
-    private static boolean movingStream = false;
+    private static volatile boolean movingStream = false;
     /** Quiet long enough that the next stay request may widen past the 30s probe. */
     private static boolean stayConfirmed = false;
     /** A hint of movement that has not armed the 2.5s stream. */
@@ -170,6 +175,19 @@ public class LocationKeepService {
     public static long heartbeatAt(Context context) {
         if (context == null) return 0L;
         return prefs(context).getLong("heartbeatAt", 0L);
+    }
+
+    public static long lastFixAt(Context context) {
+        if (context == null) return 0L;
+        return prefs(context).getLong("lastFixAt", 0L);
+    }
+
+    /** True when keep is on and the last accepted GPS fix is older than the still watchdog. */
+    public static boolean fixStale(Context context) {
+        if (context == null || !wanted(context)) return false;
+        long last = lastFixAt(context);
+        if (last <= 0L) return false;
+        return System.currentTimeMillis() - last >= FIX_STALE_STILL_MS;
     }
 
     /**
@@ -239,6 +257,7 @@ public class LocationKeepService {
             prefs(context).edit().putBoolean("registered", true).commit();
         }
         noteHeartbeat(context);
+        KeepAliveWorker.schedule(context);
         synchronized (LOCK) {
             if (!anySharing(config)) {
                 removeUpdates(context);
@@ -265,6 +284,7 @@ public class LocationKeepService {
         }
         OngoingNotificationCleanup.clear(context);
         LocationKeepProcess.release(context);
+        KeepAliveWorker.cancel(context);
     }
 
     public static void markUserStopped(Context context) {
@@ -275,6 +295,7 @@ public class LocationKeepService {
             cancelHeartbeat(context);
         }
         LocationKeepProcess.release(context);
+        KeepAliveWorker.cancel(context);
     }
 
     public static void ackUserStopped(Context context) {
@@ -283,6 +304,30 @@ public class LocationKeepService {
 
     public static boolean userStopped(Context context) {
         return prefs(context).getBoolean("userStopped", false);
+    }
+
+    /** Called every 15s from the foreground service, so a dead GPS listener is not left until the 2 minute alarm. */
+    public static void pokeGps(Context context) {
+        if (!shouldReregisterGps(context)) return;
+        JSONObject config = readConfig(context);
+        if (config == null) return;
+        synchronized (LOCK) {
+            registerUpdates(context, config, true);
+        }
+    }
+
+    private static boolean shouldReregisterGps(Context context) {
+        if (context == null || !wanted(context) || !hasLocationPermission(context)) return false;
+        long now = System.currentTimeMillis();
+        long last = lastFixAt(context);
+        if (lastReregisterAt <= 0L) return false;
+        if (now - lastReregisterAt < GPS_REREGISTER_COOLDOWN_MS) return false;
+        if (last > 0L) {
+            long due = movingStream ? FIX_STALE_MOVING_MS : FIX_STALE_STILL_MS;
+            if (now - last < due) return false;
+        }
+        JSONObject config = readConfig(context);
+        return config != null && anySharing(config);
     }
 
     /** Re-register GPS after the foreground service is up. A background registration can be dropped. */
@@ -352,6 +397,7 @@ public class LocationKeepService {
         }
         LocationKeepProcess.setMovingWake(context, false);
         LocationKeepProcess.release(context);
+        KeepAliveWorker.cancel(context);
     }
 
     public static void onHeartbeat(Context context, BroadcastReceiver.PendingResult pending) {
@@ -363,15 +409,12 @@ public class LocationKeepService {
                 boolean movingNow;
                 synchronized (LOCK) {
                     ensureFilter(context);
-                    long quiet = lastSampleAt <= 0L ? Long.MAX_VALUE : System.currentTimeMillis() - lastSampleAt;
-                    long due = Math.max(requestedGpsMs * 2L + 15_000L, 45_000L);
-                    JSONObject config = readConfig(context);
-                    boolean granted = hasLocationPermission(context);
-                    if (granted && quiet >= WATCHDOG_QUIET_MS && anySharing(config)) {
-                        registerUpdates(context, config);
+                    if (!LocationKeepProcess.isAlive()) {
                         LocationKeepProcess.hold(context);
-                    } else if (quiet > due && anySharing(config)) {
-                        registerUpdates(context, config);
+                    }
+                    if (shouldReregisterGps(context)) {
+                        JSONObject config = readConfig(context);
+                        if (config != null) registerUpdates(context, config, true);
                     }
                     last = lastPublished == null ? null : new Location(lastPublished);
                     movingNow = movingStream;
@@ -416,14 +459,38 @@ public class LocationKeepService {
         scheduleHeartbeat(context);
     }
 
+    public static void scheduleRevive(Context context) {
+        if (context == null || !wanted(context)) return;
+        AlarmManager alarms = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
+        if (alarms == null) return;
+        long when = System.currentTimeMillis() + 5_000L;
+        try {
+            scheduleAlarm(alarms, when, heartbeatIntent(context));
+        } catch (Exception ignored) {
+            /* The periodic watchdog is the next chance. */
+        }
+    }
+
     private static void scheduleHeartbeat(Context context) {
         AlarmManager alarms = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
         if (alarms == null || !prefs(context).getBoolean("registered", false)) return;
         try {
-            alarms.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, System.currentTimeMillis() + HEARTBEAT_MS, heartbeatIntent(context));
+            scheduleAlarm(alarms, System.currentTimeMillis() + WATCHDOG_ALARM_MS, heartbeatIntent(context));
         } catch (Exception ignored) {
             /* 다음 위치 콜백이 심박을 다시 건다 */
         }
+    }
+
+    private static void scheduleAlarm(AlarmManager alarms, long when, android.app.PendingIntent intent) {
+        if (Build.VERSION.SDK_INT >= 31 && !alarms.canScheduleExactAlarms()) {
+            alarms.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, when, intent);
+            return;
+        }
+        if (Build.VERSION.SDK_INT >= 23) {
+            alarms.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, when, intent);
+            return;
+        }
+        alarms.set(AlarmManager.RTC_WAKEUP, when, intent);
     }
 
     private static void cancelHeartbeat(Context context) {
@@ -485,6 +552,11 @@ public class LocationKeepService {
 
     @SuppressLint("MissingPermission")
     private static void registerUpdates(Context context, JSONObject config) {
+        registerUpdates(context, config, false);
+    }
+
+    @SuppressLint("MissingPermission")
+    private static void registerUpdates(Context context, JSONObject config, boolean withNetwork) {
         LocationManager locationManager = (LocationManager) context.getSystemService(Context.LOCATION_SERVICE);
         if (locationManager == null) return;
         android.app.PendingIntent pending = locationIntent(context);
@@ -504,7 +576,7 @@ public class LocationKeepService {
         } catch (Exception ignored) {
             /* GPS 하드웨어가 없거나 권한이 없는 경우 */
         }
-        if (!gpsOn) {
+        if (!gpsOn || withNetwork) {
             long networkMs = movingStream ? gpsMs : Math.max(gpsMs, GPS_STILL_PROBE_MS);
             try {
                 if (locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
@@ -515,6 +587,7 @@ public class LocationKeepService {
             }
         }
         updatesRegistered = true;
+        lastReregisterAt = System.currentTimeMillis();
     }
 
     private static void removeUpdates(Context context) {
@@ -594,7 +667,7 @@ public class LocationKeepService {
         while (journal.length() > 0) journal.remove(0);
         filterLoaded = true;
         prefs(context).edit()
-            .remove("stable").remove("last").remove("lastAt").remove("heartbeatAt")
+            .remove("stable").remove("last").remove("lastAt").remove("heartbeatAt").remove("lastFixAt")
             .remove("beatLatE6").remove("beatLngE6").remove("beatAcc")
             .apply();
     }
@@ -692,6 +765,7 @@ public class LocationKeepService {
         }
         lastSample = new Location(location);
         lastSampleAt = now;
+        prefs(context).edit().putLong("lastFixAt", now).apply();
         noteHeartbeat(context);
         LocationKeepProcess.setMovingWake(context, movingStream);
         boolean record = recordFix(moving);

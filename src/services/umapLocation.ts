@@ -76,6 +76,8 @@ interface UmapLocationPlugin {
     versionName?: string;
     versionCode?: number;
     heartbeatAt?: number;
+    lastFixAt?: number;
+    fixStale?: boolean;
   }>;
   startAlertWatch(options: { config: string }): Promise<{ started: boolean; reason?: string }>;
   stopAlertWatch(): Promise<{ stopped: boolean }>;

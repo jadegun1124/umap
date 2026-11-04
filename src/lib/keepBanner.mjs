@@ -5,12 +5,18 @@ export const KEEP_HEARTBEAT_FRESH_MS = 90_000;
  * the registered flag is stale. A stale heartbeat means it is dead, even when
  * that flag is still true.
  */
+export const FIX_STALE_STILL_MS = 90_000;
+
 export function serviceAlive({
   serviceRunning = false,
   heartbeatAt = 0,
+  lastFixAt = 0,
   now = Date.now(),
   freshMs = KEEP_HEARTBEAT_FRESH_MS,
+  fixFreshMs = FIX_STALE_STILL_MS,
 } = {}) {
+  const fix = Number(lastFixAt);
+  if (Number.isFinite(fix) && fix > 0 && !(now - fix < fixFreshMs && now - fix >= -5_000)) return false;
   const beat = Number(heartbeatAt);
   if (Number.isFinite(beat) && beat > 0) return now - beat < freshMs && now - beat >= -5_000;
   return serviceRunning === true;
@@ -33,11 +39,12 @@ export function keepBanner({
   batteryUnrestricted = true,
   reason = '',
   heartbeatAt = 0,
+  lastFixAt = 0,
   now = Date.now(),
 } = {}) {
   if (!native || !onMap || userStopped) return null;
   if (keepAlive !== true) return null;
-  const alive = serviceAlive({ serviceRunning, heartbeatAt, now });
+  const alive = serviceAlive({ serviceRunning, heartbeatAt, lastFixAt, now });
   if (locationMode !== 'always' || reason === 'permission') {
     const batteryNote = batteryUnrestricted === false ? ' 배터리 제한 없음도 꺼져 있습니다.' : '';
     const text = locationMode === 'while-using'

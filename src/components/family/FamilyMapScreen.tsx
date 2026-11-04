@@ -134,6 +134,7 @@ export function FamilyMapScreen() {
         const alive = serviceAlive({
           serviceRunning: status.running === true,
           heartbeatAt: status.heartbeatAt,
+          lastFixAt: status.lastFixAt,
           now: Date.now(),
         });
         setKeepLive({
@@ -146,6 +147,7 @@ export function FamilyMapScreen() {
           onMap: true,
           serviceRunning: alive,
           heartbeatAt: status.heartbeatAt,
+          lastFixAt: status.lastFixAt,
           userStopped: status.userStopped,
           keepAlive: state.backgroundKeepAlive,
           locationMode: location,
