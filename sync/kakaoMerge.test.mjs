@@ -254,4 +254,117 @@ test('sealed history from the old account stays locked until a family device rew
   }, memoryStorage({ umap_seal_device_v1: JSON.stringify(phone) }), 'ABCDEFGHJKLN');
   assert.equal(withCode.historyLocked, false);
   assert.equal(withCode.home.label, '우리 집');
+  const restored = applyAccountSnapshot({ permissions: { completed: true } }, {
+    memberId: 'local-freshbb',
+    profileKey: 'profilekeyBBBBBBBB',
+    profile: { name: '새폰', photo: null },
+    room: { code: '48291', writeKey: 'writeKeyAAAAAAAAAA', readKey: 'readKeyAAAAAAAAAAA' },
+    mergedFrom: 'local-familya',
+    sealedHistory: sealed.sealedHistory,
+    historyLocked: false,
+    journeys: withCode.journeys,
+    visits: [],
+  });
+  assert.equal(restored.historyLocked, false);
+  assert.equal(restored.journeys.self[0].id, 'j-walk');
+});
+
+test('merge keeps the current account trips instead of hiding them behind the old seal', async () => {
+  const accounts = createMemoryAccountStore();
+  const now = Date.now();
+  const createdA = await call(accounts, 'POST', '/v1/account', {
+    body: account('local-familya', '48291', { home: { lat: 37.55, lng: 127.05, label: '우리 집' } }),
+  });
+  await call(accounts, 'POST', '/v1/account/kakao', {
+    accountKey: createdA.body.account.accountKey,
+    body: { accessToken: 'kakao-token', mode: 'link' },
+  });
+  const idA = await accounts.get('member:local-familya');
+  const recordA = await accounts.get(`acct:${idA}`);
+  recordA.sealedHistory = { v: 1, alg: 'A256GCM', kid: 'a'.repeat(16), iv: 'A'.repeat(16), ct: 'B'.repeat(24) };
+  recordA.vault = { v: 1, salt: 'salt', iv: 'iviv', ct: 'vault-a' };
+  await accounts.put(`acct:${idA}`, recordA);
+  const createdB = await call(accounts, 'POST', '/v1/account', {
+    body: account('local-freshbb', '10001', {
+      journeys: [{
+        id: 'j-current',
+        startedAt: now - 3_600_000,
+        endedAt: now - 3_000_000,
+        distanceM: 400,
+        points: [
+          { lat: 37.5, lng: 127.0, at: now - 3_600_000 },
+          { lat: 37.51, lng: 127.01, at: now - 3_000_000 },
+        ],
+        start: { lat: 37.5, lng: 127.0, label: '출발' },
+        end: { lat: 37.51, lng: 127.01, label: '도착' },
+      }],
+    }),
+  });
+  const merged = await call(accounts, 'POST', '/v1/account/kakao', {
+    accountKey: createdB.body.account.accountKey,
+    body: { accessToken: 'kakao-token', mode: 'link', merge: true },
+  });
+  assert.equal(merged.status, 200);
+  assert.equal(merged.body.account.room.code, '48291');
+  assert.equal(merged.body.account.journeys[0].id, 'j-current');
+  assert.equal(merged.body.account.sealedHistory, null);
+  assert.equal(merged.body.account.mergedVault, undefined);
+});
+
+test('an old recovery code that cannot open this phone seal leaves the device key in place', async () => {
+  const phone = await mintDeviceKey();
+  const owner = await mintDeviceKey();
+  const own = await prepareBackup({
+    memberId: 'local-freshbb',
+    profileKey: 'profilekeyBBBBBBBB',
+    profile: { name: '새폰', photo: null },
+    room: { code: '10001', writeKey: 'writeKeyBBBBBBBBBB', readKey: 'readKeyBBBBBBBBBBB' },
+    guardians: [],
+    home: { label: '이 폰', address: '', lat: 37.5, lng: 127.0, radiusM: 150 },
+    journeys: [{
+      id: 'j-own',
+      startedAt: Date.now() - 60_000,
+      endedAt: Date.now() - 30_000,
+      distanceM: 80,
+      points: [
+        { lat: 37.5, lng: 127.0, at: Date.now() - 60_000 },
+        { lat: 37.501, lng: 127.001, at: Date.now() - 30_000 },
+      ],
+      start: { lat: 37.5, lng: 127.0, label: '이 폰' },
+      end: { lat: 37.501, lng: 127.001, label: '근처' },
+    }],
+    visits: [],
+  }, memoryStorage({ umap_seal_device_v1: JSON.stringify(phone) }), 'ABCDEFGHJKLN');
+  const old = await prepareBackup({
+    memberId: 'local-familya',
+    profileKey: 'profilekeyAAAAAAAA',
+    profile: { name: '엄마', photo: null },
+    room: { code: '48291', writeKey: 'writeKeyAAAAAAAAAA', readKey: 'readKeyAAAAAAAAAAA' },
+    guardians: [],
+    home: { label: '예전 집', address: '', lat: 37.55, lng: 127.05, radiusM: 150 },
+    journeys: [{
+      id: 'j-old',
+      startedAt: Date.now() - 60_000,
+      endedAt: Date.now() - 30_000,
+      distanceM: 80,
+      points: [
+        { lat: 37.55, lng: 127.05, at: Date.now() - 60_000 },
+        { lat: 37.551, lng: 127.051, at: Date.now() - 30_000 },
+      ],
+      start: { lat: 37.55, lng: 127.05, label: '예전 집' },
+      end: { lat: 37.551, lng: 127.051, label: '하계동' },
+    }],
+    visits: [],
+  }, memoryStorage({ umap_seal_device_v1: JSON.stringify(owner) }), 'BBBBBBBBBBBB');
+  const storage = memoryStorage({ umap_seal_device_v1: JSON.stringify(phone) });
+  const opened = await openAccountSecrets({
+    memberId: 'local-freshbb',
+    sealedHistory: own.sealedHistory,
+    mergedVault: old.vault,
+    journeys: [],
+    visits: [],
+  }, storage, 'BBBBBBBBBBBB');
+  assert.equal(opened.historyLocked, false);
+  assert.equal(opened.journeys[0].id, 'j-own');
+  assert.equal(JSON.parse(storage.getItem('umap_seal_device_v1')).publicKey, phone.publicKey);
 });

@@ -306,7 +306,9 @@ export function applyAccountSnapshot(state, account) {
     pendingLeaveAlert: null,
     pendingSyncToken: null,
     shareSelfWithFamily: state.permissions?.completed === true,
-    historyLocked: account.historyLocked === true || (!!mergedFrom && !!account.sealedHistory),
+    historyLocked: account.historyLocked === false
+      ? false
+      : account.historyLocked === true || (!!mergedFrom && !!account.sealedHistory),
     hiddenMemberIds: mergedFrom ? [mergedFrom] : [],
     sealedHistory: account.sealedHistory || null,
     accountVault: account.vault || null,

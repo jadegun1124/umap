@@ -951,9 +951,12 @@ function adoptFamilyRecord(current, source, kakaoId, now) {
   if (!current.home && source.home) next.home = source.home;
   if (emptyList(current.journeys) && !emptyList(source.journeys)) next.journeys = source.journeys;
   if (emptyList(current.visits) && !emptyList(source.visits)) next.visits = source.visits;
-  if (!current.sealedHistory && source.sealedHistory) next.sealedHistory = source.sealedHistory;
-  if (source.vault) next.mergedVault = source.vault;
-  if (!current.historyShares && source.historyShares) next.historyShares = source.historyShares;
+  const currentPlainEmpty = emptyList(next.journeys) && emptyList(next.visits);
+  if (!current.sealedHistory && source.sealedHistory && currentPlainEmpty) {
+    next.sealedHistory = source.sealedHistory;
+    if (source.vault) next.mergedVault = source.vault;
+    if (!current.historyShares && source.historyShares) next.historyShares = source.historyShares;
+  }
   if (emptyList(current.roster) && !emptyList(source.roster)) next.roster = source.roster;
   if (source.memberId && source.memberId !== current.memberId) next.mergedFrom = source.memberId;
   return next;

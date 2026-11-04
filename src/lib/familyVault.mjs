@@ -267,9 +267,14 @@ export async function openAccountSecrets(account, storage, typedCode = '') {
       openedVault = true;
     }
   }
-  if (!openedVault && account.mergedVault && code) {
-    const device = await unwrapVault(code, account.mergedVault);
-    if (device) writeDevice(storage, device);
+  let mergedPlain = null;
+  if (!openedVault && account.mergedVault && code && account.sealedHistory) {
+    const candidate = await unwrapVault(code, account.mergedVault);
+    const opened = candidate ? await openJson(contentKeyBytes(candidate), account.sealedHistory) : null;
+    if (opened && typeof opened === 'object') {
+      writeDevice(storage, candidate);
+      mergedPlain = opened;
+    }
   }
   if (!readDevice(storage)) await ensureDevice(storage);
   let journeys = account.journeys;
@@ -277,7 +282,7 @@ export async function openAccountSecrets(account, storage, typedCode = '') {
   let home = account.home;
   let historyLocked = false;
   if (account.sealedHistory) {
-    let opened = await openJson(contentKeyBytes(readDevice(storage)), account.sealedHistory);
+    let opened = mergedPlain || await openJson(contentKeyBytes(readDevice(storage)), account.sealedHistory);
     if (!opened) {
       const device = readDevice(storage);
       const saved = readJson(storage, HISTORY_SHARE_STORAGE);
