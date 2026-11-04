@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useReducer, useRef, useState } from 'react';
 import { hasLocation, haversineMeters } from '../../lib/geo';
 import { applyAccountSnapshot, clearDeviceAccount, logoutLocalAccount, readStoredAccountKey } from '../../lib/accountRestore.mjs';
+import { resumeRoom } from '../../lib/keySyncPace.mjs';
 import { deviceSealAvailable, openDeviceText, sealDeviceText } from '../../lib/deviceSeal.mjs';
 import { openAccountSecrets } from '../../lib/familyVault.mjs';
 import {
@@ -1749,8 +1750,14 @@ export function FamilyProvider({ children }: { children: React.ReactNode }) {
   const api: FamilyApi = {
     state,
     splashDone: () => dispatch({ type: 'splash-done' }),
-    login: (profile) => dispatch({ type: 'login', profile }),
-    restoreAccount: (account) => dispatch({ type: 'restore-account', account }),
+    login: (profile) => {
+      resumeRoom();
+      dispatch({ type: 'login', profile });
+    },
+    restoreAccount: (account) => {
+      resumeRoom();
+      dispatch({ type: 'restore-account', account });
+    },
     unlockHistory: (journeys, visits, home) => dispatch({ type: 'unlock-history', journeys, visits, home }),
     closeMode: () => dispatch({ type: 'close-mode' }),
     skipSurvey: () => dispatch({ type: 'skip-survey' }),
@@ -1769,7 +1776,10 @@ export function FamilyProvider({ children }: { children: React.ReactNode }) {
     clearHome: () => dispatch({ type: 'clear-home' }),
     addMember: (name, code) => dispatch({ type: 'add-member', name, code }),
     removeMember: (id) => dispatch({ type: 'remove-member', id }),
-    acceptInvite: (label, code, syncToken, rosterName, adminName) => dispatch({ type: 'accept-invite', label, code, syncToken: syncToken ?? null, rosterName: rosterName ?? null, adminName: adminName ?? null }),
+    acceptInvite: (label, code, syncToken, rosterName, adminName) => {
+      resumeRoom(code);
+      dispatch({ type: 'accept-invite', label, code, syncToken: syncToken ?? null, rosterName: rosterName ?? null, adminName: adminName ?? null });
+    },
     setGuardianShare: (code, share) => dispatch({ type: 'set-guardian-share', code, share }),
     leaveGuardian: (id) => dispatch({ type: 'leave-guardian', id }),
     dismissInvite: () => dispatch({ type: 'dismiss-invite' }),

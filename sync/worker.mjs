@@ -1,6 +1,6 @@
 import { PUBLIC_NAVER_CLIENT_ID } from '../src/lib/naverAuth.mjs';
 import { createMemoryAccountStore, handleAccountOperation } from './account.mjs';
-import { applyAlert, applyDirectMessage, applySubscription, alertPushPayload, chatPushPayload, commitKeys, commitPlace, commitProfile, commitTrail, emptyRoom, memberRoomToken, parseOperation, planForgetMember, previousPlaceSharing, pushesForAlert, pushesForChat, removeSubscriptions, shouldHoldPlaceWrite, storageQuotaResponse, viewDirectMessages, viewFamilyPlaces, viewMyThreads, viewRoom, withCors } from './protocol.mjs';
+import { applyAlert, applyDirectMessage, applyKeyPut, applySubscription, alertPushPayload, chatPushPayload, commitPlace, commitProfile, commitTrail, emptyRoom, memberRoomToken, parseOperation, planForgetMember, previousPlaceSharing, pushesForAlert, pushesForChat, removeSubscriptions, shouldHoldPlaceWrite, storageQuotaResponse, viewDirectMessages, viewFamilyPlaces, viewMyThreads, viewRoom, withCors } from './protocol.mjs';
 import { createVapidKeys, sendWebPush } from './webpush.mjs';
 
 // One Durable Object per family room. The id is a hash of the invite code,
@@ -127,11 +127,10 @@ export class FamilyRoom {
       });
     }
     if (op.kind === 'keys') {
-      const next = await commitKeys(room, op.keys, op.profileKey || '');
+      if (!this.keyPutAt) this.keyPutAt = new Map();
+      const next = await applyKeyPut(room, op.keys, op.profileKey || '', this.keyPutAt, Date.now());
       if (next.error) return next.error;
-      // The phones repeat this on every map poll. An unchanged directory must not
-      // rewrite the room blob: that was the free-tier row-write hotspot.
-      if (!next.unchanged) await this.ctx.storage.put('room', next.room);
+      if (next.wrote) await this.ctx.storage.put('room', next.room);
       return Response.json({ ok: true, keys: next.directory });
     }
     if (op.kind === 'alert') {

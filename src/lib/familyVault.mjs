@@ -199,21 +199,40 @@ export async function syncHistoryDirectory({ history, pubs, memberId, privateKey
   return { history: refreshed, selfShare: selfShare || null };
 }
 
+const historyWrapCache = new Map();
+
+function historyWrapKey(holderId, ownerId, memberId, pub, key) {
+  return `${holderId}\0${ownerId}\0${memberId}\0${pub}\0${bytesToBase64Url(key)}`;
+}
+
 export async function rewrapHistoryShares({ history, pubs, holderId, holderPrivate }) {
   const next = {};
   const book = history && typeof history === 'object' ? history : {};
   for (const [ownerId, shares] of Object.entries(book)) {
     next[ownerId] = shares && typeof shares === 'object' ? { ...shares } : {};
   }
-  for (const shares of Object.values(next)) {
+  for (const [ownerId, shares] of Object.entries(next)) {
     const mine = shares[holderId];
     if (!mine) continue;
     const key = await unwrapFamilyKey(holderPrivate, mine, HISTORY_SHARE_KID);
     if (!key) continue;
     for (const [id, pub] of Object.entries(pubs || {})) {
       if (typeof pub !== 'string') continue;
+      const cacheKey = historyWrapKey(holderId, ownerId, id, pub, key);
+      const cached = historyWrapCache.get(cacheKey);
+      if (cached) {
+        shares[id] = cached;
+        continue;
+      }
+      if (shares[id] && historyWrapCache.get(`bound\0${holderId}\0${ownerId}\0${id}`) === pub) {
+        historyWrapCache.set(cacheKey, shares[id]);
+        continue;
+      }
       const wrap = await wrapFamilyKey(pub, key, HISTORY_SHARE_KID);
-      if (wrap) shares[id] = wrap;
+      if (!wrap) continue;
+      shares[id] = wrap;
+      historyWrapCache.set(cacheKey, wrap);
+      historyWrapCache.set(`bound\0${holderId}\0${ownerId}\0${id}`, pub);
     }
   }
   return next;
