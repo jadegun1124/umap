@@ -3,7 +3,7 @@ import test from 'node:test';
 import { createMemoryAccountStore } from './account.mjs';
 import { handleSyncRequest, syncTokenFor } from './protocol.mjs';
 import { ensureRoster } from '../src/lib/peerFamily.mjs';
-import { buildGroupInviteLink, syncTokenFromInviteFragment } from '../src/lib/inviteLink.mjs';
+import { buildGroupInviteLink, parseInviteUrl, syncTokenFromInviteFragment } from '../src/lib/inviteLink.mjs';
 
 function snapshot(memberId, name) {
   return {
@@ -62,6 +62,10 @@ test('a group link redeems the roster without sending the room key to the server
   assert.equal(redeemed.body.syncToken, undefined);
   assert.equal(redeemed.body.ownerMemberId, 'local-ownera');
   assert.equal(syncTokenFromInviteFragment(new URL(link).hash), token);
+  const appLink = `kinnex://invite?code=48291&ticket=${ticket}#k=${encodeURIComponent(token)}`;
+  const parsed = parseInviteUrl(appLink);
+  assert.equal(parsed.ticket, ticket);
+  assert.equal(parsed.syncToken, token);
   const again = await call(accounts, 'POST', `/v1/invites/${ticket}/redeem`, { now, body: {} });
   assert.equal(again.status, 200);
   const revoked = await call(accounts, 'POST', `/v1/invites/${ticket}/revoke`, { accountKey: key, now, body: {} });
@@ -86,4 +90,7 @@ test('a group link redeems the roster without sending the room key to the server
   const back = ensureRoster(roster.members, [{ memberId: 'local-joiner', name: '새가족', at: now }], '48291', 'local-ownera');
   assert.equal(back.members.some((member) => member.name === '새가족'), true);
   assert.equal(back.members.filter((member) => member.publisherId === 'local-dadaaa').length, 1);
+  const hidden = ensureRoster(back.members, [{ memberId: 'local-joiner', name: '새가족', at: now }], '48291', 'local-ownera', ['local-joiner']);
+  assert.equal(hidden.joined.length, 0);
+  assert.equal(hidden.members.filter((member) => member.publisherId === 'local-joiner').length, 1);
 });

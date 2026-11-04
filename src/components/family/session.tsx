@@ -1326,7 +1326,7 @@ function reduceSession(state: Session, action: Action): Session {
       const profiles = action.profiles.filter((profile) => isMemberId(profile.memberId) && profile.memberId !== state.profile?.id);
       if (profiles.length === 0) return state;
       const ownerMemberId = state.guardians.find((link) => link.code === action.code)?.ownerMemberId || '';
-      const ensured = ensureRoster(state.members, profiles, action.code, ownerMemberId);
+      const ensured = ensureRoster(state.members, profiles, action.code, ownerMemberId, state.hiddenMemberIds || []);
       let members = ensured.members;
       let changed = ensured.joined.length > 0;
       for (const profile of profiles) {

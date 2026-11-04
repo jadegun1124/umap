@@ -6,6 +6,21 @@ export function buildGroupInviteLink(origin, code, ticket, syncToken) {
   return url.toString();
 }
 
+export function parseInviteUrl(value) {
+  const trimmed = String(value || '').trim();
+  if (!trimmed.startsWith('http://') && !trimmed.startsWith('https://') && !trimmed.startsWith('kinnex://')) return null;
+  try {
+    const url = new URL(trimmed);
+    return {
+      code: (url.searchParams.get('invite') || url.searchParams.get('code') || '').replace(/\D/g, '').slice(0, 6),
+      syncToken: syncTokenFromInviteFragment(url.hash),
+      ticket: (url.searchParams.get('ticket') || '').trim() || null,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export function syncTokenFromInviteFragment(value) {
   const raw = value.startsWith('#') ? value.slice(1) : value;
   const token = new URLSearchParams(raw).get('k') || '';

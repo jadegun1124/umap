@@ -20,6 +20,7 @@ export function ensureRoster<T extends { id?: string; publisherId?: string; name
   profiles: Array<{ memberId?: string; name?: string; at?: number }> | null | undefined,
   code: string,
   ownerId?: string,
+  hidden?: string[],
 ): { members: T[]; joined: string[] };
 
 export function mapMembers<T extends { role?: string; id?: string; lat?: number | null; lng?: number | null; share?: string }>(

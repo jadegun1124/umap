@@ -7,7 +7,7 @@ import { NAVER_SETUP_MESSAGE } from '../../lib/naverAuth.mjs';
 import { ACCOUNT_LINKED_OTHER_MESSAGE, ACCOUNT_UNLINKED_MESSAGE, linkedAccountWouldSwitch, readStoredAccountKey, readStoredAccountLinks, readStoredRecoveryCode, rememberAccountSecrets, snapshotFromSession } from '../../lib/accountRestore.mjs';
 import { backupFamilyAccount, cancelAccountBackup, deleteFamilyAccount, linkKakaoAccount, loadOwnDisclosures, loadOwnHandling, mintFamilyInvite, persistAccountResult, redeemFamilyInvite, revokeFamilyInvite, type AccountSnapshot, type DisclosureRecord, type HandlingEvent } from '../../services/familyAccount';
 import { buildInviteLink, formatClock, hasLocation, haversineMeters, shouldAlertLeave } from '../../lib/geo';
-import { buildGroupInviteLink, syncTokenFromInviteFragment } from '../../lib/inviteLink.mjs';
+import { buildGroupInviteLink, parseInviteUrl, syncTokenFromInviteFragment } from '../../lib/inviteLink.mjs';
 import { ALWAYS_GUIDE_DISMISSED_KEY, CHAT_NOTIFY_ASKED_KEY, KEEP_PERMISSION_ASKED_KEY, KEEP_START_ASKED_KEY, keepEntryPrompt, markSessionFlag, readSessionFlag } from '../../lib/systemSettings.mjs';
 import { familyMapShowsTrail, memberLiveLines, recordsDayTrails } from '../../lib/mapTrail.mjs';
 import { noteDiag } from '../../lib/diagLog.mjs';
@@ -1227,12 +1227,14 @@ export function FamilyMapScreen() {
             )}
             <div className="max-h-52 overflow-y-auto">
               {people.map((member) => {
-                const thread = directThreadFor(state, member);
+                const joinedOther = state.guardians.some((link) => link.ownerMemberId && link.ownerMemberId !== state.profile?.id);
+                const shown = member.lead || (member.id === 'self' && !joinedOther) ? { ...member, lead: true } : member;
+                const thread = directThreadFor(state, shown);
                 const unread = thread ? unreadCount(thread.code, thread.me, thread.peer) : 0;
                 return (
                   <MemberCard
-                    key={member.id}
-                    member={member}
+                    key={shown.id}
+                    member={shown}
                     home={state.home}
                     selected={member.id === selected?.id}
                     unread={chatTick >= 0 ? unread : 0}
@@ -2169,7 +2171,7 @@ function MemberCard({
         <MemberAvatar name={member.name} photo={member.photo} />
       )}
       <button type="button" onClick={onSelect} className="min-w-0 flex-1 text-left">
-        <span className="block truncate font-bold">{member.name}{(member.id === 'self' || member.lead) && <span className="ml-1 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-black text-slate-600">그룹장</span>}</span>
+        <span className="block truncate font-bold">{member.name}{member.lead && <span className="ml-1 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-black text-slate-600">그룹장</span>}</span>
         <span className="block truncate text-xs text-slate-500">
           {disconnected ? '연결 끊김' : [personArea(member, home), live].filter(Boolean).join(' · ')}
         </span>
@@ -2437,12 +2439,12 @@ function AdminInviteSheet({
 
 function parseInviteDraft(value: string): { code: string; syncToken: string | null; ticket: string | null; rosterName: string | null; adminName: string | null } {
   const trimmed = value.trim();
-  if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+  if (trimmed.startsWith('http://') || trimmed.startsWith('https://') || trimmed.startsWith('kinnex://')) {
     try {
       const url = new URL(trimmed);
       const code = (url.searchParams.get('invite') || url.searchParams.get('code') || '').replace(/\D/g, '').slice(0, 6);
       const queryToken = splitSyncToken(url.searchParams.get('sync')) ? url.searchParams.get('sync') : null;
-      const syncToken = syncTokenFromInviteFragment(url.hash) || queryToken;
+      const syncToken = syncTokenFromInviteFragment(url.hash) || parseInviteUrl(trimmed)?.syncToken || queryToken;
       const ticket = (url.searchParams.get('ticket') || '').trim() || null;
       const rosterName = (url.searchParams.get('who') || '').trim().slice(0, 80) || null;
       const adminName = (url.searchParams.get('from') || '').trim().slice(0, 20) || null;
