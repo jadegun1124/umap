@@ -501,6 +501,7 @@ public class UmapLocationPlugin extends Plugin {
     public void status(PluginCall call) {
         JSObject result = new JSObject();
         result.put("running", LocationKeepService.isRunning(getContext()));
+        result.put("heartbeatAt", LocationKeepService.heartbeatAt(getContext()));
         result.put("userStopped", LocationKeepService.userStopped(getContext()));
         result.put("native", true);
         String location = "denied";

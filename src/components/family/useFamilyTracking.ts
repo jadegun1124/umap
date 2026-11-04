@@ -212,6 +212,7 @@ export function useFamilyTracking(onFirstFix: (lat: number, lng: number) => void
     for (const link of state.guardians) {
       const sharing = link.share === 'allowed';
       const remote = link.syncToken && (sharing || link.share === 'revoked') ? link.syncToken : null;
+      if (nativeKeeps && sharing && located) continue;
       // No fix yet: do not publish a newer empty point. That used to replace the native service's coordinates.
       if (sharing && !located) continue;
       const priorName = placePriorName(link.code, 'admin', name) || (link.rosterName && link.rosterName !== name ? link.rosterName : '');
@@ -230,7 +231,7 @@ export function useFamilyTracking(onFirstFix: (lat: number, lng: number) => void
         charging: sharing ? (self?.charging ?? null) : null,
       }, remote, state.profile?.profileKey);
     }
-  }, [selfPublishKey, state.guardians, state.mode, state.profile?.id, state.profile?.name, state.profile?.profileKey]);
+  }, [nativeKeeps, selfPublishKey, state.guardians, state.mode, state.profile?.id, state.profile?.name, state.profile?.profileKey]);
 
   useEffect(() => {
     if (state.locationConsent === false) return;
@@ -244,6 +245,7 @@ export function useFamilyTracking(onFirstFix: (lat: number, lng: number) => void
     if (!share && !adminShared.current) return;
     if (share && !located) return;
     const sending = share && !!located;
+    if (nativeKeeps && sending) return;
     void syncTokenFor(state.syncWriteKey, state.syncReadKey).then(async (token) => {
       if (cancel || !splitSyncToken(token)) return;
       const ready = await familyEndpointAvailable(state.inviteCode, token);
@@ -273,7 +275,7 @@ export function useFamilyTracking(onFirstFix: (lat: number, lng: number) => void
     return () => {
       cancel = true;
     };
-  }, [selfPublishKey, state.inviteCode, state.mode, state.profile?.id, state.profile?.name, state.profile?.profileKey, state.shareSelfWithFamily, state.syncReadKey, state.syncWriteKey]);
+  }, [nativeKeeps, selfPublishKey, state.inviteCode, state.mode, state.profile?.id, state.profile?.name, state.profile?.profileKey, state.shareSelfWithFamily, state.syncReadKey, state.syncWriteKey]);
 
   const profileSyncKey = [
     state.mode,
@@ -451,6 +453,7 @@ export function useFamilyTracking(onFirstFix: (lat: number, lng: number) => void
   const trailKey = `${state.tracks.self?.length ?? 0}:${state.tracks.self?.at(-1)?.at ?? 0}:${state.journeys?.self?.length ?? 0}:${state.journeys?.self?.[0]?.endedAt ?? 0}:${state.shareSelfWithFamily}`;
   useEffect(() => {
     const current = familyRef.current.state;
+    if (umapLocationNative() && current.backgroundKeepAlive && current.permissions.locationMode === 'always') return;
     const memberId = current.profile?.profileKey ? current.profile.id : '';
     const profileKey = current.profile?.profileKey || '';
     if (!memberId || !profileKey) return;
@@ -501,7 +504,7 @@ export function useFamilyTracking(onFirstFix: (lat: number, lng: number) => void
       cancel = true;
       window.clearTimeout(timer);
     };
-  }, [trailKey]);
+  }, [trailKey, state.backgroundKeepAlive, state.permissions.locationMode]);
 
   useEffect(() => {
     const joined = new Set(state.guardians.map((link) => link.code));

@@ -1,6 +1,6 @@
 import { PUBLIC_NAVER_CLIENT_ID } from '../src/lib/naverAuth.mjs';
 import { createMemoryAccountStore, handleAccountOperation } from './account.mjs';
-import { applyAlert, applyDirectMessage, applyKeyPut, applySubscription, alertPushPayload, chatPushPayload, commitPlace, commitProfile, commitTrail, emptyRoom, memberRoomToken, parseOperation, planForgetMember, previousPlaceSharing, pushesForAlert, pushesForChat, removeSubscriptions, shouldHoldPlaceWrite, storageQuotaResponse, viewDirectMessages, viewFamilyPlaces, viewMyThreads, viewRoom, withCors } from './protocol.mjs';
+import { appendTrailPart, applyAlert, applyDirectMessage, applyKeyPut, applySubscription, alertPushPayload, chatPushPayload, commitPlace, commitProfile, commitTrail, emptyRoom, memberRoomToken, parseOperation, placeWriteHeld, planForgetMember, previousPlaceSharing, pushesForAlert, pushesForChat, removeSubscriptions, storageQuotaResponse, viewDirectMessages, viewFamilyPlaces, viewMyThreads, viewRoom, withCors } from './protocol.mjs';
 import { createVapidKeys, sendWebPush } from './webpush.mjs';
 
 // One Durable Object per family room. The id is a hash of the invite code,
@@ -75,20 +75,21 @@ export class FamilyRoom {
     if (op.kind === 'place') {
       const next = await commitPlace(room, op.place, op.profileKey || '');
       if (next.error) return next.error;
+      let stored = next.room;
+      let ignored = next.ignored === true;
+      if (op.place.trailSeal && op.place.memberId) {
+        const trailed = appendTrailPart(stored, op.place.memberId, op.place.at, op.place.moving === true, op.place.trailSeal);
+        stored = trailed.room;
+        ignored = ignored && trailed.ignored;
+      }
       const memberId = typeof op.place?.memberId === 'string' ? op.place.memberId : '';
       const at = typeof op.place?.at === 'number' ? op.place.at : Date.now();
-      // One room rewrite per member per 8s for a live fix. A stop or a sharing
-      // change is written now; returning ok without storing it would leave the
-      // member shared. Duplicate JS and native uploads still collapse.
+      // One room rewrite per member per 8s for a plain 1.54 fix. A flush, a
+      // trail batch, a stop, or a sharing change is written now.
       const lastAt = memberId && this.persistedPlaceAt ? this.persistedPlaceAt.get(memberId) || 0 : 0;
-      const held = !next.ignored && shouldHoldPlaceWrite({
-        previousSharing: previousPlaceSharing(room, op.place),
-        sharing: op.place?.sharing,
-        lastPersistedAt: lastAt,
-        at,
-      });
-      if (!next.ignored && !held) {
-        room = next.room;
+      const held = !ignored && placeWriteHeld(op.place, lastAt, at, previousPlaceSharing(room, op.place));
+      if (!ignored && !held) {
+        room = stored;
         await this.ctx.storage.put('room', room);
         if (memberId) {
           if (!this.persistedPlaceAt) this.persistedPlaceAt = new Map();
@@ -97,7 +98,7 @@ export class FamilyRoom {
       }
       return Response.json({
         ok: true,
-        collected: !next.ignored && !held && !!memberId,
+        collected: !ignored && !held && !!memberId,
         memberId,
         at,
       });

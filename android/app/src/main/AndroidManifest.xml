@@ -78,12 +78,10 @@
                 android:resource="@xml/file_paths"></meta-data>
         </provider>
 
-        <!-- Location and SOS polling are receivers. A foreground service would
-             force an ongoing shade card on Android 12+. -->
-        <!-- Not a foreground service: that card stays in the shade on Android 12+. -->
         <service
             android:name=".LocationKeepProcess"
             android:exported="false"
+            android:foregroundServiceType="location"
             android:stopWithTask="false" />
 
         <receiver
@@ -109,6 +107,9 @@
          Android 11+ opens that screen. Android 10 may show the system background dialog from the blocking gate.
          The app does not flip the switch itself. -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
