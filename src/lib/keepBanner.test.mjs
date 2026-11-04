@@ -67,6 +67,33 @@ test('a stopped keep says when the permission or the battery is what blocked it'
   assert.match(battery.text, /제한 없음/);
 });
 
+test('a fresh service beat with a stale GPS fix shows the stopped banner', () => {
+  const now = 1_700_000_000_000;
+  assert.equal(serviceAlive({
+    serviceRunning: true,
+    heartbeatAt: now - 10_000,
+    lastFixAt: now - 120_000,
+    now,
+  }), false);
+  const banner = keepBanner({
+    native: true,
+    onMap: true,
+    serviceRunning: true,
+    keepAlive: true,
+    locationMode: 'always',
+    heartbeatAt: now - 10_000,
+    lastFixAt: now - 120_000,
+    now,
+  });
+  assert.equal(banner.action, 'start');
+  assert.equal(serviceAlive({
+    serviceRunning: true,
+    heartbeatAt: now - 10_000,
+    lastFixAt: now - 20_000,
+    now,
+  }), true);
+});
+
 test('a fresh heartbeat hides the stopped banner, and a stale one shows it', () => {
   const now = 1_700_000_000_000;
   assert.equal(serviceAlive({ serviceRunning: false, heartbeatAt: now - 10_000, now }), true);

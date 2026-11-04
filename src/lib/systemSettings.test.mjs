@@ -80,6 +80,16 @@ test('location keep is a foreground service that restarts with the task and the 
   assert.match(plugin, /isIgnoringBatteryOptimizations/);
   assert.match(plugin, /heartbeatAt/);
   assert.match(location, /KEEP_HEARTBEAT_FRESH_MS = 90_000L/);
+  assert.match(location, /WATCHDOG_ALARM_MS = 2 \* 60 \* 1000L/);
+  assert.match(location, /FIX_STALE_MOVING_MS = 15_000L/);
+  assert.match(location, /FIX_STALE_STILL_MS = 90_000L/);
+  assert.match(location, /setExactAndAllowWhileIdle/);
+  assert.match(location, /lastFixAt/);
+  assert.match(process, /scheduleRevive/);
+  assert.match(process, /PROVIDERS_CHANGED_ACTION/);
+  const worker = readFileSync(new URL('../../android/app/src/main/java/kr/co/umap/tracker/KeepAliveWorker.java', import.meta.url), 'utf8');
+  assert.match(worker, /PeriodicWorkRequest/);
+  assert.match(worker, /15, TimeUnit.MINUTES/);
   assert.match(location, /LocationKeepProcess\.hold/);
   assert.match(watch, /setExactAndAllowWhileIdle/);
   assert.match(watch, /SOS/);
