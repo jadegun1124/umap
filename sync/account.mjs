@@ -951,6 +951,8 @@ function adoptFamilyRecord(current, source, kakaoId, now) {
   if (!current.home && source.home) next.home = source.home;
   if (emptyList(current.journeys) && !emptyList(source.journeys)) next.journeys = source.journeys;
   if (emptyList(current.visits) && !emptyList(source.visits)) next.visits = source.visits;
+  // A seal makes the public account return empty trip lists. Keep this
+  // account's plaintext trips instead of hiding them behind that seal.
   const currentPlainEmpty = emptyList(next.journeys) && emptyList(next.visits);
   if (!current.sealedHistory && source.sealedHistory && currentPlainEmpty) {
     next.sealedHistory = source.sealedHistory;
