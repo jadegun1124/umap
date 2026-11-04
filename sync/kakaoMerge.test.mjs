@@ -159,6 +159,8 @@ test('kakao conflict can merge the old family into the current account once', as
   assert.match(screen, /linkKakaoAccount\([\s\S]*'link', true\)/);
   assert.match(settings, /KakaoMergeSheet/);
   assert.match(settings, /linkKakaoAccount\([\s\S]*'link', true\)/);
+  assert.match(settings, /openAccountSecrets\(linked\.account/);
+  assert.equal(settings.includes('opened.journeys = localJourneys'), false);
   assert.match(readFileSync(new URL('../src/components/family/KakaoMergeSheet.tsx', import.meta.url), 'utf8'), /서버는 열쇠와 기록을 풀지 않습니다/);
 });
 

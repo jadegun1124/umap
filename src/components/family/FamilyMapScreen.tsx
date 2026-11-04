@@ -2945,17 +2945,6 @@ function RecoveryCodePanel() {
               rememberAccountSecrets(localStorage, linked.account);
               setLinks(readStoredAccountLinks(localStorage));
               const opened = await openAccountSecrets(linked.account, localStorage);
-              if (opened.historyLocked) {
-                const localJourneys = family.state.journeys?.self;
-                const localVisits = family.state.visits?.self;
-                if (Array.isArray(localJourneys) && localJourneys.length && (!Array.isArray(opened.journeys) || opened.journeys.length === 0)) {
-                  opened.journeys = localJourneys;
-                }
-                if (Array.isArray(localVisits) && localVisits.length && (!Array.isArray(opened.visits) || opened.visits.length === 0)) {
-                  opened.visits = localVisits;
-                }
-                if (!opened.home && family.state.home) opened.home = family.state.home;
-              }
               setNote('기존 계정의 가족 방을 이 계정으로 가져왔습니다. 카카오 로그인은 이제 이 계정입니다. 암호화된 지난 기록은 가족 폰이 열쇠를 다시 감쌀 때까지 열리지 않을 수 있습니다.');
               family.restoreAccount(opened);
             }).catch(() => {
