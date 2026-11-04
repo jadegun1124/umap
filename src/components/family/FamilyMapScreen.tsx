@@ -2529,7 +2529,7 @@ function ManagedInviteSheet({
             value={code}
             onChange={(event) => {
               const next = event.target.value;
-              if (next.trim().startsWith('http://') || next.trim().startsWith('https://')) {
+              if (next.trim().startsWith('http://') || next.trim().startsWith('https://') || next.trim().startsWith('kinnex://')) {
                 applyParsed(parseInviteDraft(next));
                 return;
               }

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createMemoryAccountStore } from './account.mjs';
+import { cleanAccountSnapshot, createMemoryAccountStore } from './account.mjs';
+import { applyAccountSnapshot, snapshotFromSession } from '../src/lib/accountRestore.mjs';
 import { handleSyncRequest, syncTokenFor } from './protocol.mjs';
 import { ensureRoster } from '../src/lib/peerFamily.mjs';
 import { buildGroupInviteLink, parseInviteUrl, syncTokenFromInviteFragment } from '../src/lib/inviteLink.mjs';
@@ -83,14 +84,55 @@ test('a group link redeems the roster without sending the room key to the server
   const owner = { id: 'self', name: '엄마', role: 'self', publisherId: 'local-ownera' };
   const dad = { memberId: 'local-dadaaa', name: '아빠', at: now };
   const child = { memberId: 'local-child1', name: '아이', at: now };
-  const roster = ensureRoster([owner], [dad, child], '48291', 'local-ownera');
+  const roster = ensureRoster([owner], [{ memberId: 'local-ownera', name: '엄마', at: now }, dad, child], '48291', 'local-ownera');
   assert.equal(roster.joined.length, 2);
-  assert.equal(roster.members.some((member) => member.publisherId === 'local-dadaaa'), true);
+  assert.equal(roster.members.find((member) => member.id === 'self').lead, true);
+  assert.equal(roster.members.find((member) => member.publisherId === 'local-dadaaa').lead, undefined);
   assert.equal(roster.members.some((member) => member.publisherId === 'local-child1'), true);
   const back = ensureRoster(roster.members, [{ memberId: 'local-joiner', name: '새가족', at: now }], '48291', 'local-ownera');
   assert.equal(back.members.some((member) => member.name === '새가족'), true);
   assert.equal(back.members.filter((member) => member.publisherId === 'local-dadaaa').length, 1);
-  const hidden = ensureRoster(back.members, [{ memberId: 'local-joiner', name: '새가족', at: now }], '48291', 'local-ownera', ['local-joiner']);
+  const removed = back.members.filter((member) => member.publisherId !== 'local-joiner');
+  const hidden = ensureRoster(removed, [{ memberId: 'local-joiner', name: '새가족', at: now }], '48291', 'local-ownera', ['local-joiner', 'family:48291:local-joiner']);
   assert.equal(hidden.joined.length, 0);
-  assert.equal(hidden.members.filter((member) => member.publisherId === 'local-joiner').length, 1);
+  assert.equal(hidden.members.some((member) => member.publisherId === 'local-joiner'), false);
+});
+
+test('a joiner keeps the room owner id and the owner badge across backup', () => {
+  const cleaned = cleanAccountSnapshot({
+    memberId: 'local-joinera',
+    profileKey: 'profilekeyBBBBBBBB',
+    profile: { name: '새가족' },
+    room: { code: '48291', writeKey: 'writeKeyAAAAAAAAAA', readKey: 'readKeyAAAAAAAAAAA' },
+    guardians: [{ id: 'g-1', label: '엄마', code: '48291', share: 'accepted', ownerMemberId: 'local-ownera' }],
+    roster: [{ id: 'family:48291:local-ownera', name: '엄마', role: 'admin-share', publisherId: 'local-ownera', lead: true }],
+  });
+  assert.equal(cleaned.snapshot.guardians[0].ownerMemberId, 'local-ownera');
+  assert.equal(cleaned.snapshot.roster[0].lead, true);
+  const dropped = cleanAccountSnapshot({
+    memberId: 'local-joinera',
+    profileKey: 'profilekeyBBBBBBBB',
+    profile: { name: '새가족' },
+    room: { code: '48291', writeKey: 'writeKeyAAAAAAAAAA', readKey: 'readKeyAAAAAAAAAAA' },
+    guardians: [{ id: 'g-1', label: '엄마', code: '48291', share: 'accepted', ownerMemberId: 'mom' }],
+  });
+  assert.equal(dropped.snapshot.guardians[0].ownerMemberId, undefined);
+  const session = {
+    profile: { id: 'local-joinera', name: '새가족', profileKey: 'profilekeyBBBBBBBB' },
+    inviteCode: '48291',
+    syncWriteKey: 'writeKeyAAAAAAAAAA',
+    syncReadKey: 'readKeyAAAAAAAAAAA',
+    guardians: cleaned.snapshot.guardians,
+    members: [
+      { id: 'self', name: '새가족', role: 'self' },
+      { id: 'family:48291:local-ownera', name: '엄마', role: 'admin-share', publisherId: 'local-ownera', lead: true },
+    ],
+  };
+  const shot = snapshotFromSession(session);
+  assert.equal(shot.guardians[0].ownerMemberId, 'local-ownera');
+  assert.equal(shot.roster[0].lead, true);
+  const restored = applyAccountSnapshot({ permissions: { completed: true } }, { ...cleaned.snapshot, ...shot });
+  assert.equal(restored.guardians[0].ownerMemberId, 'local-ownera');
+  assert.equal(restored.members.find((member) => member.publisherId === 'local-ownera').lead, true);
+  assert.equal(restored.members.find((member) => member.id === 'self').lead, undefined);
 });

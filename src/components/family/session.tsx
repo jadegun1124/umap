@@ -435,6 +435,7 @@ function cleanGuardians(value: unknown): GuardianLink[] {
     const syncToken = cleanSyncToken(link.syncToken);
     const rosterName = typeof link.rosterName === 'string' ? link.rosterName.trim().slice(0, 80) : '';
     const adminName = typeof link.adminName === 'string' ? link.adminName.trim().slice(0, 20) : '';
+    const ownerMemberId = isMemberId(link.ownerMemberId) ? link.ownerMemberId : '';
     links.push({
       id: link.id,
       label: (link.label || '관리자').slice(0, 20),
@@ -444,6 +445,7 @@ function cleanGuardians(value: unknown): GuardianLink[] {
       ...(syncToken ? { syncToken } : {}),
       ...(rosterName ? { rosterName } : {}),
       ...(adminName ? { adminName } : {}),
+      ...(ownerMemberId ? { ownerMemberId } : {}),
     });
   }
   return links;

@@ -228,10 +228,12 @@ function cleanGuardian(input) {
     : undefined;
   const rosterName = typeof input.rosterName === 'string' ? input.rosterName.trim().slice(0, 80) : '';
   const adminName = cleanName(input.adminName);
+  const ownerMemberId = typeof input.ownerMemberId === 'string' && MEMBER_ID.test(input.ownerMemberId) ? input.ownerMemberId : '';
   const next = { id, label, code, share };
   if (syncToken) next.syncToken = syncToken;
   if (rosterName) next.rosterName = rosterName;
   if (adminName) next.adminName = adminName;
+  if (ownerMemberId) next.ownerMemberId = ownerMemberId;
   if (input.leaveAlert && typeof input.leaveAlert === 'object') {
     const lat = finiteNumber(input.leaveAlert.lat);
     const lng = finiteNumber(input.leaveAlert.lng);
@@ -332,6 +334,7 @@ function cleanRoster(input) {
     if (typeof item.role === 'string' && item.role.trim()) row.role = item.role.trim().slice(0, 20);
     if (typeof item.publisherId === 'string' && MEMBER_ID.test(item.publisherId)) row.publisherId = item.publisherId;
     if (typeof item.inviteCode === 'string' && CODE_PART.test(item.inviteCode)) row.inviteCode = item.inviteCode;
+    if (item.lead === true) row.lead = true;
     roster.push(row);
     if (roster.length >= 12) break;
   }
