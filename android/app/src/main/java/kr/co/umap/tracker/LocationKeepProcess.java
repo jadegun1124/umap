@@ -1,19 +1,20 @@
 package kr.co.umap.tracker;
 
-import android.content.BroadcastReceiver;
-import android.content.Context;
-import android.content.IntentFilter;
-import android.location.LocationManager;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
+import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
+import android.location.LocationManager;
 import android.content.pm.ServiceInfo;
 import android.os.Build;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
 import android.os.PowerManager;
 
 /**
@@ -32,6 +33,15 @@ public class LocationKeepProcess extends Service {
     private static volatile boolean foreground;
     private static PowerManager.WakeLock movingLock;
     private BroadcastReceiver providers;
+    private final Handler gpsWatch = new Handler(Looper.getMainLooper());
+    private final Runnable pokeGps = new Runnable() {
+        @Override
+        public void run() {
+            LocationKeepService.pokeGps(LocationKeepProcess.this);
+            gpsWatch.postDelayed(this, FIX_WATCH_MS);
+        }
+    };
+    private static final long FIX_WATCH_MS = 15_000L;
 
     public static boolean isAlive() {
         return foreground;
@@ -100,6 +110,8 @@ public class LocationKeepProcess extends Service {
         }
         LocationKeepService.ensureRunning(this);
         registerProviders();
+        gpsWatch.removeCallbacks(pokeGps);
+        gpsWatch.postDelayed(pokeGps, FIX_WATCH_MS);
         return START_STICKY;
     }
 
@@ -115,6 +127,7 @@ public class LocationKeepProcess extends Service {
         boolean revive = LocationKeepService.wanted(this);
         foreground = false;
         setMovingWake(this, false);
+        gpsWatch.removeCallbacks(pokeGps);
         unregisterProviders();
         if (revive) LocationKeepService.scheduleRevive(this);
         super.onDestroy();

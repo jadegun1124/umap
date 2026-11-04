@@ -128,7 +128,7 @@ public class LocationKeepService {
     private static long requestedGpsMs = GPS_STILL_PROBE_MS;
     private static long stillSinceMs = 0;
     private static long lastRideAt = 0L;
-    private static boolean movingStream = false;
+    private static volatile boolean movingStream = false;
     /** Quiet long enough that the next stay request may widen past the 30s probe. */
     private static boolean stayConfirmed = false;
     /** A hint of movement that has not armed the 2.5s stream. */
@@ -301,6 +301,20 @@ public class LocationKeepService {
 
     public static boolean userStopped(Context context) {
         return prefs(context).getBoolean("userStopped", false);
+    }
+
+    /** Called every 15s from the foreground service, so a dead GPS listener is not left until the 2 minute alarm. */
+    public static void pokeGps(Context context) {
+        if (context == null || !wanted(context) || !hasLocationPermission(context)) return;
+        long last = lastFixAt(context);
+        long quiet = last <= 0L ? Long.MAX_VALUE : System.currentTimeMillis() - last;
+        long due = movingStream ? FIX_STALE_MOVING_MS : FIX_STALE_STILL_MS;
+        if (quiet < due) return;
+        JSONObject config = readConfig(context);
+        if (config == null || !anySharing(config)) return;
+        synchronized (LOCK) {
+            registerUpdates(context, config, true);
+        }
     }
 
     /** Re-register GPS after the foreground service is up. A background registration can be dropped. */

@@ -45,8 +45,9 @@ public class KeepAliveWorker extends Worker {
             return Result.success();
         }
         if (!LocationKeepProcess.isAlive() || LocationKeepService.fixStale(context)) {
-            LocationKeepProcess.hold(context);
-            LocationKeepService.ensureRunning(context);
+            // Android 12+ rejects startForegroundService from a background worker.
+            // An exact alarm is allowed to bring the foreground service back.
+            LocationKeepService.scheduleRevive(context);
         }
         return Result.success();
     }

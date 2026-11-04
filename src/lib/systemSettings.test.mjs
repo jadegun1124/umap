@@ -90,6 +90,11 @@ test('location keep is a foreground service that restarts with the task and the 
   const worker = readFileSync(new URL('../../android/app/src/main/java/kr/co/umap/tracker/KeepAliveWorker.java', import.meta.url), 'utf8');
   assert.match(worker, /PeriodicWorkRequest/);
   assert.match(worker, /15, TimeUnit.MINUTES/);
+  assert.match(worker, /scheduleRevive/);
+  assert.equal(worker.includes('LocationKeepProcess.hold'), false);
+  assert.match(process, /pokeGps/);
+  assert.match(process, /15_000L/);
+  assert.match(location, /void pokeGps/);
   assert.match(location, /LocationKeepProcess\.hold/);
   assert.match(watch, /setExactAndAllowWhileIdle/);
   assert.match(watch, /SOS/);
