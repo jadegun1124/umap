@@ -318,12 +318,14 @@ public class LocationKeepService {
 
     private static boolean shouldReregisterGps(Context context) {
         if (context == null || !wanted(context) || !hasLocationPermission(context)) return false;
-        long last = lastFixAt(context);
-        if (last <= 0L) return false;
         long now = System.currentTimeMillis();
-        long due = movingStream ? FIX_STALE_MOVING_MS : FIX_STALE_STILL_MS;
-        if (now - last < due) return false;
+        long last = lastFixAt(context);
+        if (lastReregisterAt <= 0L) return false;
         if (now - lastReregisterAt < GPS_REREGISTER_COOLDOWN_MS) return false;
+        if (last > 0L) {
+            long due = movingStream ? FIX_STALE_MOVING_MS : FIX_STALE_STILL_MS;
+            if (now - last < due) return false;
+        }
         JSONObject config = readConfig(context);
         return config != null && anySharing(config);
     }

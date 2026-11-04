@@ -96,7 +96,7 @@ test('location keep is a foreground service that restarts with the task and the 
   assert.match(process, /15_000L/);
   assert.match(location, /void pokeGps/);
   assert.match(location, /GPS_REREGISTER_COOLDOWN_MS = 60_000L/);
-  assert.match(location, /if \(last <= 0L\) return false/);
+  assert.match(location, /if \(lastReregisterAt <= 0L\) return false/);
   assert.match(location, /LocationKeepProcess\.hold/);
   assert.match(watch, /setExactAndAllowWhileIdle/);
   assert.match(watch, /SOS/);
