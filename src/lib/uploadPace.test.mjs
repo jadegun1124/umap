@@ -23,8 +23,8 @@ test('moving uploads every 30s, still every 60s, and a state change uploads now'
   assert.equal(pace.stillMs, 60_000);
   assert.equal(java.includes('PUBLISH_MOVING_M'), false);
   assert.match(java, /upload\.moving = movingNow/);
-  assert.match(java, /if \(envelope == null\) \{\s*ok = false;/);
-  assert.match(java, /if \(sharing && location != null\) ok = false;/);
+  assert.match(java, /heldBack = true/);
+  assert.match(java, /return heldBack \? 0 : 1/);
 
   const moving = [];
   for (let at = 0; at <= 90_000; at += 2_000) moving.push({ at, moving: true });

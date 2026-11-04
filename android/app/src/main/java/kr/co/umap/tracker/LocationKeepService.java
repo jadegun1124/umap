@@ -330,9 +330,12 @@ public class LocationKeepService {
             synchronized (LOCK) {
                 upload = handleFix(context, location);
             }
-            if (upload != null && publish(context, upload)) {
-                synchronized (LOCK) {
-                    commitUpload(context, upload);
+            if (upload != null) {
+                int posted = publish(context, upload);
+                if (posted >= 0) {
+                    synchronized (LOCK) {
+                        commitUpload(context, upload, posted == 1);
+                    }
                 }
             }
         } finally {
@@ -384,7 +387,8 @@ public class LocationKeepService {
                         upload.flush = false;
                         upload.at = System.currentTimeMillis();
                         upload.sent = 0;
-                        if (publish(context, upload)) {
+                        int posted = publish(context, upload);
+                        if (posted >= 0) {
                             synchronized (LOCK) {
                                 lastPublishedAt = upload.at;
                                 rememberFilter(context);
@@ -711,9 +715,11 @@ public class LocationKeepService {
         return upload;
     }
 
-    private static void commitUpload(Context context, Upload upload) {
-        for (int index = 0; index < upload.sent && pendingPoints.length() > 0; index += 1) {
-            pendingPoints.remove(0);
+    private static void commitUpload(Context context, Upload upload, boolean dropPending) {
+        if (dropPending) {
+            for (int index = 0; index < upload.sent && pendingPoints.length() > 0; index += 1) {
+                pendingPoints.remove(0);
+            }
         }
         if (upload.pin != null) lastPublished = new Location(upload.pin);
         lastPublishedAt = upload.at;
@@ -904,14 +910,15 @@ public class LocationKeepService {
         }
     }
 
-    private static boolean publish(Context context, Upload upload) {
+    /** 1 when every sealed target accepted the batch, 0 when the clock should move but points stay, -1 when nothing was attempted. */
+    private static int publish(Context context, Upload upload) {
         Location location = upload == null ? null : upload.pin;
         return publishBody(context, location, upload);
     }
 
-    private static boolean publishBody(Context context, Location location, Upload upload) {
+    private static int publishBody(Context context, Location location, Upload upload) {
         JSONObject current = readConfig(context);
-        if (current == null) return location == null;
+        if (current == null) return location == null ? 0 : -1;
         String base = current.optString("baseUrl", "").replaceAll("/+$", "");
         String name = current.optString("name", "가족").trim();
         if (name.isEmpty()) name = "가족";
@@ -922,9 +929,10 @@ public class LocationKeepService {
         long at = System.currentTimeMillis();
         int battery = batteryPct(context);
         boolean charging = chargingNow(context);
-        if (!prefs(context).getBoolean("registered", false)) return false;
+        if (!prefs(context).getBoolean("registered", false)) return -1;
         boolean changed = false;
-        boolean ok = true;
+        boolean wantedShare = false;
+        boolean heldBack = false;
         for (JSONObject target : targets(current)) {
             boolean sharing = target.optBoolean("sharing", false);
             if (sharing && location == null) continue;
@@ -949,8 +957,9 @@ public class LocationKeepService {
                     secret.put("lng", location.getLongitude());
                     secret.put("accuracyM", Math.round(Math.max(0f, location.getAccuracy())));
                     JSONObject envelope = sealInfo == null ? null : sealCoordinates(sealInfo.optString("key"), sealInfo.optString("kid"), secret.toString());
+                    wantedShare = true;
                     if (envelope == null) {
-                        ok = false;
+                        heldBack = true;
                         continue;
                     }
                     body.put("lat", JSONObject.NULL);
@@ -963,7 +972,7 @@ public class LocationKeepService {
                     if (upload != null && upload.flush) body.put("flush", true);
                     JSONObject trail = upload == null ? null : sealTrail(sealInfo, upload.trail);
                     if (upload != null && upload.trail != null && upload.trail.length() > 0 && trail == null) {
-                        ok = false;
+                        heldBack = true;
                         continue;
                     }
                     if (trail != null) body.put("trail", trail);
@@ -973,14 +982,15 @@ public class LocationKeepService {
                     target.put("revokeSent", !sharing);
                     changed = true;
                 } else if (sharing && location != null) {
-                    ok = false;
+                    heldBack = true;
                 }
             } catch (Exception ignored) {
-                if (sharing && location != null) ok = false;
+                if (sharing && location != null) heldBack = true;
             }
         }
         if (changed) prefs(context).edit().putString("config", current.toString()).apply();
-        return ok;
+        if (!wantedShare) return 0;
+        return heldBack ? 0 : 1;
     }
 
     private static String sealKidFingerprint(JSONObject config) {
