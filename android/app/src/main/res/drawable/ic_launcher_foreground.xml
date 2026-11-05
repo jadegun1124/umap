@@ -1,15 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
-<vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="108dp"
-    android:height="108dp"
-    android:viewportWidth="108"
-    android:viewportHeight="108">
-    <path
-        android:fillColor="#FFFFFFFF"
-        android:fillType="evenOdd"
-        android:pathData="M35.603,58.293A22.383,22.383 0 1,0 72.397,58.293L54.000,84.840ZM39.905,45.543a14.095,14.095 0 1,0 28.189,0a14.095,14.095 0 1,0 -28.189,0" />
-    <path
-        android:fillColor="#FFFFFFFF"
-        android:pathData="M47.647,45.543a6.353,6.353 0 1,0 12.706,0a6.353,6.353 0 1,0 -12.706,0" />
-
-</vector>
+<bitmap xmlns:android="http://schemas.android.com/apk/res/android"
+    android:gravity="fill"
+    android:src="@mipmap/ic_launcher_foreground" />

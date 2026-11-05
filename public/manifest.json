@@ -3,8 +3,8 @@
   "short_name": "Kinnex",
   "start_url": "./",
   "display": "standalone",
-  "background_color": "#023272",
-  "theme_color": "#023272",
+  "background_color": "#0149D3",
+  "theme_color": "#0149D3",
   "orientation": "portrait",
   "description": "동의한 가족의 위치를 함께 보는 Kinnex",
   "icons": [

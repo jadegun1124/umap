@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 function text(path) {
   return readFileSync(new URL(path, import.meta.url), 'utf8');
@@ -10,39 +12,51 @@ function repo(path) {
   return new URL(path, import.meta.url);
 }
 
-test('vector pin and gradient replace the family-pin mark', () => {
-  const svg = text('../../resources/icon.svg');
-  assert.match(svg, /linearGradient/);
-  assert.match(svg, /#023272/);
-  assert.match(svg, /#30DDFF/);
-  assert.match(svg, /fill-rule="evenodd"/);
-  assert.equal(svg.includes('코기'), false);
-  assert.equal(svg.includes('family'), false);
-
-  const pin = text('../../resources/icon-pin.svg');
-  assert.match(pin, /fill-rule="evenodd"/);
-  assert.match(pin, /#ffffff/i);
-
+test('KINVO artwork is the launcher source and stays inside the adaptive safe circle', () => {
+  const source = readFileSync(repo('../../resources/kinvo-app-icon.png'));
+  assert.equal(source.readUInt32BE(16), 1080);
+  assert.equal(source.readUInt32BE(20), 1080);
   const agents = text('../../AGENTS.md');
-  assert.match(agents, /icon\.svg/);
-  assert.equal(agents.includes('코기'), false);
-  assert.equal(agents.includes('캐리어'), false);
+  assert.match(agents, /kinvo-app-icon\.png/);
+  assert.match(agents, /66dp/);
+  const script = text('../../scripts/render-kinvo-icon.py');
+  assert.match(script, /66 \/ 108/);
+  assert.match(script, /sqrt\(2\)/);
+
+  const report = execFileSync('python3', ['-c', `
+from PIL import Image
+import math
+im = Image.open("android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_foreground.png")
+w, h = im.size
+assert (w, h) == (432, 432), (w, h)
+assert im.getpixel((2, 2))[3] == 0
+center = im.getpixel((w // 2, h // 2))
+assert center[3] == 255 and not (center[0] > 240 and center[1] > 240 and center[2] > 240)
+bbox = im.getbbox()
+cx = cy = (w - 1) / 2
+radius = w * (66 / 108) / 2
+far = 0
+for x, y in ((bbox[0], bbox[1]), (bbox[2] - 1, bbox[1]), (bbox[0], bbox[3] - 1), (bbox[2] - 1, bbox[3] - 1)):
+    far = max(far, math.hypot(x - cx, y - cy))
+assert far <= radius + 0.6, (far, radius)
+print("ok")
+`], { cwd: fileURLToPath(new URL('../..', import.meta.url)) });
+  assert.match(report.toString(), /ok/);
 });
 
-test('Android adaptive, monochrome, and notification icons are vectors', () => {
+test('Android adaptive background is deep blue and the foreground is the KINVO bitmap', () => {
   const adaptive = text('../../android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml');
   assert.match(adaptive, /@drawable\/ic_launcher_background/);
-  assert.match(adaptive, /@drawable\/ic_launcher_foreground/);
+  assert.match(adaptive, /@mipmap\/ic_launcher_foreground/);
   assert.match(adaptive, /@drawable\/ic_launcher_monochrome/);
 
   const background = text('../../android/app/src/main/res/drawable/ic_launcher_background.xml');
-  assert.match(background, /<gradient/);
-  assert.match(background, /#FF023272/);
-  assert.match(background, /#FF30DDFF/);
+  assert.match(background, /#FF0149D3/);
+  assert.equal(background.includes('<gradient'), false);
 
   const foreground = text('../../android/app/src/main/res/drawable/ic_launcher_foreground.xml');
-  assert.match(foreground, /evenOdd/);
-  assert.match(foreground, /#FFFFFFFF/);
+  assert.match(foreground, /<bitmap/);
+  assert.match(foreground, /@mipmap\/ic_launcher_foreground/);
 
   const mono = text('../../android/app/src/main/res/drawable/ic_launcher_monochrome.xml');
   assert.match(mono, /#FFFFFFFF/);
@@ -74,14 +88,14 @@ test('legacy mipmaps, web icons, and maskable PWA icons are present', () => {
     '../../public/umap-icon-192-maskable.png',
     '../../public/umap-icon-512-maskable.png',
     '../../resources/icon-master.png',
-    '../../resources/icon.svg',
+    '../../resources/kinvo-app-icon.png',
   ];
   for (const file of files) {
     assert.equal(existsSync(repo(file)), true, file);
   }
 
   const manifest = JSON.parse(text('../../public/manifest.json'));
-  assert.equal(manifest.background_color, '#023272');
+  assert.equal(manifest.background_color, '#0149D3');
   const purposes = manifest.icons.map((icon) => `${icon.src}:${icon.purpose}`);
   assert.ok(purposes.includes('umap-icon-192.png:any'));
   assert.ok(purposes.includes('umap-icon-512.png:any'));
