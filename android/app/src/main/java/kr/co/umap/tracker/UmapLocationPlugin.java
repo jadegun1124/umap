@@ -522,6 +522,8 @@ public class UmapLocationPlugin extends Plugin {
             /* The web build still records the bundled version. */
         }
         String reason = LocationKeepService.lastError();
+        // A leftover "permission" from an earlier start must not outlive 항상 허용.
+        if ("permission".equals(reason) && hasBackground()) reason = null;
         if (reason != null) result.put("reason", reason);
         call.resolve(result);
     }

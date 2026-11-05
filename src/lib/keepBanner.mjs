@@ -12,24 +12,22 @@ export const KEEP_RESTART_OK_MS = 4_000;
 const FAMILY_STOPS = '가족 지도의 내 위치가 갱신되지 않습니다.';
 
 /**
- * A fresh heartbeat from the foreground service means it is alive, even when
- * the registered flag is stale. A stale heartbeat means it is dead, even when
- * that flag is still true.
+ * A fresh heartbeat, or the process still holding the foreground service,
+ * means keep is alive. A stale GPS fix does not. Standing still can go minutes
+ * without an accepted point while the service keeps beating.
+ * A stale heartbeat with the process gone means it is dead, even when a
+ * leftover registered flag is still true.
  */
 export const FIX_STALE_STILL_MS = 90_000;
 
 export function serviceAlive({
   serviceRunning = false,
   heartbeatAt = 0,
-  lastFixAt = 0,
   now = Date.now(),
   freshMs = KEEP_HEARTBEAT_FRESH_MS,
-  fixFreshMs = FIX_STALE_STILL_MS,
 } = {}) {
-  const fix = Number(lastFixAt);
-  if (Number.isFinite(fix) && fix > 0 && !(now - fix < fixFreshMs && now - fix >= -5_000)) return false;
   const beat = Number(heartbeatAt);
-  if (Number.isFinite(beat) && beat > 0) return now - beat < freshMs && now - beat >= -5_000;
+  if (Number.isFinite(beat) && beat > 0 && now - beat < freshMs && now - beat >= -5_000) return true;
   return serviceRunning === true;
 }
 
@@ -50,13 +48,14 @@ export function keepBanner({
   batteryUnrestricted = true,
   reason = '',
   heartbeatAt = 0,
-  lastFixAt = 0,
   now = Date.now(),
 } = {}) {
   if (!native || !onMap || userStopped) return null;
   if (keepAlive !== true) return null;
-  const alive = serviceAlive({ serviceRunning, heartbeatAt, lastFixAt, now });
-  if (locationMode !== 'always' || reason === 'permission') {
+  const alive = serviceAlive({ serviceRunning, heartbeatAt, now });
+  // The live permission read wins. A leftover start error must not call
+  // 항상 허용 missing after the user already set it.
+  if (locationMode !== 'always') {
     const batteryNote = batteryUnrestricted === false ? ' 배터리 제한 없음도 꺼져 있습니다.' : '';
     const text = locationMode === 'while-using'
       ? `위치는 앱 사용 중에만 허용입니다. ${FAMILY_STOPS} 눌러서 항상 허용으로 바꿉니다.${batteryNote}`
@@ -81,9 +80,9 @@ export function keepBanner({
       'start',
       'dead',
       '위치 유지가 꺼져 있습니다',
-      `위치 유지가 꺼져 있습니다. ${FAMILY_STOPS} 눌러서 다시 켭니다. 바로 안 되면 설정에서 항상 허용과 배터리 제한 없음을 확인해 주세요.`,
+      `위치 유지가 꺼져 있습니다. ${FAMILY_STOPS} 눌러서 다시 켭니다.`,
       '다시 켜기',
-      '설정으로 이동',
+      '',
       'app',
     );
   }
@@ -117,7 +116,7 @@ export function keepBannerVisible(banner, dismissed, now = Date.now()) {
 export function keepRestartStatus(phase) {
   if (phase === 'starting') return '다시 켜는 중입니다.';
   if (phase === 'on') return '위치 유지를 다시 켰습니다.';
-  if (phase === 'blocked') return '아직 켜지지 않았습니다. 설정에서 항상 허용과 배터리 제한 없음을 확인해 주세요.';
+  if (phase === 'blocked') return '아직 켜지지 않았습니다. 다시 켜기를 한 번 더 눌러 주세요.';
   return '';
 }
 
