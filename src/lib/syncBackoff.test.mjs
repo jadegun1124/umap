@@ -29,6 +29,12 @@ test('repeated 503s wait 5s, 15s, 45s, 2m, then 10m, and a success starts over',
   const again = applySyncOutcome(state, 'server', now, 0.5);
   assert.equal(again.attempt, 1);
   assert.equal(again.until - now, 5_000);
+  const stacked = applySyncOutcome(again, 'server', now + 1_000, 0.5);
+  assert.equal(stacked.attempt, 1);
+  assert.equal(stacked.until, again.until);
+  const earlyOk = applySyncOutcome(again, 'ok', now + 1_000, 0.5);
+  assert.equal(earlyOk.attempt, 1);
+  assert.equal(earlyOk.until, again.until);
 });
 
 test('jitter stays inside 20 percent and a network miss uses the same clock', () => {
@@ -67,7 +73,10 @@ test('upload, room poll, and chat poll use the backoff and do not retry every fe
   const sync = readFileSync(new URL('../services/familySync.ts', import.meta.url), 'utf8');
   assert.match(sync, /applySyncOutcome/);
   assert.match(sync, /syncRetryDelay\('write'/);
-  assert.match(sync, /syncRetryDelay\('read'/);
+  assert.match(sync, /syncRetryDelay\('room'/);
+  assert.match(sync, /syncRetryDelay\('family'/);
+  assert.match(sync, /syncRetryDelay\('chat'/);
+  assert.equal(sync.includes("syncRetryDelay('read'"), false);
   assert.equal(sync.includes('Math.min(retryMs * 2, 20000)'), false);
   assert.equal(sync.includes('delay = error === \'quota\' ? QUOTA_RETRY_MS : 8000'), false);
 

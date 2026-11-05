@@ -178,12 +178,16 @@ let profileQueue: { code: string; token: string; body: Record<string, unknown>; 
 let alertQueue: { alert: FamilyAlert; token: string } | null = null;
 let flushing = false;
 let flushTimer = 0;
-let readBackoff = { attempt: 0, until: 0 };
-let writeBackoff = { attempt: 0, until: 0 };
+const backoffs: Record<'write' | 'room' | 'family' | 'chat', { attempt: number; until: number }> = {
+  write: { attempt: 0, until: 0 },
+  room: { attempt: 0, until: 0 },
+  family: { attempt: 0, until: 0 },
+  chat: { attempt: 0, until: 0 },
+};
 let syncEpoch = 0;
 
-export function syncRetryDelay(channel: 'read' | 'write', normalMs: number, now = Date.now()): number {
-  return retryDelayMs(normalMs, channel === 'write' ? writeBackoff : readBackoff, now);
+export function syncRetryDelay(channel: 'write' | 'room' | 'family' | 'chat', normalMs: number, now = Date.now()): number {
+  return retryDelayMs(normalMs, backoffs[channel], now);
 }
 
 function transportOutcome(response: Response | null): 'ok' | 'server' | 'network' | '' {
@@ -193,11 +197,8 @@ function transportOutcome(response: Response | null): 'ok' | 'server' | 'network
   return kind === 'server' || kind === 'network' ? kind : '';
 }
 
-function settleBackoff(channel: 'read' | 'write', outcome: string, now = Date.now()) {
-  const current = channel === 'write' ? writeBackoff : readBackoff;
-  const next = applySyncOutcome(current, outcome, now);
-  if (channel === 'write') writeBackoff = next;
-  else readBackoff = next;
+function settleBackoff(channel: 'write' | 'room' | 'family' | 'chat', outcome: string, now = Date.now()) {
+  backoffs[channel] = applySyncOutcome(backoffs[channel], outcome, now);
 }
 
 const MAX_PROFILE_PHOTO = 24_000;
@@ -292,7 +293,7 @@ export async function fetchDirectChat(
   peer: string,
 ): Promise<FamilyChatMessage[] | null> {
   if (!syncToken || !splitSyncToken(syncToken) || !familySyncUrl() || !/^\d{4,6}$/.test(code) || !me.trim() || !peer.trim()) return null;
-  if (roomBlocked(code) || syncRetryDelay('read', 0) > 0) return null;
+  if (roomBlocked(code) || syncRetryDelay('chat', 0) > 0) return null;
   const query = new URLSearchParams({ me: me.trim().slice(0, 20), with: peer.trim().slice(0, 20) });
   try {
     const response = await request(`/v1/rooms/${code}/chat?${query}`, {
@@ -301,7 +302,7 @@ export async function fetchDirectChat(
     });
     if (response.status === 404) return null;
     await noteStatus(response);
-    settleBackoff('read', transportOutcome(response));
+    settleBackoff('chat', transportOutcome(response));
     if (response.status === 403) {
       blockRoom(code);
       return null;
@@ -309,7 +310,7 @@ export async function fetchDirectChat(
     if (!response.ok) return null;
     return readChatMessages(await response.json());
   } catch {
-    settleBackoff('read', 'network');
+    settleBackoff('chat', 'network');
     return null;
   }
 }
@@ -320,7 +321,7 @@ export async function fetchMyDirectThreads(
   me: string,
 ): Promise<{ peer: string; messages: FamilyChatMessage[] }[] | null> {
   if (!syncToken || !splitSyncToken(syncToken) || !familySyncUrl() || !/^\d{4,6}$/.test(code) || !me.trim()) return null;
-  if (roomBlocked(code) || syncRetryDelay('read', 0) > 0) return [];
+  if (roomBlocked(code) || syncRetryDelay('chat', 0) > 0) return [];
   const query = new URLSearchParams({ me: me.trim().slice(0, 20) });
   try {
     const response = await request(`/v1/rooms/${code}/chat?${query}`, {
@@ -329,7 +330,7 @@ export async function fetchMyDirectThreads(
     });
     if (response.status === 404) return null;
     await noteStatus(response);
-    settleBackoff('read', transportOutcome(response));
+    settleBackoff('chat', transportOutcome(response));
     if (response.status === 403) {
       blockRoom(code);
       return [];
@@ -346,7 +347,7 @@ export async function fetchMyDirectThreads(
     }
     return threads;
   } catch {
-    settleBackoff('read', 'network');
+    settleBackoff('chat', 'network');
     return null;
   }
 }
@@ -949,7 +950,7 @@ export function startAdminRemoteSync(
   const tick = async () => {
     if (stopped) return;
     const quotaWait = quotaPollPaused(currentSyncPhase(), Date.now(), limitedUntil) ? Math.max(0, limitedUntil - Date.now()) : 0;
-    const retryWait = syncRetryDelay('read', 0);
+    const retryWait = syncRetryDelay('room', 0);
     if (quotaWait > 0 || retryWait > 0) {
       schedule(Math.max(quotaWait, retryWait));
       return;
@@ -978,7 +979,7 @@ export function startAdminRemoteSync(
       });
       if (action === 'block') {
         blockRoom(link.code);
-        settleBackoff('read', outcome);
+        settleBackoff('room', outcome);
         return;
       }
       if (action === 'register' && self?.memberId && self.profileKey) {
@@ -1009,9 +1010,9 @@ export function startAdminRemoteSync(
       outcome = foldSyncOutcome(outcome, 'network');
       if (!stopped) setPhase('down');
     }
-    if (outcome) settleBackoff('read', outcome);
+    if (outcome) settleBackoff('room', outcome);
     if (stopped) return;
-    delay = syncRetryDelay('read', delay);
+    delay = syncRetryDelay('room', delay);
     if (document.visibilityState === 'hidden') delay = Math.max(delay, BACKGROUND_POLL_MIN_MS);
     schedule(delay);
   };
@@ -1090,7 +1091,7 @@ export function startManagedFamilySync(
   const tick = async () => {
     if (stopped) return;
     const quotaWait = quotaPollPaused(currentSyncPhase(), Date.now(), limitedUntil) ? Math.max(0, limitedUntil - Date.now()) : 0;
-    const retryWait = syncRetryDelay('read', 0);
+    const retryWait = syncRetryDelay('family', 0);
     if (quotaWait > 0 || retryWait > 0) {
       timer = window.setTimeout(() => void tick(), Math.max(quotaWait, retryWait));
       return;
@@ -1152,9 +1153,9 @@ export function startManagedFamilySync(
       if (!stopped && familySyncUrl()) setPhase('down');
       delay = BACKGROUND_POLL_MIN_MS;
     }
-    if (outcome) settleBackoff('read', outcome);
+    if (outcome) settleBackoff('family', outcome);
     if (stopped) return;
-    delay = syncRetryDelay('read', delay);
+    delay = syncRetryDelay('family', delay);
     if (document.visibilityState === 'hidden') delay = Math.max(delay, BACKGROUND_POLL_MIN_MS);
     timer = window.setTimeout(() => void tick(), delay);
   };

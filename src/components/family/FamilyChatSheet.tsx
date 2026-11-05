@@ -81,7 +81,7 @@ export function FamilyChatSheet({
         void pull().finally(() => {
           if (!cancel) arm();
         });
-      }, syncRetryDelay('read', CHAT_OPEN_POLL_MS));
+      }, syncRetryDelay('chat', CHAT_OPEN_POLL_MS));
     };
     arm();
     return () => {

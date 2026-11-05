@@ -1009,6 +1009,7 @@ public class LocationKeepService {
         boolean changed = false;
         boolean wantedShare = false;
         boolean heldBack = false;
+        int round = 0;
         for (JSONObject target : targets(current)) {
             boolean sharing = target.optBoolean("sharing", false);
             if (sharing && location == null) continue;
@@ -1053,17 +1054,22 @@ public class LocationKeepService {
                     }
                     if (trail != null) body.put("trail", trail);
                 }
-                boolean posted = putOnce(base, target.optString("token"), body, identified ? profileKey : "");
-                if (posted) {
+                int status = put(base, target.optString("token"), body, identified ? profileKey : "");
+                if (status >= 200 && status < 300) {
                     target.put("revokeSent", !sharing);
                     changed = true;
-                } else if (sharing && location != null) {
-                    heldBack = true;
+                    if (round < 2) round = 1;
+                } else {
+                    if (status >= 500 || status < 0) round = 2;
+                    if (sharing && location != null) heldBack = true;
                 }
             } catch (Exception ignored) {
+                round = 2;
                 if (sharing && location != null) heldBack = true;
             }
         }
+        if (round == 2) UPLOAD_BACKOFF.fail(System.currentTimeMillis());
+        else if (round == 1) UPLOAD_BACKOFF.succeed();
         if (changed) prefs(context).edit().putString("config", current.toString()).apply();
         if (!wantedShare) return 0;
         return heldBack ? 0 : 1;
@@ -1121,16 +1127,6 @@ public class LocationKeepService {
         } catch (Exception ignored) {
             return null;
         }
-    }
-
-    private static boolean putOnce(String base, String token, JSONObject body, String profileKey) {
-        int status = put(base, token, body, profileKey);
-        if (status >= 200 && status < 300) {
-            UPLOAD_BACKOFF.succeed();
-            return true;
-        }
-        if (status >= 500 || status < 0) UPLOAD_BACKOFF.fail(System.currentTimeMillis());
-        return false;
     }
 
     private static String readStream(InputStream stream) throws Exception {

@@ -425,7 +425,7 @@ export function FamilyMapScreen() {
         void tick().finally(() => {
           if (!cancel) arm();
         });
-      }, syncRetryDelay('read', CHAT_LIST_POLL_MS));
+      }, syncRetryDelay('chat', CHAT_LIST_POLL_MS));
     };
     arm();
     const onResume = () => { void tick(); };

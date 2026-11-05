@@ -31,8 +31,12 @@ export function foldSyncOutcome(current, next) {
 
 export function applySyncOutcome(state, outcome, now, random = 0.5) {
   const current = state && typeof state.attempt === 'number' ? state : { attempt: 0, until: 0 };
+  const until = current.until || 0;
+  // A wait that is still running is one round. Another poller must not
+  // stack a step or clear it with its own 200.
+  if (until > now) return { attempt: current.attempt || 0, until };
   if (outcome === 'ok') return { attempt: 0, until: 0 };
-  if (outcome !== 'server' && outcome !== 'network') return { attempt: current.attempt || 0, until: current.until || 0 };
+  if (outcome !== 'server' && outcome !== 'network') return { attempt: current.attempt || 0, until };
   const attempt = (current.attempt || 0) + 1;
   const delay = syncBackoffDelayMs(attempt, random);
   return { attempt, until: now + delay };
