@@ -1,27 +1,21 @@
 #!/usr/bin/env python3
 """Rasterize the KINVO launcher from resources/kinvo-app-icon.png.
 
-Legacy and web icons use the full artwork. Adaptive foreground keeps that
-artwork inside the 66dp safe circle (a square inscribed in the circle, with
-a little inset) on a transparent canvas. The adaptive background is a flat
-deep blue sampled from the tile, so circle and squircle masks do not clip
-the family or the KINVO word. Notification and monochrome icons stay white
-silhouettes; Android tints those.
+The attached artwork is already the icon. Legacy, web, and adaptive
+foreground use that image full-bleed. Only the near-white padding that
+touches the image edge is recolored to the tile blue. Interior white,
+including the KINVO letters, stays. The adaptive background is the same
+flat blue. Notification and monochrome icons stay white silhouettes.
 """
 
 from __future__ import annotations
 
-import math
 from pathlib import Path
 
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "resources" / "kinvo-app-icon.png"
-# Android adaptive safe circle is 66dp inside the 108dp layer.
-SAFE_DIAMETER = 66 / 108
-# Keep the square a hair inside that circle so mask antialiasing does not eat the wordmark.
-SAFE_INSET = 0.96
 BACKGROUND = (0x01, 0x49, 0xD3)  # #0149D3, the tile's deep blue
 
 
@@ -77,19 +71,9 @@ def circle_mask(size: int) -> Image.Image:
 
 
 def adaptive_foreground(size: int, tile: Image.Image) -> Image.Image:
-    canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    side = max(1, int(round(size * SAFE_DIAMETER / math.sqrt(2) * SAFE_INSET)))
-    icon = tile.resize((side, side), Image.Resampling.LANCZOS)
-    canvas.paste(icon, ((size - side) // 2, (size - side) // 2), icon)
-    return canvas
-
-
-def on_background(size: int, tile: Image.Image, fraction: float) -> Image.Image:
-    canvas = Image.new("RGBA", (size, size), (*BACKGROUND, 255))
-    side = max(1, int(round(size * fraction)))
-    icon = tile.resize((side, side), Image.Resampling.LANCZOS)
-    canvas.paste(icon, ((size - side) // 2, (size - side) // 2), icon)
-    return canvas
+    # The home-screen layer is the artwork itself. Do not shrink it into the
+    # 66dp circle; that made the family and the wordmark look padded.
+    return cover(size, tile)
 
 
 def splash(width: int, height: int, tile: Image.Image) -> Image.Image:
@@ -203,8 +187,8 @@ def emit() -> None:
     cover(32, tile).save(public / "favicon.png", optimize=True)
     cover(180, tile).convert("RGB").save(public / "apple-touch-icon.png", optimize=True)
     cover(512, tile).convert("RGB").save(public / "umap-icon-512.png", optimize=True)
-    on_background(192, tile, 0.80).convert("RGB").save(public / "umap-icon-192-maskable.png", optimize=True)
-    on_background(512, tile, 0.80).convert("RGB").save(public / "umap-icon-512-maskable.png", optimize=True)
+    cover(192, tile).convert("RGB").save(public / "umap-icon-192-maskable.png", optimize=True)
+    cover(512, tile).convert("RGB").save(public / "umap-icon-512-maskable.png", optimize=True)
 
     res = ROOT / "android" / "app" / "src" / "main" / "res"
     legacy = {"mdpi": 48, "hdpi": 72, "xhdpi": 96, "xxhdpi": 144, "xxxhdpi": 192}
@@ -212,7 +196,7 @@ def emit() -> None:
     for density, size in legacy.items():
         folder = res / f"mipmap-{density}"
         folder.mkdir(parents=True, exist_ok=True)
-        cover(size, tile).convert("RGB").save(folder / "ic_launcher.png", optimize=True)
+        cover(size, tile).save(folder / "ic_launcher.png", optimize=True)
         round_icon = cover(size, tile)
         round_icon.putalpha(circle_mask(size))
         round_icon.save(folder / "ic_launcher_round.png", optimize=True)
@@ -246,7 +230,7 @@ def emit() -> None:
         data["background_color"] = "#0149D3"
         data["theme_color"] = "#0149D3"
         manifest.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    print("KINVO icons written. adaptive background #0149D3, foreground inside the 66dp circle")
+    print("KINVO icons written. full-bleed artwork, adaptive background #0149D3")
 
 
 if __name__ == "__main__":

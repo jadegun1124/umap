@@ -72,20 +72,24 @@ function rgbaAt(png, x, y) {
   return png.pixels.subarray(index, index + 4);
 }
 
-test('KINVO artwork is the launcher source and stays inside the adaptive safe circle', () => {
+test('KINVO artwork fills the launcher tile and keeps the white letters', () => {
   const source = readFileSync(repo('../../resources/kinvo-app-icon.png'));
   assert.equal(source.readUInt32BE(16), 1080);
   assert.equal(source.readUInt32BE(20), 1080);
   const agents = text('../../AGENTS.md');
   assert.match(agents, /kinvo-app-icon\.png/);
-  assert.match(agents, /66dp/);
+  assert.match(agents, /#0149D3/);
+  assert.equal(agents.includes('66dp'), false);
   const script = text('../../scripts/render-kinvo-icon.py');
-  assert.match(script, /66 \/ 108/);
-  assert.match(script, /sqrt\(2\)/);
+  assert.match(script, /full-bleed/);
+  assert.equal(script.includes('66 / 108'), false);
+  assert.equal(script.includes('SAFE_INSET'), false);
 
   const foreground = decodeRgbaPng(readFileSync(repo('../../android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_foreground.png')));
   assert.deepEqual([foreground.width, foreground.height], [432, 432]);
-  assert.equal(rgbaAt(foreground, 2, 2)[3], 0);
+  const corner = rgbaAt(foreground, 2, 2);
+  assert.equal(corner[3], 255);
+  assert.ok(Math.abs(corner[0] - 0x01) < 16 && Math.abs(corner[1] - 0x49) < 16 && Math.abs(corner[2] - 0xD3) < 24, `corner ${[...corner]} is not tile blue`);
   const center = rgbaAt(foreground, Math.floor(foreground.width / 2), Math.floor(foreground.height / 2));
   assert.equal(center[3], 255);
   assert.equal(center[0] > 240 && center[1] > 240 && center[2] > 240, false);
@@ -110,14 +114,13 @@ test('KINVO artwork is the launcher source and stays inside the adaptive safe ci
       if (y > maxY) maxY = y;
     }
   }
-  const cx = (foreground.width - 1) / 2;
-  const cy = (foreground.height - 1) / 2;
-  const radius = foreground.width * (66 / 108) / 2;
-  let far = 0;
-  for (const [x, y] of [[minX, minY], [maxX, minY], [minX, maxY], [maxX, maxY]]) {
-    far = Math.max(far, Math.hypot(x - cx, y - cy));
-  }
-  assert.ok(far <= radius + 0.6, `artwork corner ${far} is outside safe radius ${radius}`);
+  assert.ok(minX <= 1 && minY <= 1 && maxX >= foreground.width - 2 && maxY >= foreground.height - 2, `artwork bbox ${minX},${minY},${maxX},${maxY} does not fill ${foreground.width}`);
+
+  const legacy = decodeRgbaPng(readFileSync(repo('../../android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png')));
+  assert.deepEqual([legacy.width, legacy.height], [192, 192]);
+  const legacyCorner = rgbaAt(legacy, 1, 1);
+  assert.equal(legacyCorner[3], 255);
+  assert.ok(legacyCorner[0] < 40 && legacyCorner[2] > 180, `legacy corner ${[...legacyCorner]} is still padding`);
 });
 
 test('Android adaptive background is deep blue and the foreground is the KINVO bitmap', () => {
