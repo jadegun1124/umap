@@ -12,6 +12,7 @@ import { ALWAYS_GUIDE_DISMISSED_KEY, CHAT_NOTIFY_ASKED_KEY, KEEP_PERMISSION_ASKE
 import { familyMapShowsTrail, memberLiveLines, recordsDayTrails } from '../../lib/mapTrail.mjs';
 import { noteDiag } from '../../lib/diagLog.mjs';
 import { shouldAutoFitRecord } from '../../lib/recordMapFit.mjs';
+import { createMapFollow, followTargetId, noteFollowTarget, noteRecenter, noteUserDrag, planFollowPan, recenterLabel } from '../../lib/mapFollow.mjs';
 import { shouldDeleteCreatedRoom } from '../../lib/familyRoom.mjs';
 import { motionAlertCopy, motionNotifyNames, nextMotionAlert } from '../../lib/motionAlert.mjs';
 import { collapseDuplicateJourneys, collapseIndoorStayDisplay, displayCoordinate, displayLivePoints, historyDayKeys, historyDayLabel, lastTravelAt, liveMotionLabel, liveTrailDrawable, liveTrailPoints, MOTION_STILL_HOLD_MS, previewOpenJourney, seoulDayEndMs, seoulDayKey } from '../../lib/tracking.mjs';
@@ -112,6 +113,8 @@ export function FamilyMapScreen() {
   const [adminSettings, setAdminSettings] = useState(false);
   const [chatTick, setChatTick] = useState(0);
   const placingRef = useRef(false);
+  const followRef = useRef(createMapFollow());
+  const [followOn, setFollowOn] = useState(true);
 
   useEffect(() => subscribeSyncPhase(setSyncPhase), []);
   useEffect(() => subscribeChat(() => setChatTick((value) => value + 1)), []);
@@ -649,6 +652,10 @@ export function FamilyMapScreen() {
   const historyDays = historyDayKeys(now);
   const activeHistoryDay = historyDays.includes(historyDay) ? historyDay : historyDays[0];
   const viewingRecords = recordId != null && !placingHome;
+  const followId = followTargetId(selected?.id);
+  const followMember = state.members.find((member) => member.id === followId) ?? null;
+  const followLat = followMember && hasLocation(followMember) ? followMember.lat : null;
+  const followLng = followMember && hasLocation(followMember) ? followMember.lng : null;
   const pathDay = viewingRecords ? activeHistoryDay : liveDay;
   const memberPoints = selected ? state.tracks[selected.id] ?? [] : [];
   const dayPoints = useMemo(
@@ -687,6 +694,7 @@ export function FamilyMapScreen() {
     ? dayJourneys.find((journey) => journey.id === detailId) ?? null
     : null;
   const detailOpen = viewingRecords && !!detailId && (detailId === 'open' ? !!openJourney : !!detailJourney);
+  const mapShown = state.tab === 'map' && !placingHome && !detailOpen && !viewingRecords;
   useEffect(() => {
     const id = window.setTimeout(() => mapRef.current?.invalidateSize(), 50);
     return () => window.clearTimeout(id);
@@ -762,6 +770,39 @@ export function FamilyMapScreen() {
   const missingSyncKey = state.guardians.some((link) => (link.share === 'allowed' || link.share === 'revoked') && !link.syncToken);
   const syncBanner = syncBannerText(syncPhase, missingSyncKey, Capacitor.isNativePlatform());
   const remoteLive = syncPhase === 'live';
+
+  useEffect(() => {
+    followRef.current = noteFollowTarget(followRef.current, followId);
+    setFollowOn(followRef.current.following);
+  }, [followId]);
+  useEffect(() => {
+    if (followLat == null || followLng == null) return;
+    const foreground = typeof document === 'undefined' || document.visibilityState !== 'hidden';
+    const planned = planFollowPan(followRef.current, {
+      now: Date.now(),
+      foreground,
+      mapVisible: mapShown,
+      memberId: followId,
+      lat: followLat,
+      lng: followLng,
+    });
+    followRef.current = planned.state;
+    if (planned.pan) mapRef.current?.followTo(planned.pan.lat, planned.pan.lng);
+  }, [followId, followLat, followLng, mapShown]);
+  const recenterFollow = () => {
+    followRef.current = noteRecenter(followRef.current);
+    setFollowOn(true);
+    if (followLat == null || followLng == null) return;
+    mapRef.current?.followTo(followLat, followLng);
+    followRef.current = planFollowPan(followRef.current, {
+      now: Date.now(),
+      foreground: true,
+      mapVisible: true,
+      memberId: followId,
+      lat: followLat,
+      lng: followLng,
+    }).state;
+  };
 
   const focusMember = (member: Member, fitTrail: boolean) => {
     setSelectedId(member.id);
@@ -952,6 +993,10 @@ export function FamilyMapScreen() {
             onUserView={() => {
               recordViewLocked.current = true;
             }}
+            onGesture={() => {
+              followRef.current = noteUserDrag(followRef.current);
+              setFollowOn(false);
+            }}
             onMove={(next) => {
               if (!placingRef.current) return;
               setDraftHome((prev) => {
@@ -1036,10 +1081,8 @@ export function FamilyMapScreen() {
               <Plus className="h-5 w-5" />
             </RoundButton>
             <RoundButton
-              label="내 위치"
-              onClick={() => {
-                if (self && hasLocation(self)) focusMember(self, false);
-              }}
+              label={recenterLabel(followId, followMember?.name)}
+              onClick={recenterFollow}
             >
               <LocateFixed className="h-5 w-5 text-[#0084FF]" />
             </RoundButton>
@@ -1077,6 +1120,15 @@ export function FamilyMapScreen() {
                 사이렌 끄기
               </button>
             </div>
+          )}
+          {!followOn && !detailOpen && !placingHome && (
+            <button
+              type="button"
+              onClick={recenterFollow}
+              className="absolute left-1/2 top-[38%] z-30 -translate-x-1/2 rounded-full bg-white px-4 py-2 text-sm font-black text-[#0084FF] shadow-md"
+            >
+              {recenterLabel(followId, followMember?.name)}
+            </button>
           )}
           <button
             type="button"

@@ -12,6 +12,7 @@ import type { HomeZone, Member, TrackPoint } from '../../types/family';
 
 export interface StreetMapHandle {
   panTo: (lat: number, lng: number) => void;
+  followTo: (lat: number, lng: number) => void;
   showMember: (lat: number, lng: number) => void;
   zoomBy: (delta: number) => void;
   fit: (points: { lat: number; lng: number }[]) => void;
@@ -53,7 +54,9 @@ export const StreetMap = forwardRef<StreetMapHandle, {
   onMove?: (center: { lat: number; lng: number }) => void;
   /** Pinch, drag, or the zoom buttons. Programmatic fit and playback pan do not call this. */
   onUserView?: () => void;
-}>(function StreetMap({ center, zoom, members, home, trails, trailColor, selectedId, onSelect, onClear, onMove, onUserView }, ref) {
+  /** User drag or pinch. Cancels a follow pan already in flight. */
+  onGesture?: () => void;
+}>(function StreetMap({ center, zoom, members, home, trails, trailColor, selectedId, onSelect, onClear, onMove, onUserView, onGesture }, ref) {
   const nodeRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<L.Map | null>(null);
   const layersRef = useRef<L.LayerGroup | null>(null);
@@ -68,16 +71,25 @@ export const StreetMap = forwardRef<StreetMapHandle, {
   const onClearRef = useRef(onClear);
   const onMoveRef = useRef(onMove);
   const onUserViewRef = useRef(onUserView);
+  const onGestureRef = useRef(onGesture);
   useEffect(() => {
     onSelectRef.current = onSelect;
     onClearRef.current = onClear;
     onMoveRef.current = onMove;
     onUserViewRef.current = onUserView;
+    onGestureRef.current = onGesture;
   });
 
   useImperativeHandle(ref, () => ({
     panTo(lat, lng) {
       mapRef.current?.panTo([lat, lng], { animate: true });
+    },
+    followTo(lat, lng) {
+      const map = mapRef.current;
+      if (!map) return;
+      const dragging = map.dragging as { _dragging?: boolean } | undefined;
+      if (dragging?._dragging) return;
+      map.panTo([lat, lng], { animate: true, duration: 0.65, easeLinearity: 0.2 });
     },
     showMember(lat, lng) {
       const map = mapRef.current;
@@ -90,6 +102,7 @@ export const StreetMap = forwardRef<StreetMapHandle, {
       if (!map) return;
       map.setZoom(Math.min(19, Math.max(7, map.getZoom() + delta)));
       onUserViewRef.current?.();
+      onGestureRef.current?.();
     },
     fit(points) {
       const map = mapRef.current;
@@ -179,10 +192,16 @@ export const StreetMap = forwardRef<StreetMapHandle, {
     map.on('moveend', emitMove);
     map.on('click', () => onClearRef.current?.());
     const noteUserView = (event: L.LeafletEvent) => {
-      if ((event as L.LeafletEvent & { originalEvent?: Event }).originalEvent) onUserViewRef.current?.();
+      if (!(event as L.LeafletEvent & { originalEvent?: Event }).originalEvent) return;
+      onUserViewRef.current?.();
+      onGestureRef.current?.();
     };
     map.on('zoomstart', noteUserView);
-    map.on('dragstart', noteUserView);
+    map.on('dragstart', () => {
+      map.stop();
+      onUserViewRef.current?.();
+      onGestureRef.current?.();
+    });
     setReady(true);
     const resize = () => map.invalidateSize();
     resize();
@@ -198,7 +217,7 @@ export const StreetMap = forwardRef<StreetMapHandle, {
       map.off('moveend');
       map.off('click');
       map.off('zoomstart', noteUserView);
-      map.off('dragstart', noteUserView);
+      map.off('dragstart');
       playbackRef.current = null;
       map.remove();
       mapRef.current = null;
