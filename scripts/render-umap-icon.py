@@ -597,12 +597,9 @@ def emit(start: tuple[int, int, int], end: tuple[int, int, int]) -> None:
 
 
 def main() -> None:
-    start, end = GRADIENT_START, GRADIENT_END
-    if len(sys.argv) > 1:
-        tile = extract_square_icon(Image.open(sys.argv[1]))
-        start, end = sample_gradient(tile)
-        print(f"sampled gradient {hex_of(start)} -> {hex_of(end)} from {sys.argv[1]}")
-    emit(start, end)
+    import runpy
+    print("Launcher art is resources/kinvo-app-icon.png.")
+    runpy.run_path(str(Path(__file__).with_name("render-kinvo-icon.py")), run_name="__main__")
 
 
 if __name__ == "__main__":
