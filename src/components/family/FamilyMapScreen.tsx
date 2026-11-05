@@ -117,6 +117,7 @@ export function FamilyMapScreen() {
   const placingRef = useRef(false);
   const followRef = useRef(createMapFollow());
   const [followOn, setFollowOn] = useState(true);
+  const [awaitingFamilyFit, setAwaitingFamilyFit] = useState(false);
 
   useEffect(() => subscribeSyncPhase(setSyncPhase), []);
   useEffect(() => subscribeChat(() => setChatTick((value) => value + 1)), []);
@@ -642,13 +643,18 @@ export function FamilyMapScreen() {
   useEffect(() => {
     if (fittedShare.current) return;
     const points = state.members.filter((member) => member.role !== 'guardian' && hasLocation(member) && (member.id === 'self' || member.share === 'allowed'));
-    if (points.length < 2) return;
+    if (points.length < 2) {
+      setAwaitingFamilyFit(false);
+      return;
+    }
+    setAwaitingFamilyFit(true);
     const timer = window.setInterval(() => {
       if (!mapRef.current) return;
       fittedShare.current = true;
       followRef.current = noteUserDrag(followRef.current);
       setFollowOn(false);
       mapRef.current.fit(points.flatMap((member) => (hasLocation(member) ? [{ lat: member.lat, lng: member.lng }] : [])));
+      setAwaitingFamilyFit(false);
       window.clearInterval(timer);
     }, 200);
     return () => window.clearInterval(timer);
@@ -780,9 +786,7 @@ export function FamilyMapScreen() {
     setFollowOn(followRef.current.following);
   }, [followId]);
   useEffect(() => {
-    if (followLat == null || followLng == null) return;
-    const othersOnMap = visibleMembers.filter((member) => hasLocation(member)).length >= 2;
-    if (!fittedShare.current && othersOnMap) return;
+    if (followLat == null || followLng == null || awaitingFamilyFit) return;
     const foreground = typeof document === 'undefined' || document.visibilityState !== 'hidden';
     const planned = planFollowPan(followRef.current, {
       now: Date.now(),
@@ -794,7 +798,7 @@ export function FamilyMapScreen() {
     });
     followRef.current = planned.state;
     if (planned.pan) mapRef.current?.followTo(planned.pan.lat, planned.pan.lng);
-  }, [followId, followLat, followLng, mapShown]);
+  }, [awaitingFamilyFit, followId, followLat, followLng, mapShown]);
   const recenterFollow = () => {
     followRef.current = noteRecenter(followRef.current);
     setFollowOn(true);
