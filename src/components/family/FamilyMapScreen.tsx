@@ -80,7 +80,9 @@ export function FamilyMapScreen() {
   const fittedShare = useRef(false);
   const [syncPhase, setSyncPhase] = useState<SyncPhase>(() => currentSyncPhase());
   const [now, setNow] = useState(() => Date.now());
-  const tracking = useFamilyTracking((lat, lng) => mapRef.current?.panTo(lat, lng));
+  const tracking = useFamilyTracking(() => {
+    // The first fix used to pan to self. Follow decides the camera after that.
+  });
   const [settingsNote, setSettingsNote] = useState<string | null>(null);
   const [keepPrompt, setKeepPrompt] = useState<'permission' | 'start' | 'none'>(() => keepEntryPrompt({
     notifications: state.permissions.notifications,
@@ -644,6 +646,8 @@ export function FamilyMapScreen() {
     const timer = window.setInterval(() => {
       if (!mapRef.current) return;
       fittedShare.current = true;
+      followRef.current = noteUserDrag(followRef.current);
+      setFollowOn(false);
       mapRef.current.fit(points.flatMap((member) => (hasLocation(member) ? [{ lat: member.lat, lng: member.lng }] : [])));
       window.clearInterval(timer);
     }, 200);
@@ -653,7 +657,7 @@ export function FamilyMapScreen() {
   const activeHistoryDay = historyDays.includes(historyDay) ? historyDay : historyDays[0];
   const viewingRecords = recordId != null && !placingHome;
   const followId = followTargetId(selected?.id);
-  const followMember = state.members.find((member) => member.id === followId) ?? null;
+  const followMember = visibleMembers.find((member) => member.id === followId) ?? null;
   const followLat = followMember && hasLocation(followMember) ? followMember.lat : null;
   const followLng = followMember && hasLocation(followMember) ? followMember.lng : null;
   const pathDay = viewingRecords ? activeHistoryDay : liveDay;
@@ -777,6 +781,8 @@ export function FamilyMapScreen() {
   }, [followId]);
   useEffect(() => {
     if (followLat == null || followLng == null) return;
+    const othersOnMap = visibleMembers.filter((member) => hasLocation(member)).length >= 2;
+    if (!fittedShare.current && othersOnMap) return;
     const foreground = typeof document === 'undefined' || document.visibilityState !== 'hidden';
     const planned = planFollowPan(followRef.current, {
       now: Date.now(),
@@ -1081,8 +1087,14 @@ export function FamilyMapScreen() {
               <Plus className="h-5 w-5" />
             </RoundButton>
             <RoundButton
-              label={recenterLabel(followId, followMember?.name)}
-              onClick={recenterFollow}
+              label={placingHome ? '내 위치로' : recenterLabel(followId, followMember?.name)}
+              onClick={() => {
+                if (placingHome) {
+                  if (self && hasLocation(self)) mapRef.current?.panTo(self.lat, self.lng);
+                  return;
+                }
+                recenterFollow();
+              }}
             >
               <LocateFixed className="h-5 w-5 text-[#0084FF]" />
             </RoundButton>

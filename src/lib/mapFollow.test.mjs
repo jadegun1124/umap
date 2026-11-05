@@ -82,6 +82,8 @@ test('follow stays quiet in the background, off the map, and while a finger is d
   assert.match(screen, /noteUserDrag/);
   assert.match(screen, /noteRecenter/);
   assert.match(screen, /recenterFollow/);
+  assert.match(screen, /visibleMembers\.find\(\(member\) => member\.id === followId\)/);
+  assert.match(screen, /if \(placingHome\)/);
   assert.match(map, /dragstart/);
   assert.match(map, /map\.stop\(\)/);
   assert.match(map, /followTo/);
