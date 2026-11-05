@@ -97,7 +97,7 @@ jobs:
       - name: Prepare APK Output
         run: |
           mkdir -p output
-          cp android/app/build/outputs/apk/release/app-release.apk output/kinnex-v1.61.0.apk
+          cp android/app/build/outputs/apk/release/app-release.apk output/kinnex-v1.62.0.apk
           echo "Output directory contents:"
           ls -lh output/
 
@@ -106,7 +106,7 @@ jobs:
           set -euo pipefail
           BUILD_TOOLS="$(ls -1 "$ANDROID_HOME/build-tools" | sort -V | tail -n 1)"
           APKSIGNER="$ANDROID_HOME/build-tools/${BUILD_TOOLS}/apksigner"
-          "$APKSIGNER" verify --print-certs output/kinnex-v1.61.0.apk | tee output/apk-certs.txt
+          "$APKSIGNER" verify --print-certs output/kinnex-v1.62.0.apk | tee output/apk-certs.txt
           python3 - <<'PY'
           import pathlib, re, subprocess
           certs = pathlib.Path("output/apk-certs.txt").read_text()
@@ -143,18 +143,18 @@ jobs:
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: kinnex-v1.61.0-apk
-          path: output/kinnex-v1.61.0.apk
+          name: kinnex-v1.62.0-apk
+          path: output/kinnex-v1.62.0.apk
           retention-days: 30
 
       - name: Create or Update GitHub Release with APK
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.61.0
-          name: 'Kinnex Android APK v1.61.0'
+          tag_name: v1.62.0
+          name: 'Kinnex Android APK v1.62.0'
           make_latest: true
           body: |
-            ### Kinnex 안드로이드 앱 1.61.0
+            ### Kinnex 안드로이드 앱 1.62.0
             - 가족 키가 없어도 키 업로드는 60초에 한 번만 합니다. 같은 방의 요청은 겹치지 않고, 열쇠가 바뀌지 않으면 그 이벤트로 다시 올리지 않습니다. 이미 있는 기록 열쇠는 매번 새로 감싸지 않습니다.
             - 서버는 같은 동기화에서 공개 키와 이어서 올리는 감싼 열쇠를 저장한 뒤, 45초 동안 그 구성원의 키를 다시 쓰지 않습니다. 공개 키와 감싼 열쇠가 같으면 방을 다시 쓰지 않습니다.
             - 읽기 열쇠가 없는 가족 위치는 30초마다 받습니다. 아직 구성원이 아니면 키를 한 번 올려 등록하고, 거절이 이어지면 그 방의 조회와 대화를 멈춥니다. 다시 들어오거나 로그인하면 다시 시작합니다.
@@ -165,15 +165,16 @@ jobs:
             - 카카오가 다른 계정에 연결되어 있으면 기존 가족 방을 이 계정으로 가져올지 묻습니다. 가져오면 카카오 로그인은 이 계정으로만 됩니다. 암호화된 지난 기록은 가족 폰이 열쇠를 다시 감싸기 전에는 열리지 않습니다.
             - 걸음은 5분, 차와 자전거는 12분 넘게 머물면 그 이동은 기록으로 넘어가고 진행 중 지도에서는 빠집니다. 진행 중 이동 안의 먼 점은 실선으로 이어집니다.
             - 그룹장이 가족 초대 링크를 보내면 받는 사람이 구성원 전체를 함께 봅니다. 방 열쇠는 주소의 # 뒤에만 있습니다.
+            - 초대 링크의 첫 버튼은 카카오톡으로 보내기입니다. 카카오톡이 없으면 다른 앱 공유로 넘어가고, 링크 복사는 그대로 있습니다.
             - 위치 서버가 503이면 재시도는 5초, 15초, 45초, 2분, 그다음 10분까지 늘어납니다. 성공하면 다시 이동 30초, 머무름 60초입니다.
-            - 설정에 앱 업데이트 버튼이 있습니다. 예: 앱 버전 1.61.0 (67).
+            - 설정에 앱 업데이트 버튼이 있습니다. 예: 앱 버전 1.62.0 (68).
             - 회사 홈 (GitHub Pages): https://jadegun1124.github.io/kinnex/
             - 이 파일: GitHub Releases APK. Google Play에는 없습니다.
-            - 다운로드: https://github.com/jadegun1124/umap/releases/download/v1.61.0/kinnex-v1.61.0.apk
+            - 다운로드: https://github.com/jadegun1124/umap/releases/download/v1.62.0/kinnex-v1.62.0.apk
             - 표시 이름: Kinnex
             - 패키지: `kr.co.umap.tracker`
-            - versionName: 1.61.0
-            - versionCode: 67
-          files: output/kinnex-v1.61.0.apk
+            - versionName: 1.62.0
+            - versionCode: 68
+          files: output/kinnex-v1.62.0.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

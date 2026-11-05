@@ -1,6 +1,9 @@
 package kr.co.umap.tracker;
 
 import android.app.Activity;
+import android.content.ActivityNotFoundException;
+import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.net.Uri;
 import androidx.browser.customtabs.CustomTabsIntent;
 import com.getcapacitor.JSObject;
@@ -11,11 +14,15 @@ import com.getcapacitor.annotation.CapacitorPlugin;
 import com.kakao.sdk.auth.model.OAuthToken;
 import com.kakao.sdk.common.model.ClientError;
 import com.kakao.sdk.common.model.ClientErrorCause;
+import com.kakao.sdk.share.ShareClient;
+import com.kakao.sdk.template.model.Link;
+import com.kakao.sdk.template.model.TextTemplate;
 import com.kakao.sdk.user.UserApiClient;
 import kotlin.Unit;
 
 @CapacitorPlugin(name = "UmapAuth")
 public class UmapAuthPlugin extends Plugin {
+    private static final String KAKAO_TALK_PACKAGE = "com.kakao.talk";
     private static volatile UmapAuthPlugin instance;
     private PluginCall pendingNaver;
     private String pendingNaverState = "";
@@ -69,6 +76,38 @@ public class UmapAuthPlugin extends Plugin {
             return;
         }
         loginWithKakaoAccount(activity, call);
+    }
+
+    @PluginMethod
+    public void inviteShareStatus(PluginCall call) {
+        Activity activity = getActivity();
+        JSObject payload = new JSObject();
+        boolean installed = activity != null && kakaoTalkInstalled(activity);
+        String key = BuildConfig.KAKAO_NATIVE_APP_KEY;
+        payload.put("kakaoInstalled", installed);
+        payload.put("kakaoShareReady", key != null && !key.isEmpty());
+        call.resolve(payload);
+    }
+
+    @PluginMethod
+    public void shareInvite(PluginCall call) {
+        String url = call.getString("url", "");
+        String mode = call.getString("mode", "chooser");
+        String text = call.getString("text", "");
+        Activity activity = getActivity();
+        if (activity == null || url == null || url.isEmpty()) {
+            call.resolve(shareResult(false));
+            return;
+        }
+        String body = text == null || text.isEmpty() ? url : text;
+        if ("kakao-share".equals(mode)) {
+            shareWithKakaoTemplate(activity, url, call);
+            return;
+        }
+        boolean ok = "kakao-intent".equals(mode)
+            ? shareWithKakaoPackage(activity, body)
+            : shareWithChooser(activity, body);
+        call.resolve(shareResult(ok));
     }
 
     @PluginMethod
@@ -197,6 +236,74 @@ public class UmapAuthPlugin extends Plugin {
         message = message.replaceAll("\\s+", " ").trim();
         if (message.length() > 160) message = message.substring(0, 160);
         return message.isEmpty() ? type : type + ": " + message;
+    }
+
+    private void shareWithKakaoTemplate(Activity activity, String url, PluginCall call) {
+        if (!kakaoTalkInstalled(activity)) {
+            call.resolve(shareResult(false));
+            return;
+        }
+        TextTemplate template = new TextTemplate(
+            "이 링크로 들어오면 가족 구성원이 함께 보입니다.",
+            new Link(url, url),
+            null,
+            "가족 참여"
+        );
+        activity.runOnUiThread(() -> ShareClient.getInstance().shareDefault(activity, template, (result, error) -> {
+            boolean opened = false;
+            if (error == null && result != null && result.getIntent() != null) {
+                try {
+                    activity.startActivity(result.getIntent());
+                    opened = true;
+                } catch (ActivityNotFoundException ignored) {
+                    opened = false;
+                }
+            }
+            call.resolve(shareResult(opened));
+            return Unit.INSTANCE;
+        }));
+    }
+
+    private boolean shareWithKakaoPackage(Activity activity, String text) {
+        if (!kakaoTalkInstalled(activity)) return false;
+        Intent send = new Intent(Intent.ACTION_SEND);
+        send.setType("text/plain");
+        send.putExtra(Intent.EXTRA_TEXT, text);
+        send.setPackage(KAKAO_TALK_PACKAGE);
+        send.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        try {
+            activity.startActivity(send);
+            return true;
+        } catch (ActivityNotFoundException ignored) {
+            return false;
+        }
+    }
+
+    private boolean shareWithChooser(Activity activity, String text) {
+        Intent send = new Intent(Intent.ACTION_SEND);
+        send.setType("text/plain");
+        send.putExtra(Intent.EXTRA_TEXT, text);
+        try {
+            activity.startActivity(Intent.createChooser(send, "가족 초대 보내기"));
+            return true;
+        } catch (ActivityNotFoundException ignored) {
+            return false;
+        }
+    }
+
+    private boolean kakaoTalkInstalled(Activity activity) {
+        try {
+            activity.getPackageManager().getPackageInfo(KAKAO_TALK_PACKAGE, 0);
+            return true;
+        } catch (PackageManager.NameNotFoundException ignored) {
+            return false;
+        }
+    }
+
+    private JSObject shareResult(boolean ok) {
+        JSObject payload = new JSObject();
+        payload.put("ok", ok);
+        return payload;
     }
 
     private JSObject failure(String code) {

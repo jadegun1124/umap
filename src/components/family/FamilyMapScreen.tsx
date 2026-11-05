@@ -47,6 +47,7 @@ import { useFamilyTracking } from './useFamilyTracking';
 import { useFamily } from './session';
 import { consumeAndroidBack } from '../../platform/androidExit';
 import { configuredKakaoLoginKey, signInWithKakao } from '../../services/kakaoSignIn';
+import { sendFamilyInvite } from '../../services/inviteShare';
 import { KakaoMergeSheet } from './KakaoMergeSheet';
 import { configuredNaverClientId, signInWithNaver } from '../../services/naverSignIn';
 
@@ -2369,18 +2370,22 @@ function AdminInviteSheet({
   const groupLink = ticket && token && familySyncUrl()
     ? buildGroupInviteLink(familySyncUrl() || '', code, ticket, token)
     : '';
-  const shareLink = async () => {
+  const shareKakao = async () => {
     if (!groupLink) return;
     try {
-      if (navigator.share) {
-        await navigator.share({ title: 'Kinnex 가족 초대', text: '이 링크로 들어오면 가족 구성원이 함께 보입니다.', url: groupLink });
-        setCopied('초대 링크를 보냈습니다');
+      const sent = await sendFamilyInvite(groupLink);
+      if (sent.ok && sent.path === 'chooser') {
+        setCopied('카카오톡이 없어 다른 앱으로 보냅니다');
+        return;
+      }
+      if (sent.ok) {
+        setCopied('카카오톡으로 보냈습니다');
         return;
       }
     } catch {
-      /* 공유 시트를 닫아도 복사는 남깁니다. */
+      /* 보내기가 거절돼도 링크 복사는 남습니다. */
     }
-    await copy(groupLink, '링크를 복사했습니다');
+    setCopied('보내지 못했습니다. 링크 복사를 눌러 주세요');
   };
 
   return (
@@ -2391,8 +2396,11 @@ function AdminInviteSheet({
         {' '}전화번호로는 위치를 찾지 않습니다.
       </p>
       <p className="mt-4 text-center text-4xl font-black tracking-[0.25em] text-[#0084FF]">{code}</p>
-      <button type="button" disabled={!groupLink} onClick={() => void shareLink()} className="mt-4 w-full rounded-full bg-[#0084FF] py-3.5 font-bold text-white disabled:opacity-40">
-        링크로 보내기
+      <button type="button" disabled={!groupLink} onClick={() => void shareKakao()} className="mt-4 w-full rounded-full bg-[#0084FF] py-3.5 font-bold text-white disabled:opacity-40">
+        카카오톡으로 보내기
+      </button>
+      <button type="button" disabled={!groupLink} onClick={() => copy(groupLink, '링크를 복사했습니다')} className="mt-2 w-full rounded-full bg-slate-100 py-3 text-sm font-bold text-slate-800 disabled:opacity-40">
+        링크 복사
       </button>
       {groupLink && <InviteQrImage text={groupLink} />}
       {token && <p className="mt-2 text-center text-[11px] leading-5 text-slate-400">초대 링크는 7일 동안 여러 사람이 쓸 수 있습니다. 방 열쇠는 주소의 # 뒤에만 있어 서버로 전달되지 않습니다. 그룹장이 취소할 수 있습니다.</p>}
@@ -2401,15 +2409,10 @@ function AdminInviteSheet({
         동기화 키
       </label>
       <input id="sync-token" readOnly value={token} aria-label="동기화 키" className="mt-1 w-full break-all rounded-2xl border border-slate-200 px-3 py-2 text-[11px] text-slate-600" />
-      <div className="mt-3 grid grid-cols-2 gap-2">
-        <button type="button" onClick={() => copy(code, '코드를 복사했습니다')} className="rounded-full bg-slate-100 py-2 text-xs font-bold">
-          <Copy className="mr-1 inline h-3.5 w-3.5" />
-          코드 복사
-        </button>
-        <button type="button" disabled={!groupLink} onClick={() => copy(groupLink, '링크를 복사했습니다')} className="rounded-full bg-slate-100 py-2 text-xs font-bold disabled:opacity-40">
-          링크 복사
-        </button>
-      </div>
+      <button type="button" onClick={() => copy(code, '코드를 복사했습니다')} className="mt-3 w-full rounded-full bg-slate-100 py-2 text-xs font-bold">
+        <Copy className="mr-1 inline h-3.5 w-3.5" />
+        코드 복사
+      </button>
       {token && (
         <button type="button" onClick={() => copy(token, '동기화 키를 복사했습니다')} className="mt-2 w-full rounded-full bg-slate-100 py-2 text-xs font-bold">
           동기화 키 복사
