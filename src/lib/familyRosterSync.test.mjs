@@ -55,6 +55,7 @@ test('a place batch that omits coordinates does not drop the other person or cle
   });
   const named = card(invited.members, JOINER);
   assert.equal(named.name, '아빠');
+  assert.deepEqual(invited.joined, ['아빠']);
   assert.equal(rosterMembers(invited.members, OWNER, CODE, '엄마').some((member) => member.publisherId === JOINER), true);
 
   const located = mergeFamilyRoster(invited.members, {
@@ -83,7 +84,28 @@ test('a place batch that omits coordinates does not drop the other person or cle
   assert.equal(kept.lat, 37.51);
   assert.equal(kept.lng, 127.04);
   assert.equal(kept.battery, 64);
+  assert.deepEqual(omitted.joined, []);
   assert.equal(rosterUnchanged(located.members, omitted.members), true);
+});
+
+test('a profile that arrives with a fix still counts as a new join', () => {
+  const arrived = mergeFamilyRoster([self(OWNER, '엄마')], {
+    code: CODE,
+    profiles: [profile(JOINER, '아빠')],
+    places: [place(JOINER, '아빠', 37.51, 127.04, 64, 1_700_000_003_000)],
+    selfId: OWNER,
+    ownerId: '',
+  });
+  assert.equal(card(arrived.members, JOINER).lat, 37.51);
+  assert.deepEqual(arrived.joined, ['아빠']);
+  const again = mergeFamilyRoster(arrived.members, {
+    code: CODE,
+    profiles: [profile(JOINER, '아빠')],
+    places: [place(JOINER, '아빠', 37.51, 127.04, 64, 1_700_000_003_000)],
+    selfId: OWNER,
+    ownerId: '',
+  });
+  assert.deepEqual(again.joined, []);
 });
 
 test('both phones show the other member with location and battery after redeem', () => {
@@ -320,4 +342,7 @@ test('the map poll opens family keys before it drops a sealed place', () => {
   assert.equal(session.includes('!member.id.startsWith(prefix)'), false);
   assert.match(session, /mergeFamilyRoster\(/);
   assert.match(session, /profileIds/);
+  const placeCase = session.slice(session.indexOf("case 'set-room-family-places'"), session.indexOf("case 'apply-canonical-trails'"));
+  assert.match(placeCase, /withJoinNotices\([\s\S]*merged\.joined/);
+  assert.match(session, /가족이 들어왔습니다/);
 });

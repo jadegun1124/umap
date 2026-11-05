@@ -165,6 +165,10 @@ export function mergeFamilyRoster(members, options = {}) {
     }
   }
 
+  const known = new Set();
+  for (const member of Array.isArray(members) ? members : []) {
+    if (member && typeof member.publisherId === 'string' && member.publisherId) known.add(member.publisherId);
+  }
   const ensured = ensureRoster(next, profiles, code, ownerId, hidden);
   next = ensured.members.map((member) => ({ ...member }));
   for (const [memberId, place] of batteryOnly) {
@@ -182,5 +186,13 @@ export function mergeFamilyRoster(members, options = {}) {
       charging: charging ?? prev.charging ?? null,
     };
   }
-  return { members: next, joined: ensured.joined };
+  const joined = [];
+  for (const profile of profiles) {
+    if (!profile || typeof profile.memberId !== 'string' || known.has(profile.memberId)) continue;
+    if (hiddenSet.has(profile.memberId) || hiddenSet.has(`${prefix}${profile.memberId}`)) continue;
+    const name = typeof profile.name === 'string' ? profile.name.trim().slice(0, 20) : '';
+    if (!name) continue;
+    joined.push(name);
+  }
+  return { members: next, joined };
 }
