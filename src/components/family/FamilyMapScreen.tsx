@@ -23,9 +23,9 @@ import { isMemberId } from '../../lib/sharedIdentity.mjs';
 import { Capacitor } from '@capacitor/core';
 import { CHAT_LIST_POLL_MS } from '../../lib/keySyncPace.mjs';
 import { abandonFamilySync, currentSyncPhase, deleteFamilyRoomRemote, familySyncConfigured, familySyncUrl, fetchMyDirectThreads, registerRoomPush, revokeFamilyPlace, rotateRemovedMember, splitSyncToken, startAdminRemoteSync, startSyncMonitor, subscribeSyncPhase, syncRetryDelay, syncTokenFor, type SyncPhase } from '../../services/familySync';
-import { keepBanner, serviceAlive } from '../../lib/keepBanner.mjs';
+import { KEEP_RESTART_HOLD_MS, keepBanner, keepBannerVisible, keepRestartStatus, nextKeepPhase, serviceAlive } from '../../lib/keepBanner.mjs';
 import { OLD_APP_PLACE_LABEL, syncBannerText } from '../../lib/syncBanner.mjs';
-import { consumePendingChat, listenChatOpen, overlayPermissionGranted, umapLocation, umapLocationNative } from '../../services/umapLocation';
+import { consumePendingChat, listenChatOpen, openAppSettings, overlayPermissionGranted, umapLocation, umapLocationNative } from '../../services/umapLocation';
 import { sounds } from '../../utils/audio';
 import { DEFAULT_CENTER, type GuardianLink, type HomeZone, type Member, type Session } from '../../types/family';
 import { AlwaysAllowGuide, AlwaysAllowMapHint } from './AlwaysAllowGuide';
@@ -107,7 +107,10 @@ export function FamilyMapScreen() {
   const [alwaysSetup, setAlwaysSetup] = useState(false);
   const [guideBusy, setGuideBusy] = useState(false);
   const [guideHintHidden, setGuideHintHidden] = useState(() => readSessionFlag(ALWAYS_GUIDE_DISMISSED_KEY));
-  const [keepHint, setKeepHint] = useState<{ text: string; action: 'start' | 'always' | 'battery' } | null>(null);
+  const [keepHint, setKeepHint] = useState<ReturnType<typeof keepBanner>>(null);
+  const [keepPhase, setKeepPhase] = useState<'idle' | 'starting' | 'on' | 'blocked'>('idle');
+  const keepDismissRef = useRef<{ kind: string; at: number } | null>(null);
+  const keepPhaseRef = useRef<{ phase: 'idle' | 'starting' | 'on' | 'blocked'; until: number }>({ phase: 'idle', until: 0 });
   const [keepLive, setKeepLive] = useState<{ battery: boolean | null; running: boolean; location: string }>({ battery: null, running: false, location: '' });
   const [profileOpen, setProfileOpen] = useState(false);
   const [recordId, setRecordId] = useState<string | null>(null);
@@ -174,7 +177,7 @@ export function FamilyMapScreen() {
           running: alive,
           location,
         });
-        setKeepHint(keepBanner({
+        const banner = keepBannerVisible(keepBanner({
           native: true,
           onMap: true,
           serviceRunning: alive,
@@ -185,7 +188,13 @@ export function FamilyMapScreen() {
           locationMode: location,
           batteryUnrestricted: status.batteryUnrestricted,
           reason: status.reason || '',
-        }));
+        }), keepDismissRef.current, Date.now());
+        setKeepHint(banner);
+        const nextPhase = nextKeepPhase(keepPhaseRef.current, { alive, banner, now: Date.now() });
+        if (nextPhase.phase !== keepPhaseRef.current.phase || nextPhase.until !== keepPhaseRef.current.until) {
+          keepPhaseRef.current = nextPhase;
+          setKeepPhase(nextPhase.phase);
+        }
         const row = [
           APP_VERSION_NAME,
           state.backgroundKeepAlive ? 'on' : 'off',
@@ -1043,18 +1052,57 @@ export function FamilyMapScreen() {
             </div>
           )}
 
-          {keepHint && !placingHome && (
-            <button
-              type="button"
-              onClick={() => {
-                if (keepHint.action === 'battery') void umapLocation.openBattery();
-                else if (keepHint.action === 'always') openLocationSettings();
-                else window.dispatchEvent(new Event('umap-retry-keep'));
-              }}
-              className="absolute inset-x-4 top-16 z-30 rounded-2xl bg-white px-4 py-3 text-left text-sm font-semibold leading-6 text-slate-800 shadow"
-            >
-              {keepHint.text}
-            </button>
+          {(keepHint || keepPhase !== 'idle') && !placingHome && (
+            <div className="absolute inset-x-4 top-16 z-30 rounded-2xl bg-white px-4 py-3 text-left shadow">
+              <div className="flex items-start justify-between gap-2">
+                <p className="text-sm font-black text-slate-900">{keepHint ? keepHint.title : '위치 유지'}</p>
+                <button
+                  type="button"
+                  aria-label="나중에"
+                  onClick={() => {
+                    if (keepHint) keepDismissRef.current = { kind: keepHint.kind, at: Date.now() };
+                    keepPhaseRef.current = { phase: 'idle', until: 0 };
+                    setKeepPhase('idle');
+                    setKeepHint(null);
+                  }}
+                  className="shrink-0 text-xs font-bold text-slate-500"
+                >
+                  닫기
+                </button>
+              </div>
+              {keepHint && <p className="mt-1 text-sm font-semibold leading-6 text-slate-700">{keepHint.text}</p>}
+              {keepRestartStatus(keepPhase) && <p className="mt-1 text-xs font-bold text-[#0084FF]">{keepRestartStatus(keepPhase)}</p>}
+              {keepHint && (
+                <div className="mt-2 flex gap-2">
+                  {keepHint.primary && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        keepPhaseRef.current = { phase: 'starting', until: Date.now() + KEEP_RESTART_HOLD_MS };
+                        setKeepPhase('starting');
+                        window.dispatchEvent(new Event('umap-retry-keep'));
+                      }}
+                      className="rounded-full bg-[#0084FF] px-3 py-2 text-xs font-bold text-white"
+                    >
+                      {keepHint.primary}
+                    </button>
+                  )}
+                  {keepHint.settingsLabel && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (keepHint.settingsAction === 'battery') openBatterySettings();
+                        else if (keepHint.settingsAction === 'always') openLocationSettings();
+                        else void openAppSettings();
+                      }}
+                      className="rounded-full bg-slate-100 px-3 py-2 text-xs font-bold text-slate-800"
+                    >
+                      {keepHint.settingsLabel}
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
           )}
           {state.permissions.locationMode !== 'always' && !guideHintHidden && !placingHome && (
             <AlwaysAllowMapHint

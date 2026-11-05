@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { keepBanner, serviceAlive } from './keepBanner.mjs';
+import { readFileSync } from 'node:fs';
+import { KEEP_BANNER_DISMISS_MS, KEEP_RESTART_OK_MS, keepBanner, keepBannerVisible, keepRestartStatus, nextKeepPhase, serviceAlive } from './keepBanner.mjs';
 
 test('an open map does not warn when background keep was never turned on', () => {
   assert.equal(keepBanner({
@@ -137,4 +138,70 @@ test('a running keep service only warns when the battery is restricted', () => {
     locationMode: 'always',
     batteryUnrestricted: false,
   }).action, 'battery');
+});
+
+const wanted = {
+  native: true,
+  onMap: true,
+  keepAlive: true,
+  locationMode: 'always',
+};
+
+test('a dead keep says family location stops and offers restart plus settings', () => {
+  const banner = keepBanner({ ...wanted, serviceRunning: false });
+  assert.equal(banner.kind, 'dead');
+  assert.equal(banner.primary, '다시 켜기');
+  assert.equal(banner.settingsLabel, '설정으로 이동');
+  assert.equal(banner.settingsAction, 'app');
+  assert.match(banner.text, /가족 지도의 내 위치가 갱신되지 않습니다/);
+  const permission = keepBanner({ ...wanted, serviceRunning: false, reason: 'permission' });
+  assert.equal(permission.kind, 'permission');
+  assert.equal(permission.primary, '');
+  assert.equal(permission.settingsLabel, '권한 확인');
+  assert.equal(permission.settingsAction, 'always');
+  assert.match(permission.text, /가족 지도의 내 위치가 갱신되지 않습니다/);
+  const battery = keepBanner({ ...wanted, serviceRunning: false, batteryUnrestricted: false });
+  assert.equal(battery.kind, 'battery');
+  assert.equal(battery.primary, '다시 켜기');
+  assert.equal(battery.settingsLabel, '배터리 설정');
+  assert.equal(battery.settingsAction, 'battery');
+});
+
+test('pause stays quiet, and a dismiss hides only the same blocker until the cooldown ends', () => {
+  const now = 1_700_000_000_000;
+  assert.equal(keepBanner({ ...wanted, serviceRunning: false, userStopped: true, now }), null);
+  const dead = keepBanner({ ...wanted, serviceRunning: false, now });
+  const dismissed = { kind: 'dead', at: now };
+  assert.equal(keepBannerVisible(dead, dismissed, now + 1_000), null);
+  assert.equal(keepBannerVisible(dead, dismissed, now + KEEP_BANNER_DISMISS_MS).kind, 'dead');
+  const battery = keepBanner({ ...wanted, serviceRunning: false, batteryUnrestricted: false, now });
+  assert.equal(keepBannerVisible(battery, dismissed, now + 1_000).kind, 'battery');
+  assert.equal(keepBannerVisible(null, dismissed, now), null);
+  assert.equal(keepRestartStatus('starting'), '다시 켜는 중입니다.');
+  assert.match(keepRestartStatus('on'), /다시 켰습니다/);
+  assert.match(keepRestartStatus('blocked'), /아직 켜지지 않았습니다/);
+  assert.equal(keepRestartStatus('idle'), '');
+});
+
+test('a blocked restart becomes on once the service is alive, then idle', () => {
+  const now = 5_000_000;
+  const starting = { phase: 'starting', until: now + 1_500 };
+  assert.equal(nextKeepPhase(starting, { alive: false, banner: { kind: 'dead' }, now: now + 100 }).phase, 'starting');
+  assert.equal(nextKeepPhase(starting, { alive: false, banner: { kind: 'dead' }, now: now + 1_500 }).phase, 'blocked');
+  const blocked = { phase: 'blocked', until: 0 };
+  const recovered = nextKeepPhase(blocked, { alive: true, banner: null, now: now + 20_000 });
+  assert.equal(recovered.phase, 'on');
+  assert.equal(recovered.until, now + 20_000 + KEEP_RESTART_OK_MS);
+  assert.equal(nextKeepPhase(recovered, { alive: true, banner: null, now: recovered.until - 1 }).phase, 'on');
+  assert.equal(nextKeepPhase(recovered, { alive: true, banner: null, now: recovered.until }).phase, 'idle');
+});
+
+test('the map banner has a restart button, a settings path, and a dismiss control', () => {
+  const screen = readFileSync(new URL('../components/family/FamilyMapScreen.tsx', import.meta.url), 'utf8');
+  assert.match(screen, /keepBannerVisible/);
+  assert.match(screen, /keepHint\.primary/);
+  assert.match(screen, /keepHint\.settingsLabel/);
+  assert.match(screen, /openAppSettings/);
+  assert.match(screen, /keepRestartStatus/);
+  assert.match(screen, /aria-label="나중에"/);
 });
