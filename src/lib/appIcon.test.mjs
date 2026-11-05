@@ -89,6 +89,14 @@ test('KINVO artwork is the launcher source and stays inside the adaptive safe ci
   const center = rgbaAt(foreground, Math.floor(foreground.width / 2), Math.floor(foreground.height / 2));
   assert.equal(center[3], 255);
   assert.equal(center[0] > 240 && center[1] > 240 && center[2] > 240, false);
+  let wordmark = 0;
+  for (let y = 0; y < foreground.height; y += 1) {
+    for (let x = 0; x < foreground.width; x += 1) {
+      const pixel = rgbaAt(foreground, x, y);
+      if (pixel[3] > 200 && pixel[0] >= 248 && pixel[1] >= 248 && pixel[2] >= 248) wordmark += 1;
+    }
+  }
+  assert.ok(wordmark > 400, `KINVO letters collapsed to ${wordmark} near-white pixels`);
   let minX = foreground.width;
   let minY = foreground.height;
   let maxX = 0;

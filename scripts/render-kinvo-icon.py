@@ -26,15 +26,42 @@ BACKGROUND = (0x01, 0x49, 0xD3)  # #0149D3, the tile's deep blue
 
 
 def punch_white_corners(tile: Image.Image, background: tuple[int, int, int]) -> Image.Image:
-    """The source rounded square is padded with near-white corners. Fill those with the tile blue."""
+    """Fill only the near-white padding connected to the image edge.
+
+    The KINVO letters are also near-white. A full-frame replace turns them into
+    the tile blue. Flooding from the border stops at the blue rim around the tile.
+    """
     image = tile.convert("RGBA")
     pixels = image.load()
     width, height = image.size
+
+    def is_pad(x: int, y: int) -> bool:
+        red, green, blue, _alpha = pixels[x, y]
+        return red >= 248 and green >= 248 and blue >= 248
+
+    seen = bytearray(width * height)
+    stack: list[tuple[int, int]] = []
+    for x in range(width):
+        stack.append((x, 0))
+        stack.append((x, height - 1))
     for y in range(height):
-        for x in range(width):
-            red, green, blue, _alpha = pixels[x, y]
-            if red >= 248 and green >= 248 and blue >= 248:
-                pixels[x, y] = (*background, 255)
+        stack.append((0, y))
+        stack.append((width - 1, y))
+    while stack:
+        x, y = stack.pop()
+        index = y * width + x
+        if seen[index] or not is_pad(x, y):
+            continue
+        seen[index] = 1
+        pixels[x, y] = (*background, 255)
+        if x + 1 < width:
+            stack.append((x + 1, y))
+        if x:
+            stack.append((x - 1, y))
+        if y + 1 < height:
+            stack.append((x, y + 1))
+        if y:
+            stack.append((x, y - 1))
     return image
 
 
