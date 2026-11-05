@@ -666,6 +666,7 @@ export function FamilyMapScreen() {
   const followMember = visibleMembers.find((member) => member.id === followId) ?? null;
   const followLat = followMember && hasLocation(followMember) ? followMember.lat : null;
   const followLng = followMember && hasLocation(followMember) ? followMember.lng : null;
+  const familyFitPending = !fittedShare.current && visibleMembers.filter(hasLocation).length >= 2;
   const pathDay = viewingRecords ? activeHistoryDay : liveDay;
   const memberPoints = selected ? state.tracks[selected.id] ?? [] : [];
   const dayPoints = useMemo(
@@ -786,7 +787,7 @@ export function FamilyMapScreen() {
     setFollowOn(followRef.current.following);
   }, [followId]);
   useEffect(() => {
-    if (followLat == null || followLng == null || awaitingFamilyFit) return;
+    if (followLat == null || followLng == null || familyFitPending || awaitingFamilyFit) return;
     const foreground = typeof document === 'undefined' || document.visibilityState !== 'hidden';
     const planned = planFollowPan(followRef.current, {
       now: Date.now(),
@@ -798,7 +799,7 @@ export function FamilyMapScreen() {
     });
     followRef.current = planned.state;
     if (planned.pan) mapRef.current?.followTo(planned.pan.lat, planned.pan.lng);
-  }, [awaitingFamilyFit, followId, followLat, followLng, mapShown]);
+  }, [awaitingFamilyFit, familyFitPending, followId, followLat, followLng, mapShown]);
   const recenterFollow = () => {
     followRef.current = noteRecenter(followRef.current);
     setFollowOn(true);
