@@ -10,7 +10,7 @@ import {
   subscribeChat,
   type FamilyChatMessage,
 } from '../../services/familyChat';
-import { familySyncConfigured, fetchDirectChat, publishChatRemote, syncTokenFor } from '../../services/familySync';
+import { familySyncConfigured, fetchDirectChat, publishChatRemote, syncRetryDelay, syncTokenFor } from '../../services/familySync';
 import { X } from 'lucide-react';
 
 export interface DirectChatTarget {
@@ -75,10 +75,18 @@ export function FamilyChatSheet({
       markDirectChatRead(open.code, openMe, openPeer);
     };
     void pull();
-    const timer = window.setInterval(() => void pull(), CHAT_OPEN_POLL_MS);
+    let timer = 0;
+    const arm = () => {
+      timer = window.setTimeout(() => {
+        void pull().finally(() => {
+          if (!cancel) arm();
+        });
+      }, syncRetryDelay('read', CHAT_OPEN_POLL_MS));
+    };
+    arm();
     return () => {
       cancel = true;
-      window.clearInterval(timer);
+      window.clearTimeout(timer);
     };
   }, [targetKey]);
 

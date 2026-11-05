@@ -2,6 +2,7 @@ package kr.co.umap.tracker;
 
 import android.content.Intent;
 import android.content.pm.PackageInfo;
+import android.net.Uri;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
@@ -104,6 +105,20 @@ public class MainActivity extends BridgeActivity {
         @JavascriptInterface
         public void exitApp() {
             activity.runOnUiThread(activity::finish);
+        }
+
+        @JavascriptInterface
+        public void openUrl(String url) {
+            if (url == null || !url.startsWith("https://github.com/jadegun1124/umap/releases/")) return;
+            activity.runOnUiThread(() -> {
+                Intent view = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+                view.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                try {
+                    activity.startActivity(view);
+                } catch (Exception ignored) {
+                    /* 브라우저가 없으면 설정에 남는다 */
+                }
+            });
         }
 
         @JavascriptInterface

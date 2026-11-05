@@ -11,7 +11,7 @@ declare global {
   interface Window {
     __umapAndroidBack?: () => boolean;
     __umapAlwaysAllowGate?: boolean;
-    UmapAndroid?: { exitApp: () => void; appVersion?: () => string };
+    UmapAndroid?: { exitApp: () => void; appVersion?: () => string; openUrl?: (url: string) => void };
   }
 }
 
