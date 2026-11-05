@@ -60,11 +60,11 @@ async function sendNative(target: string, url: string): Promise<boolean> {
   return result?.ok === true;
 }
 
-export async function sendFamilyInvite(link: string): Promise<{ ok: boolean; path: string }> {
+export async function sendFamilyInvite(link: string): Promise<{ ok: boolean; path: string; tried: string[] }> {
   const status = await readInviteShareStatus();
   const sent = await deliverInviteShare(link, {
     ...status,
     send: (target, url) => (Capacitor.isNativePlatform() ? sendNative(target, url) : sendWeb(target, url)),
   });
-  return { ok: sent.ok, path: sent.path };
+  return { ok: sent.ok, path: sent.path, tried: sent.tried || [] };
 }

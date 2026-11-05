@@ -6,6 +6,7 @@ import {
   deliverInviteShare,
   inviteShareMessage,
   inviteShareTarget,
+  kakaoTemplateAllowed,
   nextInviteShare,
 } from './inviteShare.mjs';
 
@@ -14,11 +15,16 @@ function text(path) {
 }
 
 test('kakao installed uses Kakao Share or the KakaoTalk package, and a missing app uses the chooser', () => {
-  assert.equal(inviteShareTarget({ kakaoInstalled: true, kakaoShareReady: true }), 'kakao-share');
-  assert.equal(inviteShareTarget({ kakaoInstalled: true, kakaoShareReady: false }), 'kakao-intent');
-  assert.equal(inviteShareTarget({ kakaoInstalled: false, kakaoShareReady: true }), 'chooser');
+  const home = 'https://jadegun1124.github.io/kinnex/?app=1';
+  const worker = 'https://umap-family-sync.umap-jadegun.workers.dev/invite?code=48291#k=abc';
+  assert.equal(inviteShareTarget({ kakaoInstalled: true, kakaoShareReady: true, link: home }), 'kakao-share');
+  assert.equal(inviteShareTarget({ kakaoInstalled: true, kakaoShareReady: true, link: worker }), 'kakao-intent');
+  assert.equal(kakaoTemplateAllowed(worker), false);
+  assert.equal(inviteShareTarget({ kakaoInstalled: true, kakaoShareReady: false, link: home }), 'kakao-intent');
+  assert.equal(inviteShareTarget({ kakaoInstalled: false, kakaoShareReady: true, link: home }), 'chooser');
   assert.equal(inviteShareTarget({ kakaoInstalled: false, kakaoShareReady: false }), 'chooser');
-  assert.equal(inviteShareTarget({ kakaoInstalled: null, kakaoShareReady: true }), 'kakao-share');
+  assert.equal(inviteShareTarget({ kakaoInstalled: null, kakaoShareReady: true, link: home }), 'kakao-share');
+  assert.equal(inviteShareTarget({ kakaoInstalled: null, kakaoShareReady: true, link: worker }), 'chooser');
   assert.equal(inviteShareTarget({}), 'chooser');
   assert.equal(nextInviteShare('kakao-share'), 'kakao-intent');
   assert.equal(nextInviteShare('kakao-intent'), 'chooser');
@@ -28,7 +34,7 @@ test('kakao installed uses Kakao Share or the KakaoTalk package, and a missing a
 
 test('a failed Kakao path falls back, and link copy stays on the invite sheet', async () => {
   const calls = [];
-  const missing = await deliverInviteShare('https://example.test/invite#k=1', {
+  const missing = await deliverInviteShare('https://umap-family-sync.umap-jadegun.workers.dev/invite#k=1', {
     kakaoInstalled: true,
     kakaoShareReady: true,
     send: async (target) => {
@@ -36,7 +42,7 @@ test('a failed Kakao path falls back, and link copy stays on the invite sheet', 
       return target === 'chooser';
     },
   });
-  assert.deepEqual(calls, ['kakao-share', 'kakao-intent', 'chooser']);
+  assert.deepEqual(calls, ['kakao-intent', 'chooser']);
   assert.equal(missing.path, 'chooser');
 
   const direct = await deliverInviteShare('https://example.test/invite#k=1', {
@@ -65,4 +71,6 @@ test('a failed Kakao path falls back, and link copy stays on the invite sheet', 
   assert.match(plugin, /setPackage\(KAKAO_TALK_PACKAGE\)|setPackage\("com\.kakao\.talk"\)/);
   assert.match(plugin, /Intent\.createChooser/);
   assert.match(plugin, /ShareClient/);
+  assert.match(plugin, /jadegun1124\.github\.io/);
+  assert.match(plugin, /kakaoTemplateHost/);
 });

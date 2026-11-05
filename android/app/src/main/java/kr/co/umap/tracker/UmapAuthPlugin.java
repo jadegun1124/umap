@@ -239,7 +239,7 @@ public class UmapAuthPlugin extends Plugin {
     }
 
     private void shareWithKakaoTemplate(Activity activity, String url, PluginCall call) {
-        if (!kakaoTalkInstalled(activity)) {
+        if (!kakaoTalkInstalled(activity) || !kakaoTemplateHost(url)) {
             call.resolve(shareResult(false));
             return;
         }
@@ -289,6 +289,11 @@ public class UmapAuthPlugin extends Plugin {
         } catch (ActivityNotFoundException ignored) {
             return false;
         }
+    }
+
+    private boolean kakaoTemplateHost(String url) {
+        String host = Uri.parse(url).getHost();
+        return "jadegun1124.github.io".equals(host) || "localhost".equals(host) || "127.0.0.1".equals(host);
     }
 
     private boolean kakaoTalkInstalled(Activity activity) {

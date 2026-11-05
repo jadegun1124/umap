@@ -2375,7 +2375,8 @@ function AdminInviteSheet({
     try {
       const sent = await sendFamilyInvite(groupLink);
       if (sent.ok && sent.path === 'chooser') {
-        setCopied('카카오톡이 없어 다른 앱으로 보냅니다');
+        const triedKakao = sent.tried.some((item) => item === 'kakao-share' || item === 'kakao-intent');
+        setCopied(triedKakao ? '다른 앱으로 보낼 수 있습니다' : '카카오톡이 없어 다른 앱으로 보냅니다');
         return;
       }
       if (sent.ok) {
