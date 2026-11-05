@@ -7,8 +7,8 @@ android {
         applicationId "kr.co.umap.tracker"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 67
-        versionName "1.61.0"
+        versionCode 68
+        versionName "1.62.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         def kakaoKey = (System.getenv("KAKAO_NATIVE_APP_KEY") ?: System.getenv("VITE_KAKAO_NATIVE_APP_KEY") ?: "b42233e0170711205fa75bbca06e98e9").trim()
         buildConfigField "String", "KAKAO_NATIVE_APP_KEY", "\"${kakaoKey.replace('"', '')}\""
@@ -62,6 +62,7 @@ dependencies {
     implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
     implementation project(':capacitor-android')
     implementation "com.kakao.sdk:v2-user:2.20.6"
+    implementation "com.kakao.sdk:v2-share:2.20.6"
     implementation "androidx.browser:browser:1.8.0"
     implementation "androidx.work:work-runtime:2.9.1"
     testImplementation "junit:junit:$junitVersion"
