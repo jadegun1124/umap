@@ -17,6 +17,7 @@ import { cancelAccountBackup, loadFamilyAccount, scheduleAccountBackup } from '.
 import { deviceProfileKey, localProfile } from '../../lib/localProfile.mjs';
 import { carryPlace, cleanPlace } from '../../lib/memberPlace.mjs';
 import { ensureRoster, isSelfEchoPlace, mergePeerSessions, withoutSelfEcho } from '../../lib/peerFamily.mjs';
+import { mergeFamilyRoster, rosterUnchanged } from '../../lib/familyRosterSync.mjs';
 import { resolveManagedTarget } from '../../lib/managedPlace.mjs';
 import { hiddenKeysForMember, placeHidden } from '../../lib/familyRoom.mjs';
 import { bindPlaceToMember, placeIsSelf, placeMemberId } from '../../lib/placeBinding.mjs';
@@ -700,6 +701,12 @@ function notice(title: string, body: string): FamilyNotice {
   return { id: `n-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, title, body, at: Date.now(), read: false };
 }
 
+function withJoinNotices(state: Session, names: string[]): Session {
+  if (names.length === 0) return state;
+  const notes = names.map((name) => notice('가족이 들어왔습니다', `${name} 님이 초대 링크로 가족에 참여했습니다. 그룹장이 목록에서 지울 수 있습니다.`));
+  return { ...state, notices: [...notes, ...state.notices] };
+}
+
 function collapseRoster(state: Session, priorNames: Record<string, string> = {}): Session {
   const { members, moves } = absorbPlaceholderMembers(state.members, priorNames);
   if (moves.length === 0) return state;
@@ -1162,7 +1169,8 @@ function reduceSession(state: Session, action: Action): Session {
       const today = seoulDayKey(now);
       const profiles = action.profiles ?? [];
       const hidden = state.hiddenMemberIds || [];
-      state = hideLeftPublishers(state, action.departed || []);
+      const profileIds = new Set(profiles.filter((profile) => isMemberId(profile.memberId) && profile.memberId !== state.profile?.id).map((profile) => profile.memberId));
+      state = hideLeftPublishers(state, (action.departed || []).filter((id) => !profileIds.has(id)));
       const incoming = action.places.filter((place) => (
         place.audience === 'family'
         && place.sharing
@@ -1200,11 +1208,21 @@ function reduceSession(state: Session, action: Action): Session {
           && (member.photo || '') === (item.photo || '')
           && member.needsAppUpdate === (item.place.legacyClient === true);
       });
-      if (unchanged) return collapseRoster(state, priorNames);
+      const merged = mergeFamilyRoster(state.members, {
+        code: action.code,
+        places: action.places,
+        profiles,
+        departed: action.departed || [],
+        hidden,
+        selfId: state.profile?.id || '',
+        ownerId: state.guardians.find((link) => link.code === action.code)?.ownerMemberId || '',
+      });
+      if (unchanged && rosterUnchanged(state.members, merged.members)) return collapseRoster(withJoinNotices(state, merged.joined), priorNames);
+      if (unchanged) return collapseRoster(withJoinNotices({ ...state, members: merged.members }, merged.joined), priorNames);
       let tracks = tracksWithinHistory(state.tracks, now);
       let visits = visitsWithinHistory(state.visits, now);
       let journeys = state.journeys ?? {};
-      let members = state.members.filter((member) => !member.id.startsWith(prefix));
+      let members = merged.members;
       for (const item of described) {
         const place = item.place;
         if (place.lat == null || place.lng == null) continue;
@@ -1298,7 +1316,7 @@ function reduceSession(state: Session, action: Action): Session {
       for (const member of current) {
         if (!members.some((item) => item.id === member.id)) delete tracks[member.id];
       }
-      return collapseRoster(archiveJourneys({ ...state, members, tracks, visits, journeys, trailDay: today }, now), priorNames);
+      return collapseRoster(withJoinNotices(archiveJourneys({ ...state, members, tracks, visits, journeys, trailDay: today }, now), merged.joined), priorNames);
     }
     case 'apply-canonical-trails': {
       const selfId = state.profile?.id || '';
@@ -1347,8 +1365,7 @@ function reduceSession(state: Session, action: Action): Session {
           : item));
       }
       if (!changed) return state;
-      const notes = ensured.joined.map((name) => notice('가족이 들어왔습니다', `${name} 님이 초대 링크로 가족에 참여했습니다. 그룹장이 목록에서 지울 수 있습니다.`));
-      return { ...state, members, ...(notes.length ? { notices: [...notes, ...state.notices] } : {}) };
+      return withJoinNotices({ ...state, members }, ensured.joined);
     }
     case 'merge-visits': {
       const now = Date.now();
