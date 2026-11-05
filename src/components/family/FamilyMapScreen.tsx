@@ -180,7 +180,7 @@ export function FamilyMapScreen() {
         const banner = keepBannerVisible(keepBanner({
           native: true,
           onMap: true,
-          serviceRunning: alive,
+          serviceRunning: status.running === true,
           heartbeatAt: status.heartbeatAt,
           lastFixAt: status.lastFixAt,
           userStopped: status.userStopped,

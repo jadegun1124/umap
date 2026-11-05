@@ -52,10 +52,13 @@ test('a stopped keep says when the permission or the battery is what blocked it'
     serviceRunning: false,
     keepAlive: true,
     locationMode: 'always',
+    batteryUnrestricted: true,
     reason: 'permission',
   });
-  assert.equal(permission.action, 'always');
-  assert.match(permission.text, /항상 허용이 아닙니다/);
+  assert.equal(permission.kind, 'dead');
+  assert.equal(permission.action, 'start');
+  assert.equal(permission.primary, '다시 켜기');
+  assert.equal(permission.text.includes('항상 허용이 아닙니다'), false);
   const battery = keepBanner({
     native: true,
     onMap: true,
@@ -68,37 +71,38 @@ test('a stopped keep says when the permission or the battery is what blocked it'
   assert.match(battery.text, /제한 없음/);
 });
 
-test('a fresh service beat with a stale GPS fix shows the stopped banner', () => {
+test('always allow plus unrestricted battery hides the banner while the service is alive', () => {
   const now = 1_700_000_000_000;
   assert.equal(serviceAlive({
     serviceRunning: true,
     heartbeatAt: now - 10_000,
     lastFixAt: now - 120_000,
     now,
-  }), false);
-  const banner = keepBanner({
+  }), true);
+  assert.equal(keepBanner({
     native: true,
     onMap: true,
     serviceRunning: true,
     keepAlive: true,
     locationMode: 'always',
+    batteryUnrestricted: true,
+    reason: 'permission',
     heartbeatAt: now - 10_000,
     lastFixAt: now - 120_000,
     now,
-  });
-  assert.equal(banner.action, 'start');
+  }), null);
   assert.equal(serviceAlive({
-    serviceRunning: true,
-    heartbeatAt: now - 10_000,
-    lastFixAt: now - 20_000,
+    serviceRunning: false,
+    heartbeatAt: now - 120_000,
     now,
-  }), true);
+  }), false);
 });
 
 test('a fresh heartbeat hides the stopped banner, and a stale one shows it', () => {
   const now = 1_700_000_000_000;
   assert.equal(serviceAlive({ serviceRunning: false, heartbeatAt: now - 10_000, now }), true);
-  assert.equal(serviceAlive({ serviceRunning: true, heartbeatAt: now - 120_000, now }), false);
+  assert.equal(serviceAlive({ serviceRunning: true, heartbeatAt: now - 120_000, now }), true);
+  assert.equal(serviceAlive({ serviceRunning: false, heartbeatAt: now - 120_000, now }), false);
   assert.equal(keepBanner({
     native: true,
     onMap: true,
@@ -111,9 +115,10 @@ test('a fresh heartbeat hides the stopped banner, and a stale one shows it', () 
   const dead = keepBanner({
     native: true,
     onMap: true,
-    serviceRunning: true,
+    serviceRunning: false,
     keepAlive: true,
     locationMode: 'always',
+    batteryUnrestricted: true,
     heartbeatAt: now - 120_000,
     now,
   });
@@ -151,15 +156,13 @@ test('a dead keep says family location stops and offers restart plus settings', 
   const banner = keepBanner({ ...wanted, serviceRunning: false });
   assert.equal(banner.kind, 'dead');
   assert.equal(banner.primary, '다시 켜기');
-  assert.equal(banner.settingsLabel, '설정으로 이동');
+  assert.equal(banner.settingsLabel, '');
   assert.equal(banner.settingsAction, 'app');
   assert.match(banner.text, /가족 지도의 내 위치가 갱신되지 않습니다/);
   const permission = keepBanner({ ...wanted, serviceRunning: false, reason: 'permission' });
-  assert.equal(permission.kind, 'permission');
-  assert.equal(permission.primary, '');
-  assert.equal(permission.settingsLabel, '권한 확인');
-  assert.equal(permission.settingsAction, 'always');
-  assert.match(permission.text, /가족 지도의 내 위치가 갱신되지 않습니다/);
+  assert.equal(permission.kind, 'dead');
+  assert.equal(permission.primary, '다시 켜기');
+  assert.equal(permission.text.includes('항상 허용이 아닙니다'), false);
   const battery = keepBanner({ ...wanted, serviceRunning: false, batteryUnrestricted: false });
   assert.equal(battery.kind, 'battery');
   assert.equal(battery.primary, '다시 켜기');
@@ -204,4 +207,6 @@ test('the map banner has a restart button, a settings path, and a dismiss contro
   assert.match(screen, /openAppSettings/);
   assert.match(screen, /keepRestartStatus/);
   assert.match(screen, /aria-label="나중에"/);
+  const plugin = readFileSync(new URL('../../android/app/src/main/java/kr/co/umap/tracker/UmapLocationPlugin.java', import.meta.url), 'utf8');
+  assert.match(plugin, /"permission"\.equals\(reason\) && hasBackground\(\)/);
 });
