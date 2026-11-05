@@ -3,6 +3,12 @@ export const KEEP_HEARTBEAT_FRESH_MS = 90_000;
 /** A dismissed blocker stays down long enough that the next status poll does not pop it again. */
 export const KEEP_BANNER_DISMISS_MS = 10 * 60 * 1000;
 
+/** Wait this long before calling a restart blocked, so a slow service start is not a failure. */
+export const KEEP_RESTART_HOLD_MS = 1_500;
+
+/** How long the recovered banner stays after the service is alive again. */
+export const KEEP_RESTART_OK_MS = 4_000;
+
 const FAMILY_STOPS = '가족 지도의 내 위치가 갱신되지 않습니다.';
 
 /**
@@ -113,4 +119,22 @@ export function keepRestartStatus(phase) {
   if (phase === 'on') return '위치 유지를 다시 켰습니다.';
   if (phase === 'blocked') return '아직 켜지지 않았습니다. 설정에서 항상 허용과 배터리 제한 없음을 확인해 주세요.';
   return '';
+}
+
+/**
+ * starting stays until the hold ends, then becomes blocked.
+ * blocked (and starting) become on as soon as the service is alive and the warning is gone.
+ * on returns to idle after its own hold, so a recovered phone does not keep saying it is off.
+ */
+export function nextKeepPhase(phase, { alive = false, banner = null, now = Date.now() } = {}) {
+  const current = phase && typeof phase.phase === 'string'
+    ? phase
+    : { phase: 'idle', until: 0 };
+  if (current.phase === 'idle') return current;
+  if ((current.phase === 'starting' || current.phase === 'blocked') && alive && !banner) {
+    return { phase: 'on', until: now + KEEP_RESTART_OK_MS };
+  }
+  if (current.phase === 'starting' && now >= current.until) return { phase: 'blocked', until: 0 };
+  if (current.phase === 'on' && now >= current.until) return { phase: 'idle', until: 0 };
+  return current;
 }

@@ -23,7 +23,7 @@ import { isMemberId } from '../../lib/sharedIdentity.mjs';
 import { Capacitor } from '@capacitor/core';
 import { CHAT_LIST_POLL_MS } from '../../lib/keySyncPace.mjs';
 import { abandonFamilySync, currentSyncPhase, deleteFamilyRoomRemote, familySyncConfigured, familySyncUrl, fetchMyDirectThreads, registerRoomPush, revokeFamilyPlace, rotateRemovedMember, splitSyncToken, startAdminRemoteSync, startSyncMonitor, subscribeSyncPhase, syncRetryDelay, syncTokenFor, type SyncPhase } from '../../services/familySync';
-import { keepBanner, keepBannerVisible, keepRestartStatus, serviceAlive } from '../../lib/keepBanner.mjs';
+import { KEEP_RESTART_HOLD_MS, keepBanner, keepBannerVisible, keepRestartStatus, nextKeepPhase, serviceAlive } from '../../lib/keepBanner.mjs';
 import { OLD_APP_PLACE_LABEL, syncBannerText } from '../../lib/syncBanner.mjs';
 import { consumePendingChat, listenChatOpen, openAppSettings, overlayPermissionGranted, umapLocation, umapLocationNative } from '../../services/umapLocation';
 import { sounds } from '../../utils/audio';
@@ -190,14 +190,10 @@ export function FamilyMapScreen() {
           reason: status.reason || '',
         }), keepDismissRef.current, Date.now());
         setKeepHint(banner);
-        const phase = keepPhaseRef.current;
-        if (phase.phase === 'starting' && Date.now() >= phase.until) {
-          const next = banner == null && alive ? 'on' : 'blocked';
-          keepPhaseRef.current = { phase: next, until: next === 'on' ? Date.now() + 4_000 : 0 };
-          setKeepPhase(next);
-        } else if (phase.phase === 'on' && Date.now() >= phase.until) {
-          keepPhaseRef.current = { phase: 'idle', until: 0 };
-          setKeepPhase('idle');
+        const nextPhase = nextKeepPhase(keepPhaseRef.current, { alive, banner, now: Date.now() });
+        if (nextPhase.phase !== keepPhaseRef.current.phase || nextPhase.until !== keepPhaseRef.current.until) {
+          keepPhaseRef.current = nextPhase;
+          setKeepPhase(nextPhase.phase);
         }
         const row = [
           APP_VERSION_NAME,
@@ -1058,24 +1054,22 @@ export function FamilyMapScreen() {
 
           {(keepHint || keepPhase !== 'idle') && !placingHome && (
             <div className="absolute inset-x-4 top-16 z-30 rounded-2xl bg-white px-4 py-3 text-left shadow">
-              {keepHint && (
-                <div className="flex items-start justify-between gap-2">
-                  <p className="text-sm font-black text-slate-900">{keepHint.title}</p>
-                  <button
-                    type="button"
-                    aria-label="나중에"
-                    onClick={() => {
-                      keepDismissRef.current = { kind: keepHint.kind, at: Date.now() };
-                      keepPhaseRef.current = { phase: 'idle', until: 0 };
-                      setKeepPhase('idle');
-                      setKeepHint(null);
-                    }}
-                    className="shrink-0 text-xs font-bold text-slate-500"
-                  >
-                    닫기
-                  </button>
-                </div>
-              )}
+              <div className="flex items-start justify-between gap-2">
+                <p className="text-sm font-black text-slate-900">{keepHint ? keepHint.title : '위치 유지'}</p>
+                <button
+                  type="button"
+                  aria-label="나중에"
+                  onClick={() => {
+                    if (keepHint) keepDismissRef.current = { kind: keepHint.kind, at: Date.now() };
+                    keepPhaseRef.current = { phase: 'idle', until: 0 };
+                    setKeepPhase('idle');
+                    setKeepHint(null);
+                  }}
+                  className="shrink-0 text-xs font-bold text-slate-500"
+                >
+                  닫기
+                </button>
+              </div>
               {keepHint && <p className="mt-1 text-sm font-semibold leading-6 text-slate-700">{keepHint.text}</p>}
               {keepRestartStatus(keepPhase) && <p className="mt-1 text-xs font-bold text-[#0084FF]">{keepRestartStatus(keepPhase)}</p>}
               {keepHint && (
@@ -1084,7 +1078,7 @@ export function FamilyMapScreen() {
                     <button
                       type="button"
                       onClick={() => {
-                        keepPhaseRef.current = { phase: 'starting', until: Date.now() + 1_500 };
+                        keepPhaseRef.current = { phase: 'starting', until: Date.now() + KEEP_RESTART_HOLD_MS };
                         setKeepPhase('starting');
                         window.dispatchEvent(new Event('umap-retry-keep'));
                       }}

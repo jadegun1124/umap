@@ -2,6 +2,10 @@ export const KEEP_HEARTBEAT_FRESH_MS: number;
 
 export const KEEP_BANNER_DISMISS_MS: number;
 
+export const KEEP_RESTART_HOLD_MS: number;
+
+export const KEEP_RESTART_OK_MS: number;
+
 export const FIX_STALE_STILL_MS: number;
 
 export function serviceAlive(input?: {
@@ -42,3 +46,8 @@ export function keepBannerVisible<T extends { kind?: string }>(
 ): T | null;
 
 export function keepRestartStatus(phase: string): string;
+
+export function nextKeepPhase(
+  phase: { phase?: 'idle' | 'starting' | 'on' | 'blocked' | string; until?: number } | null | undefined,
+  input?: { alive?: boolean; banner?: unknown; now?: number },
+): { phase: 'idle' | 'starting' | 'on' | 'blocked'; until: number };

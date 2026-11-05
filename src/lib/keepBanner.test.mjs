@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
-import { KEEP_BANNER_DISMISS_MS, keepBanner, keepBannerVisible, keepRestartStatus, serviceAlive } from './keepBanner.mjs';
+import { KEEP_BANNER_DISMISS_MS, KEEP_RESTART_OK_MS, keepBanner, keepBannerVisible, keepRestartStatus, nextKeepPhase, serviceAlive } from './keepBanner.mjs';
 
 test('an open map does not warn when background keep was never turned on', () => {
   assert.equal(keepBanner({
@@ -181,6 +181,19 @@ test('pause stays quiet, and a dismiss hides only the same blocker until the coo
   assert.match(keepRestartStatus('on'), /다시 켰습니다/);
   assert.match(keepRestartStatus('blocked'), /아직 켜지지 않았습니다/);
   assert.equal(keepRestartStatus('idle'), '');
+});
+
+test('a blocked restart becomes on once the service is alive, then idle', () => {
+  const now = 5_000_000;
+  const starting = { phase: 'starting', until: now + 1_500 };
+  assert.equal(nextKeepPhase(starting, { alive: false, banner: { kind: 'dead' }, now: now + 100 }).phase, 'starting');
+  assert.equal(nextKeepPhase(starting, { alive: false, banner: { kind: 'dead' }, now: now + 1_500 }).phase, 'blocked');
+  const blocked = { phase: 'blocked', until: 0 };
+  const recovered = nextKeepPhase(blocked, { alive: true, banner: null, now: now + 20_000 });
+  assert.equal(recovered.phase, 'on');
+  assert.equal(recovered.until, now + 20_000 + KEEP_RESTART_OK_MS);
+  assert.equal(nextKeepPhase(recovered, { alive: true, banner: null, now: recovered.until - 1 }).phase, 'on');
+  assert.equal(nextKeepPhase(recovered, { alive: true, banner: null, now: recovered.until }).phase, 'idle');
 });
 
 test('the map banner has a restart button, a settings path, and a dismiss control', () => {
