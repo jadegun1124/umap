@@ -114,6 +114,8 @@ public class LocationKeepService {
     /** One sealed family batch. Local emit() is not throttled by these. */
     private static final long UPLOAD_MOVING_MS = 30_000L;
     private static final long UPLOAD_STILL_MS = 60_000L;
+    /** 503 and network misses wait 5s, 15s, 45s, 2m, then 10m. An OK response clears it. */
+    private static final SyncBackoff UPLOAD_BACKOFF = new SyncBackoff();
     /** Process heartbeat. A fresh beat without a GPS fix is not a healthy keep. */
     private static final long KEEP_HEARTBEAT_FRESH_MS = 90_000L;
     /** Alarm that brings the process back. Inside the 1–5 minute revival window. */
@@ -423,7 +425,7 @@ public class LocationKeepService {
                 if (last != null && anySharing(readConfig(context))) {
                     long since = lastPublishedAt <= 0L ? Long.MAX_VALUE : System.currentTimeMillis() - lastPublishedAt;
                     long gap = movingNow ? UPLOAD_MOVING_MS : UPLOAD_STILL_MS;
-                    if (since >= gap) {
+                    if (since >= gap && UPLOAD_BACKOFF.remaining(System.currentTimeMillis()) == 0L) {
                         Upload upload = new Upload();
                         upload.pin = last;
                         upload.moving = movingNow;
@@ -772,7 +774,7 @@ public class LocationKeepService {
         if (record) rememberPoint(location, fixAt);
         long gap = moving ? UPLOAD_MOVING_MS : UPLOAD_STILL_MS;
         boolean due = lastPublishedAt <= 0L || now - lastPublishedAt >= gap;
-        if (!stateChanged && !due) {
+        if ((!stateChanged && !due) || UPLOAD_BACKOFF.remaining(now) > 0L) {
             rememberFilter(context);
             scheduleHeartbeat(context);
             return null;
@@ -1007,6 +1009,7 @@ public class LocationKeepService {
         boolean changed = false;
         boolean wantedShare = false;
         boolean heldBack = false;
+        int round = 0;
         for (JSONObject target : targets(current)) {
             boolean sharing = target.optBoolean("sharing", false);
             if (sharing && location == null) continue;
@@ -1051,17 +1054,22 @@ public class LocationKeepService {
                     }
                     if (trail != null) body.put("trail", trail);
                 }
-                boolean posted = putWithRetry(base, target.optString("token"), body, identified ? profileKey : "");
-                if (posted) {
+                int status = put(base, target.optString("token"), body, identified ? profileKey : "");
+                if (status >= 200 && status < 300) {
                     target.put("revokeSent", !sharing);
                     changed = true;
-                } else if (sharing && location != null) {
-                    heldBack = true;
+                    if (round < 2) round = 1;
+                } else {
+                    if (status >= 500 || status < 0) round = 2;
+                    if (sharing && location != null) heldBack = true;
                 }
             } catch (Exception ignored) {
+                round = 2;
                 if (sharing && location != null) heldBack = true;
             }
         }
+        if (round == 2) UPLOAD_BACKOFF.fail(System.currentTimeMillis());
+        else if (round == 1) UPLOAD_BACKOFF.succeed();
         if (changed) prefs(context).edit().putString("config", current.toString()).apply();
         if (!wantedShare) return 0;
         return heldBack ? 0 : 1;
@@ -1121,19 +1129,6 @@ public class LocationKeepService {
         }
     }
 
-    private static boolean putWithRetry(String base, String token, JSONObject body, String profileKey) {
-        for (int attempt = 0; attempt < 3; attempt += 1) {
-            if (put(base, token, body, profileKey)) return true;
-            try {
-                Thread.sleep(1_500L * (attempt + 1));
-            } catch (InterruptedException interrupted) {
-                Thread.currentThread().interrupt();
-                return false;
-            }
-        }
-        return false;
-    }
-
     private static String readStream(InputStream stream) throws Exception {
         if (stream == null) return "";
         ByteArrayOutputStream buffer = new ByteArrayOutputStream();
@@ -1147,7 +1142,8 @@ public class LocationKeepService {
         return buffer.toString(StandardCharsets.UTF_8);
     }
 
-    private static boolean put(String base, String token, JSONObject body, String profileKey) {
+    /** HTTP status, 422 when the body says the point was not kept, or -1 when the connection failed. */
+    private static int put(String base, String token, JSONObject body, String profileKey) {
         HttpURLConnection connection = null;
         try {
             URL url = new URL(base + "/v1/rooms/" + body.getString("code") + "/place");
@@ -1166,16 +1162,17 @@ public class LocationKeepService {
                 stream.write(bytes);
             }
             int status = connection.getResponseCode();
-            if (status < 200 || status >= 300) return false;
+            if (status < 200 || status >= 300) return status;
             String response = "";
             try {
                 response = readStream(connection.getInputStream());
             } catch (Exception ignored) {
                 response = "";
             }
-            return !response.contains("\"collected\":false");
+            if (response.contains("\"collected\":false")) return 422;
+            return status;
         } catch (Exception error) {
-            return false;
+            return -1;
         } finally {
             if (connection != null) connection.disconnect();
         }

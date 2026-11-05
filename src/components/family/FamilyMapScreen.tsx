@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Bell, ChevronLeft, ChevronRight, Copy, Home, LocateFixed, MapPin, Menu, Plus, Route, Settings, UserPlus, X } from 'lucide-react';
-import { APP_VERSION_CODE, APP_VERSION_NAME, currentAppVersionLabel } from '../../lib/appRelease.mjs';
+import { APP_VERSION_CODE, APP_VERSION_NAME, currentAppVersionLabel, openAppUpdate } from '../../lib/appRelease.mjs';
 import { looksLikePhone, localProfile } from '../../lib/localProfile.mjs';
 import { KAKAO_SETUP_MESSAGE } from '../../lib/kakaoAuth.mjs';
 import { NAVER_SETUP_MESSAGE } from '../../lib/naverAuth.mjs';
@@ -21,7 +21,7 @@ import { openAccountSecrets } from '../../lib/familyVault.mjs';
 import { isMemberId } from '../../lib/sharedIdentity.mjs';
 import { Capacitor } from '@capacitor/core';
 import { CHAT_LIST_POLL_MS } from '../../lib/keySyncPace.mjs';
-import { abandonFamilySync, currentSyncPhase, deleteFamilyRoomRemote, familySyncConfigured, familySyncUrl, fetchMyDirectThreads, registerRoomPush, revokeFamilyPlace, rotateRemovedMember, splitSyncToken, startAdminRemoteSync, startSyncMonitor, subscribeSyncPhase, syncTokenFor, type SyncPhase } from '../../services/familySync';
+import { abandonFamilySync, currentSyncPhase, deleteFamilyRoomRemote, familySyncConfigured, familySyncUrl, fetchMyDirectThreads, registerRoomPush, revokeFamilyPlace, rotateRemovedMember, splitSyncToken, startAdminRemoteSync, startSyncMonitor, subscribeSyncPhase, syncRetryDelay, syncTokenFor, type SyncPhase } from '../../services/familySync';
 import { keepBanner, serviceAlive } from '../../lib/keepBanner.mjs';
 import { OLD_APP_PLACE_LABEL, syncBannerText } from '../../lib/syncBanner.mjs';
 import { consumePendingChat, listenChatOpen, overlayPermissionGranted, umapLocation, umapLocationNative } from '../../services/umapLocation';
@@ -419,12 +419,20 @@ export function FamilyMapScreen() {
       }
     };
     void tick();
-    const timer = window.setInterval(() => void tick(), CHAT_LIST_POLL_MS);
+    let timer = 0;
+    const arm = () => {
+      timer = window.setTimeout(() => {
+        void tick().finally(() => {
+          if (!cancel) arm();
+        });
+      }, syncRetryDelay('chat', CHAT_LIST_POLL_MS));
+    };
+    arm();
     const onResume = () => { void tick(); };
     window.addEventListener('umap-room-resume', onResume);
     return () => {
       cancel = true;
-      window.clearInterval(timer);
+      window.clearTimeout(timer);
       window.removeEventListener('umap-room-resume', onResume);
     };
   }, [dmRoomKey, state.tab]);
@@ -2712,7 +2720,15 @@ function LocationConsentRow() {
 }
 
 function AppVersionLine() {
-  return <p className="mt-2 text-xs font-semibold text-slate-500">{currentAppVersionLabel()}</p>;
+  return (
+    <div className="mt-2">
+      <p className="text-xs font-semibold text-slate-500">{currentAppVersionLabel()}</p>
+      <button type="button" onClick={() => openAppUpdate()} className="mt-2 w-full rounded-full bg-slate-100 py-3 text-sm font-bold text-slate-800">
+        앱 업데이트
+      </button>
+      <p className="mt-1 text-xs leading-5 text-slate-400">원할 때 최신 설치 파일을 브라우저에서 받습니다.</p>
+    </div>
+  );
 }
 
 function DiagSendButton() {

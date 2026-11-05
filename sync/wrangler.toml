@@ -29,11 +29,24 @@ NAVER_CLIENT_ID = "dQCiRLIzbNkDG6ULiroD"
 [triggers]
 crons = ["0 16 * * *"]
 
+# Head sampling is chosen when the request starts. Workers Logs has no
+# separate rate that keeps every error while sampling successful requests.
+# At 0.1, about 90% of error invocations are also dropped.
+# `npx wrangler deploy` reads this file. A scripts API multipart upload does
+# not: put the same observability object in the upload metadata, including
+# logs.head_sampling_rate 0.1. There is no second metadata file in this repo.
 [observability]
 enabled = true
 
 [observability.logs]
 enabled = true
+invocation_logs = true
+head_sampling_rate = 0.1
 
 [observability.traces]
+enabled = true
+head_sampling_rate = 0.1
+
+# Workers Issues groups failures. Wrangler 4.134.0 or later.
+[observability.issues]
 enabled = true

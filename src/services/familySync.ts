@@ -7,6 +7,7 @@ import { readMergedFromMember } from '../lib/accountRestore.mjs';
 import { mergeTrailPoints } from '../lib/trailParts.mjs';
 import { rememberPlaceName } from '../lib/placeAlias.mjs';
 import { optionalRouteMissing } from '../lib/syncRoute.mjs';
+import { applySyncOutcome, foldSyncOutcome, retryDelayMs, syncFailureKind } from '../lib/syncBackoff.mjs';
 import type { FamilyAlert } from './familyAlert';
 import { chatName, isFamilyChatMessage, type FamilyChatMessage } from './familyChat';
 import type { SharedPlace, SharedProfile } from './familyShare';
@@ -176,8 +177,29 @@ let trailQueue: { code: string; token: string; body: Record<string, unknown>; pr
 let profileQueue: { code: string; token: string; body: Record<string, unknown>; profileKey: string } | null = null;
 let alertQueue: { alert: FamilyAlert; token: string } | null = null;
 let flushing = false;
-let retryMs = 3000;
+let flushTimer = 0;
+const backoffs: Record<'write' | 'room' | 'family' | 'chat', { attempt: number; until: number }> = {
+  write: { attempt: 0, until: 0 },
+  room: { attempt: 0, until: 0 },
+  family: { attempt: 0, until: 0 },
+  chat: { attempt: 0, until: 0 },
+};
 let syncEpoch = 0;
+
+export function syncRetryDelay(channel: 'write' | 'room' | 'family' | 'chat', normalMs: number, now = Date.now()): number {
+  return retryDelayMs(normalMs, backoffs[channel], now);
+}
+
+function transportOutcome(response: Response | null): 'ok' | 'server' | 'network' | '' {
+  if (!response) return 'network';
+  if (response.ok) return 'ok';
+  const kind = syncFailureKind(response.status);
+  return kind === 'server' || kind === 'network' ? kind : '';
+}
+
+function settleBackoff(channel: 'write' | 'room' | 'family' | 'chat', outcome: string, now = Date.now()) {
+  backoffs[channel] = applySyncOutcome(backoffs[channel], outcome, now);
+}
 
 const MAX_PROFILE_PHOTO = 24_000;
 
@@ -271,7 +293,7 @@ export async function fetchDirectChat(
   peer: string,
 ): Promise<FamilyChatMessage[] | null> {
   if (!syncToken || !splitSyncToken(syncToken) || !familySyncUrl() || !/^\d{4,6}$/.test(code) || !me.trim() || !peer.trim()) return null;
-  if (roomBlocked(code)) return null;
+  if (roomBlocked(code) || syncRetryDelay('chat', 0) > 0) return null;
   const query = new URLSearchParams({ me: me.trim().slice(0, 20), with: peer.trim().slice(0, 20) });
   try {
     const response = await request(`/v1/rooms/${code}/chat?${query}`, {
@@ -280,6 +302,7 @@ export async function fetchDirectChat(
     });
     if (response.status === 404) return null;
     await noteStatus(response);
+    settleBackoff('chat', transportOutcome(response));
     if (response.status === 403) {
       blockRoom(code);
       return null;
@@ -287,6 +310,7 @@ export async function fetchDirectChat(
     if (!response.ok) return null;
     return readChatMessages(await response.json());
   } catch {
+    settleBackoff('chat', 'network');
     return null;
   }
 }
@@ -297,7 +321,7 @@ export async function fetchMyDirectThreads(
   me: string,
 ): Promise<{ peer: string; messages: FamilyChatMessage[] }[] | null> {
   if (!syncToken || !splitSyncToken(syncToken) || !familySyncUrl() || !/^\d{4,6}$/.test(code) || !me.trim()) return null;
-  if (roomBlocked(code)) return [];
+  if (roomBlocked(code) || syncRetryDelay('chat', 0) > 0) return [];
   const query = new URLSearchParams({ me: me.trim().slice(0, 20) });
   try {
     const response = await request(`/v1/rooms/${code}/chat?${query}`, {
@@ -306,6 +330,7 @@ export async function fetchMyDirectThreads(
     });
     if (response.status === 404) return null;
     await noteStatus(response);
+    settleBackoff('chat', transportOutcome(response));
     if (response.status === 403) {
       blockRoom(code);
       return [];
@@ -322,6 +347,7 @@ export async function fetchMyDirectThreads(
     }
     return threads;
   } catch {
+    settleBackoff('chat', 'network');
     return null;
   }
 }
@@ -343,6 +369,10 @@ export async function abandonFamilySync(): Promise<void> {
   profileQueue = null;
   alertQueue = null;
   trailQueue = null;
+  if (flushTimer) {
+    window.clearTimeout(flushTimer);
+    flushTimer = 0;
+  }
   const started = Date.now();
   while (flushing && Date.now() - started < 8000) {
     await new Promise((resolve) => window.setTimeout(resolve, 20));
@@ -410,12 +440,12 @@ async function sendQueued(path: string, token: string, body: unknown, drop: () =
   noteDiag({ kind: 'http', dir: 'upload', path, status: response.status, ok: response.ok, sealed });
   if (epoch !== syncEpoch) {
     drop();
-    return true;
+    return { ok: true, outcome: '' as const };
   }
   const optionalMissing = optionalRouteMissing(path, response.status);
   if (!optionalMissing) await noteStatus(response, method);
   if (response.ok || optionalMissing || response.status === 400 || response.status === 401 || response.status === 403 || response.status === 413) drop();
-  return response.ok || optionalMissing;
+  return { ok: response.ok || optionalMissing, outcome: optionalMissing ? '' : transportOutcome(response) };
 }
 
 type KeyDirectory = {
@@ -689,11 +719,25 @@ export async function rotateRemovedMember(input: {
   }
 }
 
+function scheduleFlush(delay: number) {
+  if (flushTimer || !hasPending()) return;
+  flushTimer = window.setTimeout(() => {
+    flushTimer = 0;
+    void flushQueues();
+  }, delay);
+}
+
 async function flushQueues() {
+  const wait = syncRetryDelay('write', 0);
+  if (wait > 0) {
+    scheduleFlush(wait);
+    return;
+  }
   if (flushing) return;
   flushing = true;
   const epoch = syncEpoch;
   let failed = false;
+  let outcome = '';
   try {
     if (epoch !== syncEpoch) return;
     const place = placeQueue;
@@ -702,23 +746,25 @@ async function flushQueues() {
       if (!sealed) {
         failed = true;
       } else {
-        const ok = await sendQueued(`/v1/rooms/${place.code}/place`, place.token, sealed, () => {
+        const sent = await sendQueued(`/v1/rooms/${place.code}/place`, place.token, sealed, () => {
           if (placeQueue === place) placeQueue = null;
         }, place.profileKey);
-        if (ok) {
+        outcome = foldSyncOutcome(outcome, sent.outcome);
+        if (sent.ok) {
           const sentName = typeof place.body.name === 'string' ? place.body.name : '';
           const sentAudience = place.body.audience === 'family' ? 'family' : 'admin';
           if (sentName) rememberPlaceName(place.code, sentAudience, sentName);
         }
-        if (!ok) failed = true;
+        if (!sent.ok) failed = true;
       }
     }
     const profile = profileQueue;
     if (profile) {
-      const ok = await sendQueued(`/v1/rooms/${profile.code}/profile`, profile.token, profile.body, () => {
+      const sent = await sendQueued(`/v1/rooms/${profile.code}/profile`, profile.token, profile.body, () => {
         if (profileQueue === profile) profileQueue = null;
       }, profile.profileKey);
-      if (!ok) failed = true;
+      outcome = foldSyncOutcome(outcome, sent.outcome);
+      if (!sent.ok) failed = true;
     }
     const trail = trailQueue;
     if (trail) {
@@ -726,28 +772,32 @@ async function flushQueues() {
       if (!sealed) {
         failed = true;
       } else {
-        const ok = await sendQueued(`/v1/rooms/${trail.code}/trail`, trail.token, sealed, () => {
+        const sent = await sendQueued(`/v1/rooms/${trail.code}/trail`, trail.token, sealed, () => {
           if (trailQueue === trail) trailQueue = null;
         }, trail.profileKey);
-        if (!ok) failed = true;
+        outcome = foldSyncOutcome(outcome, sent.outcome);
+        if (!sent.ok) failed = true;
       }
     }
     const alert = alertQueue;
     if (alert) {
-      const ok = await sendQueued(`/v1/rooms/${alert.alert.code}/alert`, alert.token, alert.alert, () => {
+      const sent = await sendQueued(`/v1/rooms/${alert.alert.code}/alert`, alert.token, alert.alert, () => {
         if (alertQueue === alert) alertQueue = null;
       });
-      if (!ok) failed = true;
+      outcome = foldSyncOutcome(outcome, sent.outcome);
+      if (!sent.ok) failed = true;
     }
-    retryMs = currentSyncPhase() === 'limited' ? QUOTA_RETRY_MS : (failed ? Math.min(retryMs * 2, 20000) : 3000);
+    if (outcome) settleBackoff('write', outcome);
   } catch {
     failed = true;
-    retryMs = currentSyncPhase() === 'limited' ? QUOTA_RETRY_MS : Math.min(retryMs * 2, 20000);
+    settleBackoff('write', 'network');
     if (familySyncUrl()) setPhase('down');
     else setPhase('off');
   } finally {
     flushing = false;
-    if (hasPending()) window.setTimeout(() => void flushQueues(), retryMs);
+    if (!hasPending()) return;
+    const quota = currentSyncPhase() === 'limited' ? QUOTA_RETRY_MS : 0;
+    scheduleFlush(failed ? Math.max(quota, syncRetryDelay('write', 3000)) : 3000);
   }
 }
 
@@ -899,12 +949,15 @@ export function startAdminRemoteSync(
 
   const tick = async () => {
     if (stopped) return;
-    if (quotaPollPaused(currentSyncPhase(), Date.now(), limitedUntil)) {
-      schedule(Math.max(0, limitedUntil - Date.now()));
+    const quotaWait = quotaPollPaused(currentSyncPhase(), Date.now(), limitedUntil) ? Math.max(0, limitedUntil - Date.now()) : 0;
+    const retryWait = syncRetryDelay('room', 0);
+    if (quotaWait > 0 || retryWait > 0) {
+      schedule(Math.max(quotaWait, retryWait));
       return;
     }
     if (roomBlocked(link.code)) return;
     let delay = ROOM_POLL_MS;
+    let outcome = '';
     try {
       const token = await syncTokenFor(link.writeKey, link.readKey);
       // `since` filters alerts only. Places are always the latest consented points,
@@ -919,12 +972,14 @@ export function startAdminRemoteSync(
         },
       });
       const error = await noteStatus(response);
+      outcome = foldSyncOutcome(outcome, transportOutcome(response));
       const action = roomPollAction(response.status, error, {
         canRegister: !!(self?.memberId && self.profileKey),
         attempted: registering.has(link.code),
       });
       if (action === 'block') {
         blockRoom(link.code);
+        settleBackoff('room', outcome);
         return;
       }
       if (action === 'register' && self?.memberId && self.profileKey) {
@@ -948,14 +1003,16 @@ export function startAdminRemoteSync(
           handlers.onAlert(alert);
           if (alert.at > since) since = alert.at;
         }
-      } else if (action !== 'register') {
-        delay = error === 'quota' ? QUOTA_RETRY_MS : 8000;
+      } else if (action !== 'register' && error === 'quota') {
+        delay = QUOTA_RETRY_MS;
       }
     } catch {
+      outcome = foldSyncOutcome(outcome, 'network');
       if (!stopped) setPhase('down');
-      delay = 8000;
     }
+    if (outcome) settleBackoff('room', outcome);
     if (stopped) return;
+    delay = syncRetryDelay('room', delay);
     if (document.visibilityState === 'hidden') delay = Math.max(delay, BACKGROUND_POLL_MIN_MS);
     schedule(delay);
   };
@@ -1033,11 +1090,14 @@ export function startManagedFamilySync(
 
   const tick = async () => {
     if (stopped) return;
-    if (quotaPollPaused(currentSyncPhase(), Date.now(), limitedUntil)) {
-      timer = window.setTimeout(() => void tick(), Math.max(0, limitedUntil - Date.now()));
+    const quotaWait = quotaPollPaused(currentSyncPhase(), Date.now(), limitedUntil) ? Math.max(0, limitedUntil - Date.now()) : 0;
+    const retryWait = syncRetryDelay('family', 0);
+    if (quotaWait > 0 || retryWait > 0) {
+      timer = window.setTimeout(() => void tick(), Math.max(quotaWait, retryWait));
       return;
     }
     let delay = FAMILY_POLL_MS;
+    let outcome = '';
     try {
       for (const link of usable) {
         if (stopped) return;
@@ -1052,6 +1112,7 @@ export function startManagedFamilySync(
         });
         if (response.status === 404) continue;
         const error = await noteStatus(response);
+        outcome = foldSyncOutcome(outcome, transportOutcome(response));
         const action = roomPollAction(response.status, error, {
           canRegister: !!(self?.memberId && self.profileKey),
           attempted: registering.has(link.code),
@@ -1067,7 +1128,7 @@ export function startManagedFamilySync(
         }
         if (!response.ok) {
           noteDiag({ kind: 'http', dir: 'download', path: `/v1/rooms/${link.code}/family`, status: response.status, ok: false, places: 0 });
-          delay = error === 'quota' ? QUOTA_RETRY_MS : FAMILY_POLL_MS;
+          if (error === 'quota') delay = QUOTA_RETRY_MS;
           continue;
         }
         registering.delete(link.code);
@@ -1088,10 +1149,13 @@ export function startManagedFamilySync(
         onRoom(link.code, places, readProfiles(body), await revealTrails(link.code, body), readDeparted(body));
       }
     } catch {
+      outcome = foldSyncOutcome(outcome, 'network');
       if (!stopped && familySyncUrl()) setPhase('down');
       delay = BACKGROUND_POLL_MIN_MS;
     }
+    if (outcome) settleBackoff('family', outcome);
     if (stopped) return;
+    delay = syncRetryDelay('family', delay);
     if (document.visibilityState === 'hidden') delay = Math.max(delay, BACKGROUND_POLL_MIN_MS);
     timer = window.setTimeout(() => void tick(), delay);
   };
