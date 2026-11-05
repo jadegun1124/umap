@@ -2,6 +2,7 @@ import { Capacitor, CapacitorHttp } from '@capacitor/core';
 import { noteDiag } from '../lib/diagLog.mjs';
 import { BACKGROUND_POLL_MIN_MS, FAMILY_POLL_MS, HEALTH_POLL_MS, QUOTA_RETRY_MS, ROOM_POLL_MS, blockRoom, quotaPollPaused, roomBlocked, roomPollAction, shouldRefreshFamilyKeys, syncPhaseAfterResponse } from '../lib/keySyncPace.mjs';
 import { openJson, sealJson, mintFamilyKey, unwrapFamilyKey, wrapFamilyKey } from '../lib/familySeal.mjs';
+import { missingWrapMemberIds, placeForFamilyRoster } from '../lib/familyRosterSync.mjs';
 import { contentKeyBytes, ensureDevice, familyKeyRecord, historyShareToSave, rememberFamilyKey, syncHistoryDirectory } from '../lib/familyVault.mjs';
 import { readMergedFromMember } from '../lib/accountRestore.mjs';
 import { mergeTrailPoints } from '../lib/trailParts.mjs';
@@ -585,6 +586,49 @@ async function runSyncFamilyKeys(code: string, token: string, memberId: string, 
   return familyKeyRecord(localStorage, code) != null;
 }
 
+function readKeyDirectory(body: unknown): KeyDirectory | null {
+  if (!body || typeof body !== 'object') return null;
+  const keys = (body as { keys?: KeyDirectory }).keys;
+  if (!keys || typeof keys !== 'object') return null;
+  return keys;
+}
+
+/** The family GET already has pubs and wraps. Open our wrap and cover anyone still missing one, without waiting out the key upload clock. */
+export async function absorbFamilyKeys(
+  code: string,
+  token: string,
+  memberId: string,
+  profileKey: string,
+  keys: KeyDirectory | null,
+): Promise<boolean> {
+  if (typeof localStorage === 'undefined' || !memberId || !profileKey || !keys || !splitSyncToken(token)) return false;
+  const device = await ensureDevice(localStorage);
+  const kid = typeof keys.kid === 'string' ? keys.kid : '';
+  const wraps = keys.wraps || {};
+  if (kid && wraps[memberId]) {
+    const opened = await unwrapFamilyKey(device.privateKey, wraps[memberId], kid);
+    if (opened) rememberFamilyKey(localStorage, code, kid, opened);
+  }
+  const record = familyKeyRecord(localStorage, code);
+  if (!record || !kid || record.kid !== kid) return familyKeyRecord(localStorage, code) != null;
+  const missing: Record<string, { epk: string; iv: string; ct: string }> = {};
+  for (const id of missingWrapMemberIds(keys)) {
+    const pub = keys.pubs?.[id];
+    if (typeof pub !== 'string') continue;
+    const wrap = await wrapFamilyKey(pub, record.key, record.kid);
+    if (wrap) missing[id] = wrap;
+  }
+  if (Object.keys(missing).length) {
+    await putRoomKeys(code, token, profileKey, {
+      memberId,
+      publicKey: device.publicKey,
+      kid: record.kid,
+      wraps: missing,
+    });
+  }
+  return true;
+}
+
 async function sealQueuedPlace(place: { code: string; token: string; body: Record<string, unknown>; profileKey: string }) {
   const body = { ...place.body };
   if (body.sharing !== true || typeof body.lat !== 'number' || typeof body.lng !== 'number') return body;
@@ -989,6 +1033,7 @@ export function startAdminRemoteSync(
         registering.delete(link.code);
         const body: unknown = await response.json();
         if (self?.memberId && self.profileKey) await syncFamilyKeys(link.code, token, self.memberId, self.profileKey);
+        if (self?.memberId && self.profileKey) await absorbFamilyKeys(link.code, token, self.memberId, self.profileKey, readKeyDirectory(body));
         const places = body && typeof body === 'object' && Array.isArray((body as { places?: unknown[] }).places) ? (body as { places: unknown[] }).places : [];
         const alerts = body && typeof body === 'object' && Array.isArray((body as { alerts?: unknown[] }).alerts) ? (body as { alerts: unknown[] }).alerts : [];
         for (const place of places) {
@@ -1138,13 +1183,15 @@ export function startManagedFamilySync(
           : 0;
         noteDiag({ kind: 'http', dir: 'download', path: `/v1/rooms/${link.code}/family`, status: response.status, ok: true, places: placeCount });
         if (self?.memberId && self.profileKey) await syncFamilyKeys(link.code, link.token, self.memberId, self.profileKey);
+        if (self?.memberId && self.profileKey) await absorbFamilyKeys(link.code, link.token, self.memberId, self.profileKey, readKeyDirectory(body));
         const raw = body && typeof body === 'object' && Array.isArray((body as { places?: unknown[] }).places) ? (body as { places: unknown[] }).places : [];
         const places: SharedPlace[] = [];
         for (const place of raw) {
           if (!isSharedPlace(place) || place.audience !== 'family' || !place.sharing) continue;
           if (typeof place.memberId !== 'string' || !/^local-[a-z0-9]{3,64}$/.test(place.memberId)) continue;
           const opened = await revealPlace(place);
-          if (opened && opened.lat != null && opened.lng != null) places.push(opened);
+          const usable = placeForFamilyRoster(place, opened);
+          if (usable) places.push(usable);
         }
         onRoom(link.code, places, readProfiles(body), await revealTrails(link.code, body), readDeparted(body));
       }

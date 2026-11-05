@@ -17,6 +17,7 @@ import { cancelAccountBackup, loadFamilyAccount, scheduleAccountBackup } from '.
 import { deviceProfileKey, localProfile } from '../../lib/localProfile.mjs';
 import { carryPlace, cleanPlace } from '../../lib/memberPlace.mjs';
 import { ensureRoster, isSelfEchoPlace, mergePeerSessions, withoutSelfEcho } from '../../lib/peerFamily.mjs';
+import { mergeFamilyRoster, rosterUnchanged } from '../../lib/familyRosterSync.mjs';
 import { resolveManagedTarget } from '../../lib/managedPlace.mjs';
 import { hiddenKeysForMember, placeHidden } from '../../lib/familyRoom.mjs';
 import { bindPlaceToMember, placeIsSelf, placeMemberId } from '../../lib/placeBinding.mjs';
@@ -1162,7 +1163,8 @@ function reduceSession(state: Session, action: Action): Session {
       const today = seoulDayKey(now);
       const profiles = action.profiles ?? [];
       const hidden = state.hiddenMemberIds || [];
-      state = hideLeftPublishers(state, action.departed || []);
+      const profileIds = new Set(profiles.filter((profile) => isMemberId(profile.memberId) && profile.memberId !== state.profile?.id).map((profile) => profile.memberId));
+      state = hideLeftPublishers(state, (action.departed || []).filter((id) => !profileIds.has(id)));
       const incoming = action.places.filter((place) => (
         place.audience === 'family'
         && place.sharing
@@ -1200,11 +1202,21 @@ function reduceSession(state: Session, action: Action): Session {
           && (member.photo || '') === (item.photo || '')
           && member.needsAppUpdate === (item.place.legacyClient === true);
       });
-      if (unchanged) return collapseRoster(state, priorNames);
+      const merged = mergeFamilyRoster(state.members, {
+        code: action.code,
+        places: action.places,
+        profiles,
+        departed: action.departed || [],
+        hidden,
+        selfId: state.profile?.id || '',
+        ownerId: state.guardians.find((link) => link.code === action.code)?.ownerMemberId || '',
+      });
+      if (unchanged && rosterUnchanged(state.members, merged.members)) return collapseRoster(state, priorNames);
+      if (unchanged) return collapseRoster({ ...state, members: merged.members }, priorNames);
       let tracks = tracksWithinHistory(state.tracks, now);
       let visits = visitsWithinHistory(state.visits, now);
       let journeys = state.journeys ?? {};
-      let members = state.members.filter((member) => !member.id.startsWith(prefix));
+      let members = merged.members;
       for (const item of described) {
         const place = item.place;
         if (place.lat == null || place.lng == null) continue;
