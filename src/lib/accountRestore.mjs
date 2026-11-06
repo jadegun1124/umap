@@ -2,6 +2,7 @@
 // same so the family room does not mint a second card.
 
 import { formatRecoveryCode, normalizeRecoveryCode } from '../../sync/account.mjs';
+import { keptFamilyRoomCode } from './roomMerge.mjs';
 
 export {
   ACCOUNT_LINK_CONFLICT_MESSAGE,
@@ -299,6 +300,7 @@ export function applyAccountSnapshot(state, account) {
     syncWriteKey: account.room.writeKey,
     syncReadKey: account.room.readKey,
     guardians: Array.isArray(account.guardians) ? account.guardians : [],
+    familyRoomCode: keptFamilyRoomCode(state && state.familyRoomCode, account.room.code, account.guardians),
     home: account.home || null,
     journeys: journeys.length ? { self: journeys } : {},
     visits: visits.length ? { self: visits } : {},

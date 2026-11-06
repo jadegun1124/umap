@@ -12,6 +12,34 @@ const KAKAO = {
   fetchKakaoUser: async () => ({ id: 123456789, kakao_account: { profile: { nickname: '엄마' } } }),
 };
 
+test('account restore does not keep a family room lock from another room', () => {
+  const cleared = applyAccountSnapshot({
+    ...freshPhone(),
+    familyRoomCode: '55555',
+    permissions: { completed: true },
+  }, {
+    memberId: 'local-selfself',
+    profileKey: 'profileKeyAAAAAAAA',
+    profile: { name: '나' },
+    room: { code: '99999', writeKey: 'writeKeyAAAAAAAAAA', readKey: 'readKeyAAAAAAAAAAA' },
+    guardians: [{ id: 'g-1', code: '44444', label: '가족', share: 'allowed' }],
+  });
+  assert.equal(cleared.familyRoomCode, '');
+  assert.equal(cleared.inviteCode, '99999');
+  const kept = applyAccountSnapshot({
+    ...freshPhone(),
+    familyRoomCode: '99999',
+    permissions: { completed: true },
+  }, {
+    memberId: 'local-selfself',
+    profileKey: 'profileKeyAAAAAAAA',
+    profile: { name: '나' },
+    room: { code: '99999', writeKey: 'writeKeyAAAAAAAAAA', readKey: 'readKeyAAAAAAAAAAA' },
+    guardians: [],
+  });
+  assert.equal(kept.familyRoomCode, '99999');
+});
+
 function freshPhone() {
   return {
     stage: 'login',
