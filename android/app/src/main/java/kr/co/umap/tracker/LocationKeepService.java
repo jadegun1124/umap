@@ -422,7 +422,9 @@ public class LocationKeepService {
                     movingNow = movingStream;
                 }
                 noteHeartbeat(context);
-                if (last != null && anySharing(readConfig(context))) {
+                long lastFix = lastFixAt(context);
+                boolean freshFix = lastFix > 0L && System.currentTimeMillis() - lastFix < FIX_STALE_STILL_MS;
+                if (last != null && freshFix && anySharing(readConfig(context))) {
                     long since = lastPublishedAt <= 0L ? Long.MAX_VALUE : System.currentTimeMillis() - lastPublishedAt;
                     long gap = movingNow ? UPLOAD_MOVING_MS : UPLOAD_STILL_MS;
                     if (since >= gap && UPLOAD_BACKOFF.remaining(System.currentTimeMillis()) == 0L) {
@@ -1154,6 +1156,7 @@ public class LocationKeepService {
             connection.setRequestMethod("PUT");
             connection.setRequestProperty("content-type", "application/json; charset=utf-8");
             connection.setRequestProperty("x-umap-sync-key", token);
+            connection.setRequestProperty("X-App-Version", BuildConfig.VERSION_NAME + " " + BuildConfig.VERSION_CODE);
             if (profileKey != null && !profileKey.isEmpty()) connection.setRequestProperty("x-umap-profile-key", profileKey);
             connection.setDoOutput(true);
             byte[] bytes = body.toString().getBytes(StandardCharsets.UTF_8);

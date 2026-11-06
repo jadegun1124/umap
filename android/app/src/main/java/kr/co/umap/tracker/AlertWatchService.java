@@ -44,7 +44,9 @@ public class AlertWatchService {
     private static final String CHAT_CHANNEL = "umap_chat";
     private static final int WATCH_ID = OngoingNotificationCleanup.WATCH_NOTIFICATION_ID;
     private static final long POLL_MS = 12_000L;
-    /** 503 and network misses wait 5s, 15s, 45s, 2m, then 10m. An OK response clears it. */
+    /** A success moves a stale alert cursor up to this close to now. */
+    private static final long ALERT_CURSOR_OVERLAP_MS = 60_000L;
+    /** 401, 403, 503, and network misses wait 5s, 15s, 45s, 2m, then 10m. An OK response clears it. */
     private static final SyncBackoff POLL_BACKOFF = new SyncBackoff();
     private static final ExecutorService IO = Executors.newSingleThreadExecutor();
 
@@ -254,7 +256,8 @@ public class AlertWatchService {
     }
 
     private static int outcomeRank(int status) {
-        if (status < 0) return 3;
+        if (status < 0) return 4;
+        if (status == 401 || status == 403) return 3;
         if (status >= 500 && status <= 599) return 2;
         if (status >= 200 && status < 300) return 1;
         return 0;
@@ -290,9 +293,18 @@ public class AlertWatchService {
         String me = room.optString("me", "").trim();
         if (!code.matches("\\d{4,6}") || !token.matches("[A-Za-z0-9_-]{16,64}\\.[A-Za-z0-9_-]{16,64}")) return 0;
         int status = 0;
-        if (readKey.matches("[A-Za-z0-9_-]{16,64}")) status = pullAlerts(context, base, code, token, readKey, me);
-        if (validMe(me)) status = worseStatus(status, pullChat(context, base, code, token, me, !MainActivity.isResumed()));
+        if (readKey.matches("[A-Za-z0-9_-]{16,64}")) status = pullAlerts(context, base, code, token, readKey, me, room);
+        if (validMe(me)) status = worseStatus(status, pullChat(context, base, code, token, me, !MainActivity.isResumed(), room));
         return status;
+    }
+
+    /** Member headers let a room that already has owners accept this poll. */
+    private static void stampIdentity(HttpURLConnection connection, JSONObject room) {
+        String memberId = room.optString("memberId", "");
+        String profileKey = room.optString("profileKey", "");
+        if (memberId.matches("local-[a-z0-9]{3,64}")) connection.setRequestProperty("x-umap-member", memberId);
+        if (profileKey.matches("[A-Za-z0-9_\\-]{16,64}")) connection.setRequestProperty("x-umap-profile-key", profileKey);
+        connection.setRequestProperty("X-App-Version", BuildConfig.VERSION_NAME + " " + BuildConfig.VERSION_CODE);
     }
 
     private static boolean motionForMe(JSONObject alert, String me) {
@@ -305,7 +317,7 @@ public class AlertWatchService {
         return false;
     }
 
-    private static int pullAlerts(Context context, String base, String code, String token, String readKey, String me) {
+    private static int pullAlerts(Context context, String base, String code, String token, String readKey, String me, JSONObject room) {
         long since = prefs(context).getLong("since", 0L);
         if (since == 0L) since = System.currentTimeMillis() - 60_000L;
         HttpURLConnection connection = null;
@@ -318,6 +330,7 @@ public class AlertWatchService {
             connection.setRequestMethod("GET");
             connection.setRequestProperty("x-umap-sync-key", token);
             connection.setRequestProperty("x-umap-read-key", readKey);
+            stampIdentity(connection, room);
             int status = connection.getResponseCode();
             if (status < 200 || status >= 300) return status;
             JSONObject body = new JSONObject(readStream(connection.getInputStream()));
@@ -349,6 +362,8 @@ public class AlertWatchService {
                 String first = nextSeen.iterator().next();
                 nextSeen.remove(first);
             }
+            long floor = System.currentTimeMillis() - ALERT_CURSOR_OVERLAP_MS;
+            if (cursor < floor) cursor = floor;
             prefs(context).edit().putLong("since", cursor).putStringSet("seen", nextSeen).apply();
             return status;
         } catch (Exception ignored) {
@@ -359,7 +374,7 @@ public class AlertWatchService {
         }
     }
 
-    private static int pullChat(Context context, String base, String code, String token, String me, boolean notify) {
+    private static int pullChat(Context context, String base, String code, String token, String me, boolean notify, JSONObject room) {
         String sinceKey = "chatSince_" + code;
         long since = prefs(context).getLong(sinceKey, 0L);
         if (since == 0L) since = System.currentTimeMillis() - 60_000L;
@@ -373,6 +388,7 @@ public class AlertWatchService {
             connection.setReadTimeout(8000);
             connection.setRequestMethod("GET");
             connection.setRequestProperty("x-umap-sync-key", token);
+            stampIdentity(connection, room);
             int status = connection.getResponseCode();
             if (status < 200 || status >= 300) return status;
             JSONObject body = new JSONObject(readStream(connection.getInputStream()));
@@ -412,6 +428,8 @@ public class AlertWatchService {
                 String first = nextSeen.iterator().next();
                 nextSeen.remove(first);
             }
+            long floor = System.currentTimeMillis() - ALERT_CURSOR_OVERLAP_MS;
+            if (cursor < floor) cursor = floor;
             prefs(context).edit().putLong(sinceKey, cursor).putStringSet("chatSeen", nextSeen).apply();
             return status;
         } catch (Exception ignored) {

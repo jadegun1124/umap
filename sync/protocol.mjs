@@ -121,7 +121,7 @@ export function withCors(response) {
   const headers = new Headers(response.headers);
   headers.set('access-control-allow-origin', '*');
   headers.set('access-control-allow-methods', 'GET, PUT, POST, DELETE, OPTIONS');
-  headers.set('access-control-allow-headers', 'content-type, x-umap-sync-key, x-umap-read-key, x-umap-profile-key, x-umap-account-key, x-umap-member');
+  headers.set('access-control-allow-headers', 'content-type, x-umap-sync-key, x-umap-read-key, x-umap-profile-key, x-umap-account-key, x-umap-member, x-app-version');
   headers.set('access-control-max-age', '86400');
   headers.set('cache-control', 'no-store');
   return new Response(response.body, { status: response.status, headers });
@@ -515,14 +515,26 @@ function viewProfiles(room) {
   }));
 }
 
+function cleanClientVersion(value) {
+  if (typeof value !== 'string') return '';
+  const text = value.trim().slice(0, 32);
+  if (!/^[0-9A-Za-z.+() _-]{1,32}$/.test(text)) return '';
+  return text;
+}
+
 function roomOwners(room) {
   return room.owners && typeof room.owners === 'object' ? room.owners : {};
 }
 
-export async function authorizeReader(room, memberId, profileKey) {
+export async function authorizeReader(room, memberId, profileKey, options = {}) {
   const owners = roomOwners(room);
   if (!Object.keys(owners).length) return { error: null };
-  if (typeof memberId !== 'string' || !MEMBER_ID.test(memberId)) return { error: json({ error: 'member' }, 403) };
+  const identified = typeof memberId === 'string' && MEMBER_ID.test(memberId);
+  // 1.62 alert polls send the room read key and no member header. The worker
+  // already checked that key before this runs. Those polls may read. A member
+  // header is still checked, including a revoked member.
+  if (!identified && options.readKeyProven === true) return { error: null };
+  if (!identified) return { error: json({ error: 'member' }, 403) };
   if (typeof profileKey !== 'string' || !isKeyPart(profileKey)) return { error: json({ error: 'profile-key' }, 403) };
   const seals = room.seals && typeof room.seals === 'object' ? room.seals : {};
   if (Array.isArray(seals.revoked) && seals.revoked.includes(memberId)) return { error: json({ error: 'revoked' }, 403) };
@@ -1078,6 +1090,8 @@ export async function parseOperation(request) {
       since: Number.isFinite(since) ? since : 0,
       viewerId: request.headers.get('x-umap-member') || '',
       profileKey: request.headers.get('x-umap-profile-key') || '',
+      readKeyProven: true,
+      clientVersion: cleanClientVersion(request.headers.get('x-app-version') || ''),
     };
   }
 
@@ -1094,11 +1108,14 @@ export async function parseOperation(request) {
     if (body.error) return body.error;
     const cleaned = cleanPlace(body.value, code, Date.now());
     if (cleaned.error) return cleaned.error;
+    const clientVersion = cleanClientVersion(request.headers.get('x-app-version') || '');
+    if (clientVersion) cleaned.place.client = clientVersion;
     return {
       kind: 'place',
       token: id,
       place: cleaned.place,
       profileKey: request.headers.get('x-umap-profile-key') || '',
+      clientVersion,
     };
   }
 
@@ -1341,8 +1358,8 @@ export async function handleSyncRequest(store, request, extras = {}) {
   }
 
   const room = (await store.read(op.token)) || emptyRoom();
-  if (op.kind === 'get') {
-    const auth = await authorizeReader(room, op.viewerId, op.profileKey);
+    if (op.kind === 'get') {
+    const auth = await authorizeReader(room, op.viewerId, op.profileKey, { readKeyProven: op.readKeyProven === true });
     if (auth.error) return auth.error;
     const view = viewRoom(room, op.since);
     await logLocationUse(extras.accounts, op.viewerId, view, extras.now || Date.now());

@@ -33,7 +33,7 @@ import { AlwaysAllowGuide, AlwaysAllowMapHint } from './AlwaysAllowGuide';
 import { AlwaysAllowSetup } from './AlwaysAllowSetup';
 import { memberFocusStep } from '../../lib/memberFocus.mjs';
 import { memberPlaceLabel } from '../../lib/memberPlace.mjs';
-import { memberIsStale, memberPresence, memberPresenceLabel } from '../../lib/memberPresence.mjs';
+import { memberIsStale, memberPresence, memberPresenceLabel, pinAgeLabel } from '../../lib/memberPresence.mjs';
 import { mapMembers, rosterMembers } from '../../lib/peerFamily.mjs';
 import { AlwaysAllowNotice } from './AlwaysAllowNotice';
 import { InviteQrImage, InviteQrScan } from './InviteQr';
@@ -472,13 +472,15 @@ export function FamilyMapScreen() {
     });
   }, [keepPrompt, state.mode, state.permissions.notifications]);
 
-  const chatIdentity = `${dmRoomKey}:${state.profile?.name ?? ''}:${notifyOk ? '1' : '0'}`;
+  const chatIdentity = `${dmRoomKey}:${state.profile?.name ?? ''}:${state.profile?.id ?? ''}:${state.profile?.profileKey ?? ''}:${notifyOk ? '1' : '0'}`;
   useEffect(() => {
     if (!notifyOk || !familySyncConfigured()) return;
     let cancel = false;
     void (async () => {
       const current = familyRef.current.state;
-      const rooms: Array<{ code: string; token: string; me: string; readKey?: string }> = [];
+      const rooms: Array<{ code: string; token: string; me: string; readKey?: string; memberId?: string; profileKey?: string }> = [];
+      const memberId = current.profile?.profileKey ? current.profile.id : '';
+      const profileKey = current.profile?.profileKey || '';
       if (current.syncWriteKey && current.syncReadKey) {
         const token = await syncTokenFor(current.syncWriteKey, current.syncReadKey);
         rooms.push({
@@ -486,11 +488,19 @@ export function FamilyMapScreen() {
           token,
           me: myChatName(current, current.inviteCode),
           readKey: current.syncReadKey,
+          memberId,
+          profileKey,
         });
       }
       for (const link of current.guardians) {
         if (!link.syncToken?.includes('.')) continue;
-        rooms.push({ code: link.code, token: link.syncToken, me: myChatName(current, link.code) });
+        rooms.push({
+          code: link.code,
+          token: link.syncToken,
+          me: myChatName(current, link.code),
+          memberId,
+          profileKey,
+        });
       }
       if (cancel || rooms.length === 0) return;
       let allPushed = true;
@@ -511,6 +521,8 @@ export function FamilyMapScreen() {
             token: room.token,
             me: room.me,
             ...(room.readKey ? { readKey: room.readKey } : {}),
+            ...(room.memberId ? { memberId: room.memberId } : {}),
+            ...(room.profileKey ? { profileKey: room.profileKey } : {}),
           })),
         }),
       }).catch(() => undefined);
@@ -2283,11 +2295,9 @@ function overviewLinesFor(
 }
 
 function personLive(member: Member, points: { lat: number; lng: number; at: number; speedMps?: number | null; stayEnd?: boolean }[] | undefined, now: number) {
-  if (member.id !== 'self' && member.needsAppUpdate) return OLD_APP_PLACE_LABEL;
   const presence = memberPresence(member, now);
   const stale = memberPresenceLabel(presence);
-  if (stale) return stale;
-  return liveMotionLabel({
+  const motion = stale ? '' : liveMotionLabel({
     located: hasLocation(member),
     moving: member.moving,
     points,
@@ -2296,6 +2306,10 @@ function personLive(member: Member, points: { lat: number; lng: number; at: numb
       ? { lat: member.lat, lng: member.lng, at: member.updatedAt || now, accuracyM: member.accuracyM }
       : undefined,
   });
+  const age = pinAgeLabel(presence);
+  const line = stale || [motion, age].filter(Boolean).join(' · ');
+  if (member.id !== 'self' && member.needsAppUpdate) return line ? `${line} · 새 버전이 필요해요` : OLD_APP_PLACE_LABEL;
+  return line;
 }
 
 function MemberCard({

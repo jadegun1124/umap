@@ -43,7 +43,7 @@ export class FamilyRoom {
     let room = (await this.ctx.storage.get('room')) || emptyRoom();
     if (op.kind === 'get') {
       const { authorizeReader } = await import('./protocol.mjs');
-      const auth = await authorizeReader(room, op.viewerId, op.profileKey);
+      const auth = await authorizeReader(room, op.viewerId, op.profileKey, { readKeyProven: op.readKeyProven === true });
       if (auth.error) return auth.error;
       return Response.json(viewRoom(room, op.since));
     }

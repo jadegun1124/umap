@@ -1,6 +1,8 @@
 // Last-known location stays on the card after a phone stops reporting.
 // After a week the card is 연결 끊김. An explicit server leave drops the row.
 
+export const MEMBER_AGE_MS = 45_000;
+export const MEMBER_DIM_MS = 3 * 60 * 1000;
 export const MEMBER_STALE_MS = 10 * 60 * 1000;
 export const MEMBER_DISCONNECTED_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -23,12 +25,14 @@ export function relativePlaceAge(at, now) {
 
 export function memberPresence(member, now) {
   const stamp = Number(member?.updatedAt);
-  if (!Number.isFinite(stamp) || stamp <= 0) return { kind: 'unknown', ago: '' };
+  if (!Number.isFinite(stamp) || stamp <= 0) return { kind: 'unknown', ago: '', faded: false };
   const age = Number(now) - stamp;
-  if (!Number.isFinite(age) || age < MEMBER_STALE_MS) return { kind: 'live', ago: '' };
-  const ago = relativePlaceAge(stamp, now);
-  if (age >= MEMBER_DISCONNECTED_MS) return { kind: 'disconnected', ago };
-  return { kind: 'stale', ago };
+  if (!Number.isFinite(age)) return { kind: 'unknown', ago: '', faded: false };
+  const ago = age >= MEMBER_AGE_MS ? relativePlaceAge(stamp, now) : '';
+  if (age >= MEMBER_DISCONNECTED_MS) return { kind: 'disconnected', ago, faded: true };
+  if (age >= MEMBER_STALE_MS) return { kind: 'stale', ago, faded: true };
+  if (age >= MEMBER_DIM_MS) return { kind: 'live', ago, faded: true };
+  return { kind: 'live', ago, faded: false };
 }
 
 export function memberPresenceLabel(presence) {
@@ -38,8 +42,14 @@ export function memberPresenceLabel(presence) {
   return '';
 }
 
+export function pinAgeLabel(presence) {
+  if (!presence) return '';
+  if (presence.kind === 'disconnected' || presence.kind === 'stale') return memberPresenceLabel(presence);
+  return presence.ago || '';
+}
+
 export function memberIsStale(presence) {
-  return presence?.kind === 'stale' || presence?.kind === 'disconnected';
+  return presence?.kind === 'stale' || presence?.kind === 'disconnected' || presence?.faded === true;
 }
 
 export function cleanDepartedIds(values) {

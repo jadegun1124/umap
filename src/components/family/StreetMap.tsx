@@ -5,7 +5,7 @@ import { noteDiag } from '../../lib/diagLog.mjs';
 import { hasLocation } from '../../lib/geo';
 import { MEMBER_PIN_PX, memberCalloutHtml, memberPinIcon, spreadPinPositions } from '../../lib/mapPinSpread.mjs';
 import { savedPlaceLabel } from '../../lib/memberPlace.mjs';
-import { memberIsStale, memberPresence } from '../../lib/memberPresence.mjs';
+import { memberIsStale, memberPresence, pinAgeLabel } from '../../lib/memberPresence.mjs';
 import { appendLiveTip, trailDrawParts } from '../../lib/tracking.mjs';
 import { VWORLD_ATTRIBUTION, vworldApiKey, vworldBaseTileUrl } from '../../services/vworld';
 import type { HomeZone, Member, TrackPoint } from '../../types/family';
@@ -286,7 +286,9 @@ export const StreetMap = forwardRef<StreetMapHandle, {
       if (!hasLocation(member)) continue;
       const at = pins.get(member.id) || { lat: member.lat, lng: member.lng, dx: 0, dy: 0 };
       const selected = member.id === selectedId;
-      const dimmed = memberIsStale(memberPresence(member, Date.now()));
+      const presence = memberPresence(member, Date.now());
+      const dimmed = memberIsStale(presence);
+      const age = escapeHtml(pinAgeLabel(presence));
       const color = '#0084FF';
       const self = member.role === 'self';
       const label = escapeHtml(self ? '나' : member.name);
@@ -310,7 +312,7 @@ export const StreetMap = forwardRef<StreetMapHandle, {
             dy: at.dy,
             dimmed,
             tailColor: selected ? '#0084FF' : '#fff',
-            labelHtml: `<span data-label style="display:inline-flex;flex-direction:column;align-items:center;margin-bottom:4px;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:700;max-width:180px;box-shadow:0 1px 4px rgba(15,23,42,.16);background:${selected ? '#0084FF' : '#fff'};color:${selected ? '#fff' : '#0f172a'}"><span style="display:inline-flex;align-items:center;white-space:nowrap">${label}${battery}</span>${place ? `<span style="display:block;max-width:164px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;font-weight:600;opacity:.85">${place}</span>` : ''}</span>`,
+            labelHtml: `<span data-label style="display:inline-flex;flex-direction:column;align-items:center;margin-bottom:4px;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:700;max-width:180px;box-shadow:0 1px 4px rgba(15,23,42,.16);background:${selected ? '#0084FF' : '#fff'};color:${selected ? '#fff' : '#0f172a'}"><span style="display:inline-flex;align-items:center;white-space:nowrap">${label}${battery}</span>${place ? `<span style="display:block;max-width:164px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;font-weight:600;opacity:.85">${place}</span>` : ''}${age ? `<span style="display:block;max-width:164px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;font-weight:700;opacity:.9">${age}</span>` : ''}</span>`,
             faceHtml: face,
           }),
           iconSize: pinIcon.iconSize,
