@@ -1,29 +1,32 @@
 #!/usr/bin/env python3
 """Rasterize the KINVO launcher from resources/kinvo-app-icon.png.
 
-Legacy and web icons use the full artwork. The adaptive foreground is the
-same artwork, larger inside the 108dp layer: big enough to fill the 66dp
-safe circle, still clear of the mask at the KINVO letters and the pin tip.
-The adaptive background is flat deep blue. Notification and monochrome
+Web, splash, and iOS icons keep the framed artwork. Launcher icons do not:
+the source's white corners and rounded rim are filled so the blue reaches
+the bitmap edge, and the picture is scaled to the launcher's visible face.
+
+AdaptiveIconDrawable draws the 108dp layer at 1.5x and shows the center
+72dp. A foreground that only fills the 66dp safe circle therefore sits
+inside that face with a flat blue margin — the inner square on a Samsung
+squircle. VISIBLE_SCALE 0.92 is the largest scale of this artwork on that
+72dp face whose near-white KINVO letters stay inside a circle mask. 1.0
+shaves the lower corners of the K and the pin. Notification and monochrome
 icons stay white silhouettes; Android tints those.
 """
 
 from __future__ import annotations
 
-import math
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFilter
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "resources" / "kinvo-app-icon.png"
-# Android adaptive safe circle is 66dp inside the 108dp layer.
-SAFE_DIAMETER = 66 / 108
-# 1.66 used 0.96: a square inscribed in that circle, then shrunk again.
-# 1.18 keeps the KINVO letters and the pin tip about 2dp inside the circle.
-# The blue corners of the tile can meet the mask. The wordmark does not.
-SAFE_INSET = 1.18
-BACKGROUND = (0x01, 0x49, 0xD3)  # #0149D3, the tile's deep blue
+# Fraction of the visible launcher face (the center 72dp of the 108dp layer).
+# 1.0 fills that face and clips KINVO on a circle. 0.92 keeps the letters in.
+VISIBLE_SCALE = 0.92
+VIEWPORT = 72 / 108
+BACKGROUND = (0x01, 0x49, 0xD3)  # #0149D3, web and splash blue
 
 
 def punch_white_corners(tile: Image.Image, background: tuple[int, int, int]) -> Image.Image:
@@ -72,17 +75,134 @@ def cover(size: int, tile: Image.Image) -> Image.Image:
 
 def circle_mask(size: int) -> Image.Image:
     mask = Image.new("L", (size, size), 0)
-    from PIL import ImageDraw
     ImageDraw.Draw(mask).ellipse((0, 0, size - 1, size - 1), fill=255)
     return mask
 
 
-def adaptive_foreground(size: int, tile: Image.Image) -> Image.Image:
-    canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    side = max(1, int(round(size * SAFE_DIAMETER / math.sqrt(2) * SAFE_INSET)))
-    icon = tile.resize((side, side), Image.Resampling.LANCZOS)
-    canvas.paste(icon, ((size - side) // 2, (size - side) // 2), icon)
+def _is_corner_white(red: int, green: int, blue: int) -> bool:
+    return min(red, green, blue) >= 230 and max(red, green, blue) - min(red, green, blue) <= 28
+
+
+def strip_rounded_frame(tile: Image.Image) -> Image.Image:
+    """Replace the white corners outside the rounded tile with the neighboring blue.
+
+    The letters are white too. Flooding only from the border, and only through
+    near-white pixels, stops at the blue rim and leaves KINVO alone. A blur
+    then softens the filled corners so a squarer mask does not show rays.
+    """
+    image = tile.convert("RGBA")
+    pixels = image.load()
+    width, height = image.size
+    pad = bytearray(width * height)
+    stack: list[tuple[int, int]] = []
+    for x in range(width):
+        stack.append((x, 0))
+        stack.append((x, height - 1))
+    for y in range(height):
+        stack.append((0, y))
+        stack.append((width - 1, y))
+    while stack:
+        x, y = stack.pop()
+        index = y * width + x
+        red, green, blue, _alpha = pixels[x, y]
+        if pad[index] or not _is_corner_white(red, green, blue):
+            continue
+        pad[index] = 1
+        if x + 1 < width:
+            stack.append((x + 1, y))
+        if x:
+            stack.append((x - 1, y))
+        if y + 1 < height:
+            stack.append((x, y + 1))
+        if y:
+            stack.append((x, y - 1))
+
+    center_x = (width - 1) / 2
+    center_y = (height - 1) / 2
+    for y in range(height):
+        row = y * width
+        for x in range(width):
+            if not pad[row + x]:
+                continue
+            delta_x = center_x - x
+            delta_y = center_y - y
+            steps = int(max(abs(delta_x), abs(delta_y), 1))
+            for step in range(1, steps + 1):
+                next_x = int(round(x + delta_x * step / steps))
+                next_y = int(round(y + delta_y * step / steps))
+                if not 0 <= next_x < width or not 0 <= next_y < height:
+                    continue
+                if pad[next_y * width + next_x]:
+                    continue
+                pixels[x, y] = pixels[next_x, next_y]
+                break
+
+    blurred = image.filter(ImageFilter.GaussianBlur(radius=14))
+    blurred_pixels = blurred.load()
+    for y in range(height):
+        row = y * width
+        for x in range(width):
+            if pad[row + x]:
+                pixels[x, y] = blurred_pixels[x, y]
+    return image
+
+
+def launcher_edge_color(tile: Image.Image) -> tuple[int, int, int]:
+    pixels = tile.convert("RGBA").load()
+    width, height = tile.size
+    samples = (
+        pixels[width // 2, 0],
+        pixels[width // 2, height - 1],
+        pixels[0, height // 2],
+        pixels[width - 1, height // 2],
+    )
+    return tuple(sum(sample[channel] for sample in samples) // len(samples) for channel in range(3))
+
+
+def extend_edges(image: Image.Image, size: int) -> Image.Image:
+    """Grow a square by repeating its edge pixels so the margin matches the art."""
+    image = image.convert("RGBA")
+    side = image.size[0]
+    if side == size:
+        return image
+    if side > size:
+        return image.resize((size, size), Image.Resampling.LANCZOS)
+    left = (size - side) // 2
+    top = (size - side) // 2
+    right = size - side - left
+    bottom = size - side - top
+    canvas = Image.new("RGBA", (size, size))
+    if top:
+        canvas.paste(image.crop((0, 0, side, 1)).resize((side, top), Image.Resampling.NEAREST), (left, 0))
+    if bottom:
+        canvas.paste(image.crop((0, side - 1, side, side)).resize((side, bottom), Image.Resampling.NEAREST), (left, top + side))
+    if left:
+        canvas.paste(image.crop((0, 0, 1, side)).resize((left, side), Image.Resampling.NEAREST), (0, top))
+    if right:
+        canvas.paste(image.crop((side - 1, 0, side, side)).resize((right, side), Image.Resampling.NEAREST), (left + side, top))
+    if top and left:
+        canvas.paste(Image.new("RGBA", (left, top), image.getpixel((0, 0))), (0, 0))
+    if top and right:
+        canvas.paste(Image.new("RGBA", (right, top), image.getpixel((side - 1, 0))), (left + side, 0))
+    if bottom and left:
+        canvas.paste(Image.new("RGBA", (left, bottom), image.getpixel((0, side - 1))), (0, top + side))
+    if bottom and right:
+        canvas.paste(Image.new("RGBA", (right, bottom), image.getpixel((side - 1, side - 1))), (left + side, top + side))
+    canvas.paste(image, (left, top))
     return canvas
+
+
+def visible_icon(art: Image.Image, size: int) -> Image.Image:
+    side = max(1, min(size, int(round(size * VISIBLE_SCALE))))
+    resized = art.resize((side, side), Image.Resampling.LANCZOS)
+    return extend_edges(resized, size)
+
+
+def adaptive_foreground(size: int, art: Image.Image) -> Image.Image:
+    """Opaque 108dp layer. The center 72dp is the visible face; the rim matches it."""
+    visible_side = max(1, int(round(size * VIEWPORT)))
+    visible = visible_icon(art, visible_side)
+    return extend_edges(visible, size)
 
 
 def on_background(size: int, tile: Image.Image, fraction: float) -> Image.Image:
@@ -101,17 +221,19 @@ def splash(width: int, height: int, tile: Image.Image) -> Image.Image:
     return canvas
 
 
-def write_background() -> None:
+def write_background(color: tuple[int, int, int]) -> None:
+    hex_rgb = f"#{color[0]:02X}{color[1]:02X}{color[2]:02X}"
+    hex_argb = f"#FF{color[0]:02X}{color[1]:02X}{color[2]:02X}"
     drawable = ROOT / "android" / "app" / "src" / "main" / "res" / "drawable" / "ic_launcher_background.xml"
     drawable.write_text(
-        """<?xml version="1.0" encoding="utf-8"?>
+        f"""<?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
     <path
-        android:fillColor="#FF0149D3"
+        android:fillColor="{hex_argb}"
         android:pathData="M0,0h108v108h-108z" />
 </vector>
 """,
@@ -119,9 +241,9 @@ def write_background() -> None:
     )
     values = ROOT / "android" / "app" / "src" / "main" / "res" / "values" / "ic_launcher_background.xml"
     values.write_text(
-        """<?xml version="1.0" encoding="utf-8"?>
+        f"""<?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="ic_launcher_background">#0149D3</color>
+    <color name="ic_launcher_background">{hex_rgb}</color>
 </resources>
 """,
         encoding="utf-8",
@@ -190,11 +312,13 @@ def emit() -> None:
     if not SOURCE.is_file():
         raise SystemExit(f"missing {SOURCE}")
     tile = punch_white_corners(Image.open(SOURCE), BACKGROUND)
+    launcher = strip_rounded_frame(Image.open(SOURCE))
+    edge = launcher_edge_color(launcher)
     resources = ROOT / "resources"
     tile.save(resources / "icon-master.png", optimize=True)
     tile.save(resources / "icon.png", optimize=True)
     tile.save(resources / "icon-rounded.png", optimize=True)
-    adaptive_foreground(1024, tile).save(resources / "icon-foreground.png", optimize=True)
+    adaptive_foreground(1024, launcher).save(resources / "icon-foreground.png", optimize=True)
     splash(2732, 2732, tile).save(resources / "splash.png", optimize=True)
     cover(512, tile).convert("RGB").save(resources / "play-icon.png", optimize=True)
 
@@ -213,13 +337,13 @@ def emit() -> None:
     for density, size in legacy.items():
         folder = res / f"mipmap-{density}"
         folder.mkdir(parents=True, exist_ok=True)
-        cover(size, tile).convert("RGB").save(folder / "ic_launcher.png", optimize=True)
-        round_icon = cover(size, tile)
+        visible_icon(launcher, size).convert("RGB").save(folder / "ic_launcher.png", optimize=True)
+        round_icon = visible_icon(launcher, size)
         round_icon.putalpha(circle_mask(size))
         round_icon.save(folder / "ic_launcher_round.png", optimize=True)
     for density, size in foreground_sizes.items():
         folder = res / f"mipmap-{density}"
-        adaptive_foreground(size, tile).save(folder / "ic_launcher_foreground.png", optimize=True)
+        adaptive_foreground(size, launcher).save(folder / "ic_launcher_foreground.png", optimize=True)
 
     for relative, (width, height) in {
         "drawable/splash.png": (480, 320),
@@ -238,7 +362,7 @@ def emit() -> None:
         target.parent.mkdir(parents=True, exist_ok=True)
         splash(width, height, tile).save(target, optimize=True)
 
-    write_background()
+    write_background(edge)
     save_ios(tile)
     manifest = public / "manifest.json"
     if manifest.is_file():
@@ -247,7 +371,7 @@ def emit() -> None:
         data["background_color"] = "#0149D3"
         data["theme_color"] = "#0149D3"
         manifest.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    print("KINVO icons written. adaptive background #0149D3, safe inset 1.18")
+    print(f"KINVO icons written. launcher scale {VISIBLE_SCALE}, edge #{edge[0]:02X}{edge[1]:02X}{edge[2]:02X}")
 
 
 if __name__ == "__main__":
