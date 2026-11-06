@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import { calloutAnchors, memberCalloutHtml, memberPinIcon, spreadPinPositions } from './mapPinSpread.mjs';
+import { calloutAnchors, calloutLeader, memberCalloutHtml, memberPinIcon, spreadPinPositions } from './mapPinSpread.mjs';
 
 function text(path) {
   return readFileSync(new URL(path, import.meta.url), 'utf8');
@@ -28,6 +28,8 @@ test('the avatar stays on the projected lat/lng at every zoom', () => {
       assert.equal(slot.lng, member.lng);
       assert.equal(anchors.pin.x, anchors.origin.x);
       assert.equal(anchors.pin.y, anchors.origin.y);
+      assert.equal(anchors.tailTip.x, anchors.pin.x);
+      assert.ok(Math.abs(anchors.tailTip.y - (anchors.pinRim.y + (slot.dy || 0))) < 1e-6);
       assert.ok(Math.abs(anchors.labelTail.x - anchors.pin.x - (slot.dx || 0)) < 1e-6);
       assert.ok(Math.abs(anchors.labelTail.y - anchors.pin.y - (slot.dy || 0)) < 1e-6);
     }
@@ -44,7 +46,7 @@ test('the avatar stays on the projected lat/lng at every zoom', () => {
   assert.equal(high.labelTail.x - high.pin.x, 120);
 });
 
-test('the circle is the marker anchor and the label shift does not move it', () => {
+test('the circle is the marker anchor and a shifted chip keeps a leader back to it', () => {
   const html = memberCalloutHtml({
     dx: 150,
     dy: 0,
@@ -53,24 +55,39 @@ test('the circle is the marker anchor and the label shift does not move it', () 
     labelHtml: '<span data-label>Khoon</span>',
     faceHtml: 'K',
   });
+  const leader = calloutLeader(150, 0);
+  assert.equal(leader.needed, true);
+  assert.deepEqual(leader.from, { x: 0, y: -21 });
+  assert.deepEqual(leader.to, { x: 150, y: -21 });
   assert.match(html, /data-pin-root/);
   assert.match(html, /data-pin-anchor/);
+  assert.match(html, /data-pin-leader/);
   assert.match(html, /data-label-tail/);
   assert.match(html, /width:max-content/);
   assert.match(html, /width:42px/);
+  assert.match(html, /x1="0" y1="-21" x2="150" y2="-21"/);
   assert.match(html, /translate\(calc\(-50% \+ 150px\), 0px\)/);
-  const pin = html.slice(html.indexOf('data-pin-root'), html.indexOf('data-callout'));
-  assert.equal(pin.includes('150px'), false);
+  const face = html.slice(html.indexOf('data-pin-anchor'), html.indexOf('>', html.indexOf('data-pin-anchor')));
+  assert.equal(face.includes('150px'), false);
   assert.equal(html.includes('translate(150px, 0px)'), false);
+  const stacked = memberCalloutHtml({ dx: 0, dy: -72, labelHtml: '<span data-label>엄마</span>', faceHtml: '엄' });
+  assert.match(stacked, /x1="0" y1="-21" x2="0" y2="-93"/);
+  assert.match(stacked, /translate\(calc\(-50% \+ 0px\), -72px\)/);
+  const seated = memberCalloutHtml({ dx: 0, dy: 0, labelHtml: '<span data-label>나</span>', faceHtml: '나' });
+  assert.equal(calloutLeader(0, 0).needed, false);
+  assert.equal(seated.includes('data-pin-leader'), false);
+  assert.match(seated, /translate\(calc\(-50% \+ 0px\), 0px\)/);
   assert.deepEqual(memberPinIcon(), { iconSize: [42, 42], iconAnchor: [21, 21] });
   const screen = text('../components/family/StreetMap.tsx');
   assert.match(screen, /memberCalloutHtml/);
   assert.match(screen, /memberPinIcon/);
+  assert.match(screen, /markerZIndex\(at\.dy, selected\)/);
   const marker = screen.slice(screen.indexOf('const marker = L.marker([at.lat, at.lng]'), screen.indexOf("marker.on('click'"));
   assert.match(marker, /iconSize: pinIcon\.iconSize/);
   assert.match(marker, /iconAnchor: pinIcon\.iconAnchor/);
   assert.equal(marker.includes('iconSize: [0, 0]'), false);
   assert.equal(marker.includes('iconAnchor: [0, 0]'), false);
+  assert.equal((marker.match(/L\.marker/g) || []).length, 1);
   const tracking = text('../components/family/useFamilyTracking.ts');
   assert.equal(/id === 'self' && haversineMeters\(here, home\)/.test(tracking), false);
 });
@@ -84,5 +101,5 @@ test('the release notes do not promise dashed walks or a diag code', () => {
   assert.match(workflow, /키 업로드/);
   assert.match(workflow, /10초/);
   assert.match(workflow, /30초/);
-  assert.match(workflow, /1\.73\.0/);
+  assert.match(workflow, /1\.74\.0/);
 });

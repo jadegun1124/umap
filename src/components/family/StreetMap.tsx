@@ -3,7 +3,7 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { noteDiag } from '../../lib/diagLog.mjs';
 import { hasLocation } from '../../lib/geo';
-import { MEMBER_PIN_PX, memberCalloutHtml, memberPinIcon, spreadPinPositions } from '../../lib/mapPinSpread.mjs';
+import { MEMBER_PIN_PX, markerZIndex, memberCalloutHtml, memberPinIcon, spreadPinPositions } from '../../lib/mapPinSpread.mjs';
 import { savedPlaceLabel } from '../../lib/memberPlace.mjs';
 import { memberIsDimmed, memberPresence, pinAgeLabel } from '../../lib/memberPresence.mjs';
 import { appendLiveTip, trailDrawParts } from '../../lib/tracking.mjs';
@@ -304,7 +304,7 @@ export const StreetMap = forwardRef<StreetMapHandle, {
         ? `<img alt="" src="${escapeHtml(photo)}" style="${faceBox};object-fit:cover"/>`
         : `<span style="${faceBox};background:${color};color:#fff;display:flex;align-items:center;justify-content:center;font-weight:900">${initial}</span>`;
       const marker = L.marker([at.lat, at.lng], {
-        zIndexOffset: selected ? 800 : 400,
+        zIndexOffset: markerZIndex(at.dy, selected),
         icon: L.divIcon({
           className: 'umap-member-pin',
           html: memberCalloutHtml({

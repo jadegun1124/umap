@@ -1,6 +1,15 @@
-/** Same-spot family labels. The circle stays on the real lat/lng; only the name shifts in screen pixels. */
+/** Family pins stay on the real lat/lng. Callouts share that marker and stack above it. */
 
 export const MEMBER_PIN_PX = 42;
+
+/**
+ * Widest name/battery/place chip (max-width 180), the optional age line
+ * ("N분 전" / "N시간 전"), and the 7px tail.
+ * The stack step is at least this tall so chips on one point do not overlap.
+ */
+export const CALLOUT_WIDTH_PX = 180;
+export const CALLOUT_BLOCK_PX = 72;
+export const CALLOUT_STACK_PX = 80;
 
 /** Circle center is the marker anchor, so the avatar stays on the lat/lng while zooming. */
 export function memberPinIcon() {
@@ -20,12 +29,20 @@ function metersBetween(a, b) {
   return 2 * 6371000 * Math.asin(Math.min(1, Math.sqrt(h)));
 }
 
-function bubbleSlot(index, count) {
-  if (count <= 1) return { dx: 0, dy: 0 };
-  if (count === 2) return { dx: index === 0 ? -120 : 120, dy: 0 };
-  const column = index % 3;
-  const row = Math.floor(index / 3);
-  return { dx: (column - 1) * 150, dy: row * 72 + (column === 1 ? -56 : 0) };
+/** South first, so the southern chip hugs its circle and northern chips climb above it. */
+function compareCluster(left, right) {
+  if (left.lat !== right.lat) return left.lat - right.lat;
+  if (left.lng !== right.lng) return left.lng - right.lng;
+  return String(left.id).localeCompare(String(right.id));
+}
+
+/**
+ * Screen-pixel shift of the callout only. dx/dy are not added to the circle.
+ * index 0 sits on the pin. Later chips move straight up by a fixed step.
+ */
+export function bubbleSlot(index, count) {
+  if (count <= 1 || index <= 0) return { dx: 0, dy: 0 };
+  return { dx: 0, dy: -index * CALLOUT_STACK_PX };
 }
 
 export function spreadPinPositions(members) {
@@ -38,7 +55,7 @@ export function spreadPinPositions(members) {
     if (used.has(member.id)) continue;
     const group = located
       .filter((other) => !used.has(other.id) && metersBetween(member, other) <= CLUSTER_M)
-      .sort((left, right) => String(left.id).localeCompare(String(right.id)));
+      .sort(compareCluster);
     group.forEach((item, index) => {
       const slot = bubbleSlot(index, group.length);
       placed.set(item.id, { lat: item.lat, lng: item.lng, dx: slot.dx, dy: slot.dy });
@@ -46,6 +63,11 @@ export function spreadPinPositions(members) {
     });
   }
   return placed;
+}
+
+/** Lower chips paint above higher ones so a leader does not strike through the name. */
+export function markerZIndex(dy = 0, selected = false) {
+  return (selected ? 2000 : 1000) + (Number(dy) || 0);
 }
 
 /** Web mercator pixels for a lat/lng. The circle uses this point. Label dx/dy are not added here. */
@@ -60,32 +82,77 @@ export function projectCallout(lat, lng, zoom) {
 
 /**
  * Circle center is the projected lat/lng at every zoom.
- * dx/dy move only the name, in screen pixels. A pixel shift on the circle
- * would stay a fixed screen distance and slide across the ground as the zoom changes.
+ * dx/dy move only the callout, in screen pixels. labelTail is that shift.
+ * tailTip is the bottom center of the chip; pinRim is the top of the circle.
  */
 export function calloutAnchors({ lat, lng, dx = 0, dy = 0, zoom }) {
   const origin = projectCallout(lat, lng, zoom);
   const shiftX = Number(dx) || 0;
   const shiftY = Number(dy) || 0;
+  const pin = { x: origin.x, y: origin.y };
+  const pinRim = { x: origin.x, y: origin.y - MEMBER_PIN_PX / 2 };
   return {
     origin,
-    pin: { x: origin.x, y: origin.y },
+    pin,
     labelTail: { x: origin.x + shiftX, y: origin.y + shiftY },
+    pinRim,
+    tailTip: { x: pinRim.x + shiftX, y: pinRim.y + shiftY },
   };
+}
+
+/** Leader from the circle's top edge to the callout tail, in pin-center pixels (+y down). */
+export function calloutLeader(dx = 0, dy = 0) {
+  const shiftX = Number(dx) || 0;
+  const shiftY = Number(dy) || 0;
+  const rimY = -MEMBER_PIN_PX / 2;
+  return {
+    needed: shiftX !== 0 || shiftY !== 0,
+    from: { x: 0, y: rimY },
+    to: { x: shiftX, y: rimY + shiftY },
+  };
+}
+
+/** Screen rect of the chip. bottom is the tail tip, which sits on the pin when dx and dy are 0. */
+export function calloutScreenBox({ lat, lng, dx = 0, dy = 0, zoom }) {
+  const anchors = calloutAnchors({ lat, lng, dx, dy, zoom });
+  return {
+    left: anchors.tailTip.x - CALLOUT_WIDTH_PX / 2,
+    right: anchors.tailTip.x + CALLOUT_WIDTH_PX / 2,
+    top: anchors.tailTip.y - CALLOUT_BLOCK_PX,
+    bottom: anchors.tailTip.y,
+    pin: anchors.pin,
+    tail: anchors.tailTip,
+  };
+}
+
+export function calloutBoxesOverlap(a, b) {
+  return a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+}
+
+function leaderMarkup(dx, dy) {
+  const leader = calloutLeader(dx, dy);
+  if (!leader.needed) return '';
+  const { from, to } = leader;
+  const line = (color, width) => (
+    `<line x1="${from.x}" y1="${from.y}" x2="${to.x}" y2="${to.y}" stroke="${color}" stroke-width="${width}" stroke-linecap="round"/>`
+  );
+  return `<svg data-pin-leader width="0" height="0" aria-hidden="true" style="position:absolute;left:50%;top:50%;overflow:visible;pointer-events:none;z-index:0">${line('#ffffff', 4)}${line('#64748b', 1.5)}</svg>`;
 }
 
 /**
  * The 42px circle fills the marker. iconAnchor is its center, so Leaflet moves
- * that point with the map. dx/dy translate the name only.
+ * the circle, the chip, and the leader together. A zero offset puts the chip
+ * on the circle. Any other offset keeps a leader from the chip back to the rim.
  */
 export function memberCalloutHtml({ dx = 0, dy = 0, dimmed = false, tailColor = '#fff', labelHtml = '', faceHtml = '' }) {
   const shiftX = Number(dx) || 0;
   const shiftY = Number(dy) || 0;
   const tail = tailColor === '#0084FF' ? '#0084FF' : '#fff';
   const pin = MEMBER_PIN_PX;
-  return `<div data-pin-root style="position:relative;width:${pin}px;height:${pin}px;opacity:${dimmed ? '0.55' : '1'}">
-    <div data-pin-anchor style="width:${pin}px;height:${pin}px;display:flex;align-items:center;justify-content:center">${faceHtml}</div>
-    <div data-callout style="position:absolute;left:50%;bottom:100%;width:max-content;transform:translate(calc(-50% + ${shiftX}px), ${shiftY}px)">
+  return `<div data-pin-root style="position:relative;width:${pin}px;height:${pin}px;overflow:visible;opacity:${dimmed ? '0.55' : '1'}">
+    ${leaderMarkup(shiftX, shiftY)}
+    <div data-pin-anchor style="position:relative;z-index:1;width:${pin}px;height:${pin}px;display:flex;align-items:center;justify-content:center">${faceHtml}</div>
+    <div data-callout style="position:absolute;z-index:2;left:50%;bottom:100%;width:max-content;transform:translate(calc(-50% + ${shiftX}px), ${shiftY}px)">
       ${labelHtml}
       <span data-label-tail style="display:block;width:0;height:0;margin:0 auto;border-left:6px solid transparent;border-right:6px solid transparent;border-top:7px solid ${tail}"></span>
     </div>
