@@ -83,6 +83,12 @@ test('renderer death is handled and records errors stay inside the list', () => 
   assert.match(main, /return true/);
   assert.match(main, /recreate\(\)/);
   assert.match(main, /lastRendererRecoverAt/);
+  assert.match(main, /postDelayed/);
+  assert.match(main, /rendererRecoverQueued/);
+  const street = text('../components/family/StreetMap.tsx');
+  assert.match(street, /_zooming/);
+  assert.match(street, /armSafety\(\)/);
+  assert.match(street, /held\.circle\.setLatLng/);
   const screen = text('../components/family/FamilyMapScreen.tsx');
   assert.match(screen, /RecordsBoundary/);
   assert.match(screen, /screenMapTrails/);

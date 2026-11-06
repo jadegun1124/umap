@@ -21,6 +21,8 @@ import com.getcapacitor.WebViewListener;
 public class MainActivity extends BridgeActivity {
     private static volatile boolean resumed;
     private static long lastRendererRecoverAt;
+    private final Handler rendererHandler = new Handler(Looper.getMainLooper());
+    private boolean rendererRecoverQueued;
 
     public static boolean isResumed() {
         return resumed;
@@ -106,29 +108,35 @@ public class MainActivity extends BridgeActivity {
     /**
      * A dead renderer used to take the whole process down because nothing
      * returned true from onRenderProcessGone. Recreate the activity so the
-     * WebView is new. A second death inside the cooldown stays handled
-     * without recreating in a loop.
+     * WebView is new. A second death inside 8 seconds waits out that gap
+     * and then recreates once, instead of leaving the dead view on screen.
      */
     private void watchRenderer() {
         if (bridge == null) return;
         bridge.addWebViewListener(new WebViewListener() {
             @Override
             public boolean onRenderProcessGone(WebView webView, RenderProcessGoneDetail detail) {
-                long now = SystemClock.uptimeMillis();
-                if (now - lastRendererRecoverAt >= 8_000L) {
-                    lastRendererRecoverAt = now;
-                    new Handler(Looper.getMainLooper()).post(() -> {
-                        if (isFinishing() || isDestroyed()) return;
-                        try {
-                            recreate();
-                        } catch (RuntimeException ignored) {
-                            /* true below already kept the process alive */
-                        }
-                    });
-                }
+                scheduleRendererRecover();
                 return true;
             }
         });
+    }
+
+    private void scheduleRendererRecover() {
+        if (rendererRecoverQueued || isFinishing() || isDestroyed()) return;
+        long now = SystemClock.uptimeMillis();
+        long wait = Math.max(0L, 8_000L - (now - lastRendererRecoverAt));
+        rendererRecoverQueued = true;
+        rendererHandler.postDelayed(() -> {
+            rendererRecoverQueued = false;
+            if (isFinishing() || isDestroyed()) return;
+            lastRendererRecoverAt = SystemClock.uptimeMillis();
+            try {
+                recreate();
+            } catch (RuntimeException ignored) {
+                /* true from onRenderProcessGone already kept the process alive */
+            }
+        }, wait);
     }
 
     /** The open activity stays lit. Leaving the app lets the screen sleep again. */

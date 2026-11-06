@@ -108,12 +108,12 @@ test('nearby members share one status chip and the markers stay put', async () =
   ];
   const far = member('uncle', '삼촌', lat + 0.01, lng, { battery: 10, place: '상계동' });
 
-  const render = (members, selectedId) => act(async () => {
+  const render = (members, selectedId, home = null) => act(async () => {
     root.render(React.createElement(bundled.StreetMap, {
       center: { lat, lng },
       zoom: 17,
       members,
-      home: null,
+      home,
       trails: [],
       trailColor: '#0084FF',
       selectedId,
@@ -214,4 +214,48 @@ test('nearby members share one status chip and the markers stay put', async () =
   assert.equal(rects, 0);
   assert.equal(runsDuring, runsBefore);
   assert.ok(runsAfter - runsBefore <= 2, `layouts ${runsBefore} -> ${runsAfter}`);
+
+  const pinchBefore = Number(mapNode.dataset.layoutRuns || 0);
+  leafletMap.touchZoom._zooming = true;
+  leafletMap.fire('zoomstart');
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 1400));
+  });
+  assert.equal(Number(mapNode.dataset.layoutRuns || 0), pinchBefore, 'a long pinch laid out under the fingers');
+  leafletMap.touchZoom._zooming = false;
+  leafletMap.fire('zoomend');
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 40));
+  });
+  assert.ok(Number(mapNode.dataset.layoutRuns || 0) > pinchBefore);
+
+  const home = { label: '우리 집', lat, lng, radiusM: 200 };
+  await render([near[0]], undefined, home);
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 40));
+  });
+  const zoneCenter = () => {
+    let found = null;
+    leafletMap.eachLayer((layer) => {
+      if (typeof layer.getRadius === 'function' && layer.getRadius() >= 100 && typeof layer.getLatLng === 'function') {
+        found = layer.getLatLng();
+      }
+    });
+    return found;
+  };
+  const parked = zoneCenter();
+  assert.ok(parked);
+  assert.ok(Math.abs(parked.lat - lat) < 0.0001);
+  leafletMap.fire('movestart');
+  const movedHome = { ...home, lat: lat + 0.01 };
+  await render([near[0]], undefined, movedHome);
+  const during = zoneCenter();
+  assert.ok(Math.abs(during.lat - lat) < 0.0001, `zone followed the finger ${during && during.lat}`);
+  leafletMap.fire('moveend');
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 40));
+  });
+  const settled = zoneCenter();
+  assert.ok(Math.abs(settled.lat - movedHome.lat) < 0.0001, `zone stayed behind at ${settled && settled.lat}`);
+  root.unmount();
 });

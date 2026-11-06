@@ -205,6 +205,7 @@ export const StreetMap = forwardRef<StreetMapHandle, {
   selectedIdRef.current = selectedId;
   const playbackRef = useRef<L.Marker | null>(null);
   const playbackPanRef = useRef(0);
+  const homeLayersRef = useRef<{ circle: L.Circle; label: L.Marker } | null>(null);
   const drawnTrailKeyRef = useRef('');
   const renderNotedAt = useRef(0);
   const [ready, setReady] = useState(false);
@@ -362,19 +363,32 @@ export const StreetMap = forwardRef<StreetMapHandle, {
     map.on('click', () => onClearRef.current?.());
     let moveSafety = 0;
     let endFrame = 0;
-    const fingerDown = () => {
-      const dragging = map.dragging as { moving?: () => boolean } | undefined;
-      return typeof dragging?.moving === 'function' && dragging.moving();
+    const gestureActive = () => {
+      const handlers = [map.dragging, map.touchZoom, map.boxZoom];
+      for (const handler of handlers) {
+        if (!handler) continue;
+        const active = handler as { moving?: () => boolean; _zooming?: boolean; _moving?: boolean };
+        if (typeof active.moving === 'function' && active.moving()) return true;
+        if (active._zooming === true || active._moving === true) return true;
+      }
+      return false;
     };
-    const onMoveStart = () => {
-      movingRef.current = true;
+    const armSafety = () => {
       window.clearTimeout(moveSafety);
-      // A stuck animation still lays out once. A finger that is still down does not.
+      // A stuck animation still lays out once. A finger or pinch that is still down waits.
       moveSafety = window.setTimeout(() => {
-        if (fingerDown() || !movingRef.current) return;
+        if (!movingRef.current) return;
+        if (gestureActive()) {
+          armSafety();
+          return;
+        }
         movingRef.current = false;
         placeRef.current('moveend');
       }, 1200);
+    };
+    const onMoveStart = () => {
+      movingRef.current = true;
+      armSafety();
     };
     const onMoveEnd = () => {
       window.clearTimeout(moveSafety);
@@ -432,6 +446,7 @@ export const StreetMap = forwardRef<StreetMapHandle, {
       map.off('zoomstart', noteUserView);
       map.off('dragstart');
       playbackRef.current = null;
+      homeLayersRef.current = null;
       drawnTrailKeyRef.current = '';
       pinMarkersRef.current.forEach((held) => held.marker.remove());
       pinMarkersRef.current.clear();
@@ -487,26 +502,48 @@ export const StreetMap = forwardRef<StreetMapHandle, {
       if (nodeRef.current) {
         nodeRef.current.dataset.layoutRuns = String(Number(nodeRef.current.dataset.layoutRuns || 0) + 1);
       }
+      const paintHome = () => {
+        const held = homeLayersRef.current;
+        if (!zone) {
+          if (held) {
+            held.circle.remove();
+            held.label.remove();
+            homeLayersRef.current = null;
+          }
+          return;
+        }
+        if (held) {
+          held.circle.setLatLng([zone.lat, zone.lng]);
+          held.circle.setRadius(zone.radiusM);
+          held.label.setLatLng([zone.lat, zone.lng]);
+          return;
+        }
+        const circle = L.circle([zone.lat, zone.lng], {
+          radius: zone.radiusM,
+          color: '#0084FF',
+          weight: 2,
+          fillColor: '#0084FF',
+          fillOpacity: 0.14,
+        }).addTo(group);
+        const label = L.marker([zone.lat, zone.lng], {
+          interactive: false,
+          icon: L.divIcon({
+            className: 'umap-home-label',
+            html: '<span style="display:inline-block;padding:2px 8px;border-radius:999px;background:#fff;color:#0f172a;font-size:11px;font-weight:700;box-shadow:0 1px 4px rgba(15,23,42,.16)">우리 집</span>',
+            iconSize: [64, 22],
+            iconAnchor: [32, 28],
+          }),
+        }).addTo(group);
+        homeLayersRef.current = { circle, label };
+      };
       if (reason === 'data') {
         group.clearLayers();
-        if (zone) {
-          L.circle([zone.lat, zone.lng], {
-            radius: zone.radiusM,
-            color: '#0084FF',
-            weight: 2,
-            fillColor: '#0084FF',
-            fillOpacity: 0.14,
-          }).addTo(group);
-          L.marker([zone.lat, zone.lng], {
-            interactive: false,
-            icon: L.divIcon({
-              className: 'umap-home-label',
-              html: '<span style="display:inline-block;padding:2px 8px;border-radius:999px;background:#fff;color:#0f172a;font-size:11px;font-weight:700;box-shadow:0 1px 4px rgba(15,23,42,.16)">우리 집</span>',
-              iconSize: [64, 22],
-              iconAnchor: [32, 28],
-            }),
-          }).addTo(group);
-        }
+        homeLayersRef.current = null;
+        paintHome();
+      } else if (zone) {
+        // A drag updates the home center without a new data pass when the last
+        // sample already matches the finger-up center.
+        paintHome();
       }
 
       const now = Date.now();
