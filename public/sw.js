@@ -1,6 +1,21 @@
 // Umap PWA. Same-origin GET is network first. Family sync is cross-origin and must not be intercepted:
 // a service worker that forwards PUT bodies can drop the live location publish.
 const CACHE_NAME = 'umap-pwa-v2';
+const TILE_CACHE = 'umap-tiles-v1';
+const TILE_LIMIT = 480;
+
+function vworldTile(url) {
+  return url.protocol === 'https:'
+    && url.hostname === 'api.vworld.kr'
+    && url.pathname.includes('/req/wmts/')
+    && url.pathname.endsWith('.png');
+}
+
+async function trimTiles(cache) {
+  const keys = await cache.keys();
+  if (keys.length <= TILE_LIMIT) return;
+  await Promise.all(keys.slice(0, keys.length - TILE_LIMIT).map((key) => cache.delete(key)));
+}
 
 self.addEventListener('install', () => {
   self.skipWaiting();
@@ -9,13 +24,27 @@ self.addEventListener('install', () => {
 self.addEventListener('activate', (event) => {
   event.waitUntil((async () => {
     const keys = await caches.keys();
-    await Promise.all(keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key)));
+    await Promise.all(keys.filter((key) => key !== CACHE_NAME && key !== TILE_CACHE).map((key) => caches.delete(key)));
     await self.clients.claim();
   })());
 });
 
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
+  // Tile paths contain the key. Keep them in the Cache API only. Never log them.
+  if (event.request.method === 'GET' && vworldTile(url)) {
+    event.respondWith((async () => {
+      const cache = await caches.open(TILE_CACHE);
+      const hit = await cache.match(event.request);
+      if (hit) return hit;
+      const response = await fetch(event.request);
+      if (response && (response.ok || response.type === 'opaque')) {
+        cache.put(event.request, response.clone()).then(() => trimTiles(cache)).catch(() => {});
+      }
+      return response;
+    })());
+    return;
+  }
   if (url.origin !== self.location.origin) return;
   if (event.request.method !== 'GET') return;
   if (url.pathname.includes('/v1/')) return;

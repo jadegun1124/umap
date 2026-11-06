@@ -27,13 +27,30 @@
 .umap-street-map.leaflet-container {
   z-index: 0;
   min-height: 240px;
-  background: #d7e3ee;
+  /* Warm base-map paper. An empty tile reads as ground, not a gray hole. */
+  background: #efe6d6;
   font-family: inherit;
   /* Leaflet's drag-only rule is touch-action: pinch-zoom, so a WebView can
      steal the finger. The map handles pan and pinch itself. */
   touch-action: none;
   -ms-touch-action: none;
   overscroll-behavior: none;
+}
+
+.umap-street-map .leaflet-map-pane {
+  will-change: transform;
+}
+
+.umap-street-map .leaflet-tile-pane {
+  background: #efe6d6;
+}
+
+.umap-member-pin [data-callout] {
+  transition: transform 180ms linear;
+}
+
+.umap-street-map.umap-gesturing [data-callout] {
+  transition: none;
 }
 
 .leaflet-container img,

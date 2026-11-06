@@ -7,6 +7,7 @@ import {
   distanceMeters,
   firstPlaceLabel,
   groupMembersByPlace,
+  groupPinShiftY,
   groupStatusLabelHtml,
   orderStatusMembers,
   statusCalloutHtml,
@@ -136,6 +137,7 @@ test('the merged chip is lifted above the group center on a leader', () => {
   assert.match(html, /rotate\(-90deg\)/);
   assert.match(html, /data-label-tail/);
   assert.ok(STATUS_LIFT_PX >= 42);
+  assert.equal(groupPinShiftY(42), -(STATUS_LIFT_PX - 21));
 });
 
 test('a merged chip shows the place once and one name line each', () => {

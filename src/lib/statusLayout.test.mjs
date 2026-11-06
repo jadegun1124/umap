@@ -12,6 +12,7 @@ import {
   holdAnchor,
   holdSpread,
   stablePlaceGroups,
+  stickyStatusHost,
 } from './statusLayout.mjs';
 
 function pointAt(origin, meters) {
@@ -76,6 +77,16 @@ test('fresh groups match the 50m rule and a pair already together stays until 62
   assert.equal(stablePlaceGroups([self, apart], [{ key: 'mom|self', members: [self, { id: 'mom' }] }]).length, 2);
 });
 
+test('a new member does not move the merged chip off the pin that already carries it', () => {
+  const previous = new Map([
+    ['self', 'self'],
+    ['mom', 'self'],
+  ]);
+  assert.equal(stickyStatusHost(['self', 'mom', 'dad'], previous, 'dad'), 'self');
+  assert.equal(stickyStatusHost(['mom', 'khoon'], new Map([['mom', 'uncle'], ['khoon', 'uncle']]), 'mom'), 'mom');
+  assert.equal(stickyStatusHost(['self', 'mom'], new Map(), 'mom'), 'mom');
+});
+
 test('a chip keeps its slot until it covers a button, then returns only when the preferred slot is clear', () => {
   const anchor = { x: 200, y: 400 };
   const size = groupChipSize(2);
@@ -119,6 +130,26 @@ test('a chip keeps its slot until it covers a button, then returns only when the
   ]);
   assert.equal(crowded.changed, true);
   assert.equal(crowded.offsets.get('status:a').dx !== 0 || crowded.offsets.get('status:a').dy !== -72, true);
+});
+
+test('a few pixels of button overlap still leaves the slot', () => {
+  const anchor = { x: 200, y: 300 };
+  const size = { width: 120, height: 80 };
+  const button = [{ left: 150, right: 250, top: 224, bottom: 260 }];
+  const stayed = chipBox('status', anchor, { dx: 0, dy: -72 }, size);
+  assert.ok(overlapDepth(stayed, button[0]) > 0);
+  assert.ok(overlapDepth(stayed, button[0]) <= 8);
+  const moved = chooseChipOffset({
+    kind: 'status',
+    anchor,
+    size,
+    obstacles: button,
+    previous: { dx: 0, dy: -72 },
+    preferred: { dx: 0, dy: -72 },
+  });
+  const box = chipBox('status', anchor, moved, size);
+  assert.equal(overlapDepth(box, button[0]), 0);
+  assert.ok(moved.dx !== 0 || moved.dy !== -72);
 });
 
 test('a chip beside the top buttons stays on screen instead of climbing off the map', () => {

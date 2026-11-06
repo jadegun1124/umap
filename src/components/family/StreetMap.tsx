@@ -3,11 +3,12 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { noteDiag } from '../../lib/diagLog.mjs';
 import { hasLocation } from '../../lib/geo';
-import { MEMBER_PIN_PX, markerZIndex, memberCalloutHtml, memberPinIcon, spreadPinPositions } from '../../lib/mapPinSpread.mjs';
+import { baseTileLayerOptions } from '../../lib/mapTiles.mjs';
+import { MEMBER_PIN_PX, markerZIndex, memberCalloutHtml, memberPinIcon, spreadPinPositions, syncCalloutGeometry } from '../../lib/mapPinSpread.mjs';
 import { savedPlaceLabel } from '../../lib/memberPlace.mjs';
 import { memberIsDimmed, memberPresence, pinAgeLabel } from '../../lib/memberPresence.mjs';
-import { firstPlaceLabel, groupStatusLabelHtml, orderStatusMembers, STATUS_LIFT_PX, statusCalloutHtml } from '../../lib/memberStatusGroup.mjs';
-import { assignChipOffsets, groupChipSize, holdAnchor, holdSpread, inflateRect, soloChipSize, stablePlaceGroups } from '../../lib/statusLayout.mjs';
+import { firstPlaceLabel, groupPinShiftY, groupStatusLabelHtml, orderStatusMembers } from '../../lib/memberStatusGroup.mjs';
+import { assignChipOffsets, groupChipSize, holdSpread, inflateRect, soloChipSize, stablePlaceGroups, stickyStatusHost } from '../../lib/statusLayout.mjs';
 import { displaySolidTrail, DISPLAY_TRAIL_CAP, trailGeometryKey } from '../../lib/displayTrail.mjs';
 import { appendLiveTip, trailDrawParts } from '../../lib/tracking.mjs';
 import { VWORLD_ATTRIBUTION, vworldApiKey, vworldBaseTileUrl } from '../../services/vworld';
@@ -46,7 +47,7 @@ function batteryIcon(pct: number, color: string): string {
   return `<svg width="16" height="12" viewBox="0 0 20 12" aria-hidden="true"><rect x="0.75" y="1.25" width="16.5" height="9.5" rx="2" fill="none" stroke="${color}" stroke-width="1.4"/><rect x="17.6" y="4" width="1.6" height="4" rx="0.6" fill="${color}"/><rect x="2.2" y="3" width="${fillWidth}" height="6" rx="1" fill="${color}"/></svg>`;
 }
 
-type HeldMarker = { marker: L.Marker; html: string };
+type HeldMarker = { marker: L.Marker; html: string; contentKey: string };
 
 function memberIdFromEvent(event: { originalEvent?: Event }): string {
   const target = event.originalEvent?.target;
@@ -67,7 +68,7 @@ function soloLabelHtml(member: Member, home: HomeZone | null, selected: boolean,
   const label = escapeHtml(member.role === 'self' ? '나' : member.name);
   const place = escapeHtml(memberPlaceText(member, home));
   const battery = batteryMarkup(member, selected);
-  return `<span data-label style="display:inline-flex;flex-direction:column;align-items:center;margin-bottom:4px;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:700;max-width:180px;box-shadow:0 1px 4px rgba(15,23,42,.16);background:${selected ? '#0084FF' : '#fff'};color:${selected ? '#fff' : '#0f172a'}"><span style="display:inline-flex;align-items:center;white-space:nowrap">${label}${battery}</span>${place ? `<span style="display:block;max-width:164px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;font-weight:600;opacity:.85">${place}</span>` : ''}${age ? `<span style="display:block;max-width:164px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;font-weight:700;opacity:.9">${age}</span>` : ''}</span>`;
+  return `<span data-label style="display:inline-flex;flex-direction:column;align-items:center;margin-bottom:4px;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:700;max-width:180px;box-shadow:0 1px 2px rgba(15,23,42,.16);background:${selected ? '#0084FF' : '#fff'};color:${selected ? '#fff' : '#0f172a'}"><span style="display:inline-flex;align-items:center;white-space:nowrap">${label}${battery}</span>${place ? `<span style="display:block;max-width:164px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;font-weight:600;opacity:.85">${place}</span>` : ''}${age ? `<span style="display:block;max-width:164px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;font-weight:700;opacity:.9">${age}</span>` : ''}</span>`;
 }
 
 function groupLabelHtml(members: Member[], home: HomeZone | null, selectedId: string | undefined, now: number): string {
@@ -90,7 +91,7 @@ function pinFaceHtml(member: Member): string {
   const color = '#0084FF';
   const self = member.role === 'self';
   const initial = escapeHtml(self ? '나' : member.name.slice(0, 1));
-  const faceBox = `width:${MEMBER_PIN_PX}px;height:${MEMBER_PIN_PX}px;box-sizing:border-box;border-radius:999px;border:4px solid #fff;box-shadow:0 6px 16px rgba(15,23,42,.2)`;
+  const faceBox = `width:${MEMBER_PIN_PX}px;height:${MEMBER_PIN_PX}px;box-sizing:border-box;border-radius:999px;border:4px solid #fff;box-shadow:0 1px 2px rgba(15,23,42,.28)`;
   const photo = typeof member.photo === 'string' && member.photo.startsWith('data:image/') && member.photo.length < 120_000
     ? member.photo
     : '';
@@ -99,21 +100,30 @@ function pinFaceHtml(member: Member): string {
     : `<span style="${faceBox};background:${color};color:#fff;display:flex;align-items:center;justify-content:center;font-weight:900">${initial}</span>`;
 }
 
-function letStatusClicksThrough(marker: L.Marker) {
-  const el = marker.getElement();
-  if (el) el.style.pointerEvents = 'none';
-}
-
-function paintHeld(held: HeldMarker, html: string, icon: L.DivIcon) {
-  if (held.html === html) return;
+function paintHeld(held: HeldMarker, contentKey: string, html: string, icon: L.DivIcon, offset: { dx: number; dy: number }) {
   const el = held.marker.getElement();
+  if (el && held.contentKey === contentKey) {
+    syncCalloutGeometry(el, offset.dx, offset.dy);
+    held.html = html;
+    return;
+  }
   if (el) {
     el.innerHTML = html;
+    held.contentKey = contentKey;
     held.html = html;
     return;
   }
   held.marker.setIcon(icon);
+  held.contentKey = contentKey;
   held.html = html;
+}
+
+function measuredCalloutSize(marker: L.Marker | undefined, fallback: { width: number; height: number }) {
+  const callout = marker?.getElement()?.querySelector('[data-callout]');
+  if (!(callout instanceof HTMLElement)) return fallback;
+  const box = callout.getBoundingClientRect();
+  if (box.width < 8 || box.height < 8 || box.width > 280 || box.height > 360) return fallback;
+  return { width: Math.ceil(box.width), height: Math.ceil(box.height) };
 }
 
 function dropHeld(store: Map<string, HeldMarker>, keep: Set<string>) {
@@ -188,14 +198,15 @@ export const StreetMap = forwardRef<StreetMapHandle, {
   const layersRef = useRef<L.LayerGroup | null>(null);
   const trailRef = useRef<L.LayerGroup | null>(null);
   const pinMarkersRef = useRef(new Map<string, HeldMarker>());
-  const statusMarkersRef = useRef(new Map<string, HeldMarker>());
   const statusAnchorRef = useRef(new Map<string, string>());
+  const statusHostRef = useRef(new Map<string, string>());
+  const hostShiftRef = useRef(new Map<string, { dx: number; dy: number }>());
   const groupsRef = useRef<Array<{ key: string; members: Member[]; anchor: { lat: number; lng: number }; anchorId: string }>>([]);
-  const anchorsRef = useRef(new Map<string, { lat: number; lng: number }>());
   const spreadRef = useRef(new Map<string, { lat: number; lng: number; dx: number; dy: number }>());
   const offsetsRef = useRef(new Map<string, { dx: number; dy: number }>());
   const movingRef = useRef(false);
   const layoutFrameRef = useRef(0);
+  const layoutRef = useRef<() => void>(() => {});
   const placeRef = useRef<(reason?: 'data' | 'moveend' | 'obstacle') => void>(() => {});
   const membersRef = useRef(members);
   const homeRef = useRef(home);
@@ -275,7 +286,7 @@ export const StreetMap = forwardRef<StreetMapHandle, {
     },
     nudgeLayout() {
       if (movingRef.current) return;
-      placeRef.current('data');
+      layoutRef.current();
     },
     setPlayback(frame, follow) {
       const map = mapRef.current;
@@ -388,6 +399,7 @@ export const StreetMap = forwardRef<StreetMapHandle, {
     };
     const onMoveStart = () => {
       movingRef.current = true;
+      map.getContainer().classList.add('umap-gesturing');
       armSafety();
     };
     const onMoveEnd = () => {
@@ -395,6 +407,7 @@ export const StreetMap = forwardRef<StreetMapHandle, {
       const gesture = userGesture;
       userGesture = false;
       movingRef.current = false;
+      map.getContainer().classList.remove('umap-gesturing');
       if (gesture) onGestureEndRef.current?.();
       // zoomend and moveend both fire for a pinch. One layout after the frame.
       if (endFrame) return;
@@ -420,9 +433,21 @@ export const StreetMap = forwardRef<StreetMapHandle, {
     map.on('dragstart', () => {
       userGesture = true;
       movingRef.current = true;
+      map.getContainer().classList.add('umap-gesturing');
       onUserViewRef.current?.();
       onGestureRef.current?.();
     });
+    // Pinch scales the tile pane every frame and only then animates markers.
+    // Re-seat each pin on the zoom event so the chip, which lives in that pin,
+    // stays on the same ground point instead of sliding at the end.
+    const onPinchZoom = (event: L.LeafletEvent & { pinch?: boolean }) => {
+      if (!event.pinch) return;
+      pinMarkersRef.current.forEach((held) => {
+        const at = held.marker.getLatLng();
+        if (at) held.marker.setLatLng(at);
+      });
+    };
+    map.on('zoom', onPinchZoom);
     setReady(true);
     const resize = () => map.invalidateSize();
     resize();
@@ -445,13 +470,12 @@ export const StreetMap = forwardRef<StreetMapHandle, {
       map.off('click');
       map.off('zoomstart', noteUserView);
       map.off('dragstart');
+      map.off('zoom', onPinchZoom);
       playbackRef.current = null;
       homeLayersRef.current = null;
       drawnTrailKeyRef.current = '';
       pinMarkersRef.current.forEach((held) => held.marker.remove());
       pinMarkersRef.current.clear();
-      statusMarkersRef.current.forEach((held) => held.marker.remove());
-      statusMarkersRef.current.clear();
       statusAnchorRef.current.clear();
       map.remove();
       mapRef.current = null;
@@ -464,9 +488,8 @@ export const StreetMap = forwardRef<StreetMapHandle, {
     const map = mapRef.current;
     if (!ready || !map || !key) return;
     const tiles = L.tileLayer(vworldBaseTileUrl(key), {
+      ...baseTileLayerOptions(),
       attribution: VWORLD_ATTRIBUTION,
-      minZoom: 6,
-      maxZoom: 19,
       // 브이월드 Base는 한국 영역만 제공한다. 영역 밖 404가 키 오류로 남지 않게 한다.
       bounds: L.latLngBounds([32.8, 124.0], [39.8, 132.1]),
     });
@@ -551,6 +574,31 @@ export const StreetMap = forwardRef<StreetMapHandle, {
       const pinIcon = memberPinIcon();
       const clusters = stablePlaceGroups(people, groupsRef.current);
       groupsRef.current = clusters;
+      const anchorIds = new Map<string, string>();
+      const hosted = new Set<string>();
+      for (const cluster of clusters) {
+        if (cluster.members.length < 2) continue;
+        const host = stickyStatusHost(
+          cluster.members.map((member) => member.id),
+          statusHostRef.current,
+          cluster.anchorId,
+        );
+        anchorIds.set(cluster.key, host);
+        for (const member of cluster.members) {
+          const id = String(member.id);
+          statusHostRef.current.set(id, host);
+          hosted.add(id);
+        }
+        const shiftKey = `status:${cluster.key}`;
+        if (!offsetsRef.current.has(shiftKey)) {
+          const remembered = hostShiftRef.current.get(host);
+          if (remembered) offsetsRef.current.set(shiftKey, remembered);
+        }
+      }
+      for (const id of [...statusHostRef.current.keys()]) {
+        if (!hosted.has(id)) statusHostRef.current.delete(id);
+      }
+      statusAnchorRef.current = anchorIds;
       const clusterOf = new Map(clusters.flatMap((cluster) => cluster.members.map((member) => [member.id, cluster] as const)));
       const seenPins = new Set<string>();
       for (const member of people) {
@@ -559,101 +607,72 @@ export const StreetMap = forwardRef<StreetMapHandle, {
         const at = pins.get(member.id) || { lat: member.lat, lng: member.lng, dx: 0, dy: 0 };
         const cluster = clusterOf.get(member.id);
         const grouped = (cluster?.members.length || 0) > 1;
-        const chosen = offsetsRef.current.get(`pin:${member.id}`);
-        const dx = !grouped && chosen ? chosen.dx : at.dx;
-        const dy = !grouped && chosen ? chosen.dy : at.dy;
+        const anchorId = grouped && cluster ? anchorIds.get(cluster.key) : '';
+        const isAnchor = !!anchorId && anchorId === member.id;
+        const chosen = isAnchor
+          ? offsetsRef.current.get(`status:${cluster?.key}`) || { dx: 0, dy: groupPinShiftY(MEMBER_PIN_PX) }
+          : !grouped
+            ? offsetsRef.current.get(`pin:${member.id}`) || null
+            : null;
+        const dx = chosen ? chosen.dx : grouped ? 0 : at.dx;
+        const dy = chosen ? chosen.dy : grouped ? 0 : at.dy;
         const isSelected = member.id === selected;
         const presence = memberPresence(member, now);
         const dimmed = memberIsDimmed(presence);
+        const labelHtml = isAnchor && cluster
+          ? groupLabelHtml(cluster.members, zone, selected, now)
+          : grouped
+            ? ''
+            : soloLabelHtml(member, zone, isSelected, now);
+        const faceHtml = pinFaceHtml(member);
+        const contentKey = `${isAnchor ? 'g' : grouped ? 'm' : 's'}|${dimmed ? 1 : 0}|${labelHtml}|${faceHtml}`;
         const html = memberCalloutHtml({
           dx,
           dy,
           dimmed,
           tailColor: isSelected ? '#0084FF' : '#fff',
-          labelHtml: grouped ? '' : soloLabelHtml(member, zone, isSelected, now),
-          faceHtml: pinFaceHtml(member),
+          labelHtml,
+          faceHtml,
         });
-        const held = pinMarkersRef.current.get(member.id);
+        const raised = isAnchor && !!cluster?.members.some((item) => item.id === selected);
+        const zIndex = isAnchor ? (raised ? 3000 : 2500) : markerZIndex(dy, isSelected);
         const icon = L.divIcon({
-          className: 'umap-member-pin',
+          className: isAnchor ? 'umap-member-pin umap-member-status' : 'umap-member-pin',
           html,
           iconSize: pinIcon.iconSize,
           iconAnchor: pinIcon.iconAnchor,
         });
+        const held = pinMarkersRef.current.get(member.id);
         if (held) {
           if (movedEnough(held.marker, at.lat, at.lng)) held.marker.setLatLng([at.lat, at.lng]);
-          held.marker.setZIndexOffset(markerZIndex(dy, isSelected));
-          paintHeld(held, html, icon);
-          markHeld(held.marker, at.lat, at.lng, dx, dy);
+          held.marker.setZIndexOffset(zIndex);
+          const iconEl = held.marker.getElement();
+          if (iconEl) iconEl.classList.toggle('umap-member-status', isAnchor);
+          paintHeld(held, contentKey, html, icon, { dx, dy });
+          const placed = held.marker.getLatLng();
+          markHeld(held.marker, placed?.lat ?? at.lat, placed?.lng ?? at.lng, dx, dy);
           continue;
         }
-        const marker = L.marker([at.lat, at.lng], {
-          zIndexOffset: markerZIndex(dy, isSelected),
-          icon,
-        });
+        const marker = L.marker([at.lat, at.lng], { icon, zIndexOffset: zIndex });
         marker.on('click', (event) => {
           L.DomEvent.stopPropagation(event);
           onSelectRef.current(memberIdFromEvent(event) || member.id);
         });
         marker.addTo(map);
-        pinMarkersRef.current.set(member.id, { marker, html });
+        pinMarkersRef.current.set(member.id, { marker, html, contentKey });
         markHeld(marker, at.lat, at.lng, dx, dy);
       }
       dropHeld(pinMarkersRef.current, seenPins);
-
-      const seenStatus = new Set<string>();
-      const anchorIds = new Map<string, string>();
-      for (const cluster of clusters) {
-        if (cluster.members.length < 2) continue;
-        seenStatus.add(cluster.key);
-        anchorIds.set(cluster.key, cluster.anchorId);
-        const parked = holdAnchor(anchorsRef.current.get(cluster.key), cluster.anchor) || cluster.anchor;
-        anchorsRef.current.set(cluster.key, parked);
-        const chosen = offsetsRef.current.get(`status:${cluster.key}`) || { dx: 0, dy: -STATUS_LIFT_PX };
-        const label = groupLabelHtml(cluster.members, zone, selected, now);
-        const html = statusCalloutHtml(label, '#fff', chosen);
-        const raised = cluster.members.some((member) => member.id === selected);
-        const zIndex = raised ? 3000 : 2500;
-        const held = statusMarkersRef.current.get(cluster.key);
-        const icon = L.divIcon({
-          className: 'umap-member-status',
-          html,
-          iconSize: [42, 42],
-          iconAnchor: [21, 42],
-        });
-        if (held) {
-          if (movedEnough(held.marker, parked.lat, parked.lng)) held.marker.setLatLng([parked.lat, parked.lng]);
-          held.marker.setZIndexOffset(zIndex);
-          paintHeld(held, html, icon);
-          letStatusClicksThrough(held.marker);
-          markHeld(held.marker, parked.lat, parked.lng, chosen.dx, chosen.dy);
-          continue;
-        }
-        const status = L.marker([parked.lat, parked.lng], { zIndexOffset: zIndex, icon });
-        const groupKey = cluster.key;
-        status.on('click', (event) => {
-          L.DomEvent.stopPropagation(event);
-          const picked = memberIdFromEvent(event) || statusAnchorRef.current.get(groupKey) || '';
-          if (picked) onSelectRef.current(picked);
-        });
-        status.addTo(map);
-        letStatusClicksThrough(status);
-        statusMarkersRef.current.set(cluster.key, { marker: status, html });
-        markHeld(status, parked.lat, parked.lng, chosen.dx, chosen.dy);
+      for (const key of [...statusAnchorRef.current.keys()]) {
+        if (!anchorIds.has(key)) statusAnchorRef.current.delete(key);
       }
-      statusAnchorRef.current = anchorIds;
-      for (const key of anchorsRef.current.keys()) {
-        if (!seenStatus.has(key)) anchorsRef.current.delete(key);
-      }
-      dropHeld(statusMarkersRef.current, seenStatus);
 
-      if (reason === 'obstacle') return;
-      if (layoutFrameRef.current) return;
-      layoutFrameRef.current = window.requestAnimationFrame(() => {
-        layoutFrameRef.current = 0;
-        const current = mapRef.current;
-        if (movingRef.current || !current) return;
-        try {
+      if (reason !== 'obstacle') scheduleLayout();
+    };
+    const runLayout = () => {
+      const current = mapRef.current;
+      if (movingRef.current || !current) return;
+      try {
         const obstacles = measureObstacles(current);
         const size = current.getSize();
         const viewport = { width: size.x, height: size.y };
@@ -662,16 +681,19 @@ export const StreetMap = forwardRef<StreetMapHandle, {
         for (const cluster of groupsRef.current) {
           if (cluster.members.length < 2) continue;
           for (const member of cluster.members) grouped.add(member.id);
-          const at = anchorsRef.current.get(cluster.key) || cluster.anchor;
-          const point = current.latLngToContainerPoint([at.lat, at.lng]);
+          const anchorId = statusAnchorRef.current.get(cluster.key) || cluster.anchorId;
+          const anchorMember = cluster.members.find((item) => item.id === anchorId) || cluster.members[0];
+          if (!anchorMember || !hasLocation(anchorMember)) continue;
+          const point = current.latLngToContainerPoint([anchorMember.lat, anchorMember.lng]);
+          const marker = pinMarkersRef.current.get(anchorMember.id)?.marker;
           chips.push({
             id: `status:${cluster.key}`,
-            kind: 'status' as const,
+            kind: 'pin' as const,
             anchor: { x: point.x, y: point.y },
-            size: groupChipSize(cluster.members.length),
+            size: measuredCalloutSize(marker, groupChipSize(cluster.members.length)),
             obstacles,
             previous: offsetsRef.current.get(`status:${cluster.key}`) || null,
-            preferred: { dx: 0, dy: -STATUS_LIFT_PX },
+            preferred: { dx: 0, dy: groupPinShiftY(MEMBER_PIN_PX) },
             viewport,
           });
         }
@@ -679,11 +701,12 @@ export const StreetMap = forwardRef<StreetMapHandle, {
           if (!hasLocation(member) || grouped.has(member.id)) continue;
           const point = current.latLngToContainerPoint([member.lat, member.lng]);
           const slot = spreadRef.current.get(member.id);
+          const marker = pinMarkersRef.current.get(member.id)?.marker;
           chips.push({
             id: `pin:${member.id}`,
             kind: 'pin' as const,
             anchor: { x: point.x, y: point.y },
-            size: soloChipSize(),
+            size: measuredCalloutSize(marker, soloChipSize()),
             obstacles,
             previous: offsetsRef.current.get(`pin:${member.id}`) || null,
             preferred: { dx: slot?.dx || 0, dy: slot?.dy || 0 },
@@ -695,15 +718,34 @@ export const StreetMap = forwardRef<StreetMapHandle, {
         for (const key of offsetsRef.current.keys()) {
           if (!live.has(key)) offsetsRef.current.delete(key);
         }
-        for (const [id, offset] of assigned.offsets) offsetsRef.current.set(id, offset);
-        if (assigned.changed) placeRef.current('obstacle');
-        } catch {
-          /* The map has no container point until it has a size. */
+        for (const [id, offset] of assigned.offsets) {
+          offsetsRef.current.set(id, offset);
+          if (String(id).startsWith('status:')) {
+            const host = statusAnchorRef.current.get(String(id).slice('status:'.length));
+            if (host) hostShiftRef.current.set(host, offset);
+          }
         }
+        if (assigned.changed) placeRef.current('obstacle');
+      } catch {
+        /* The map has no container point until it has a size. */
+      }
+    };
+    const scheduleLayout = () => {
+      if (layoutFrameRef.current) window.cancelAnimationFrame(layoutFrameRef.current);
+      layoutFrameRef.current = window.requestAnimationFrame(() => {
+        layoutFrameRef.current = window.requestAnimationFrame(() => {
+          layoutFrameRef.current = 0;
+          runLayout();
+        });
       });
     };
+    layoutRef.current = scheduleLayout;
     placeRef.current = place;
     place('data');
+    return () => {
+      if (layoutFrameRef.current) window.cancelAnimationFrame(layoutFrameRef.current);
+      layoutFrameRef.current = 0;
+    };
   }, [home, members, ready, selectedId]);
 
   useEffect(() => {
