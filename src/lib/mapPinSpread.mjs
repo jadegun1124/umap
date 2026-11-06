@@ -1,4 +1,12 @@
-/** Same-spot family pins. Bubbles are wide, so a cluster shifts them in screen pixels. */
+/** Same-spot family labels. The circle stays on the real lat/lng; only the name shifts in screen pixels. */
+
+export const MEMBER_PIN_PX = 42;
+
+/** Circle center is the marker anchor, so the avatar stays on the lat/lng while zooming. */
+export function memberPinIcon() {
+  const pin = MEMBER_PIN_PX;
+  return { iconSize: [pin, pin], iconAnchor: [pin / 2, pin / 2] };
+}
 
 const CLUSTER_M = 40;
 
@@ -40,7 +48,7 @@ export function spreadPinPositions(members) {
   return placed;
 }
 
-/** Web mercator pixels. The same-spot shift is added after this, in screen pixels. */
+/** Web mercator pixels for a lat/lng. The circle uses this point. Label dx/dy are not added here. */
 export function projectCallout(lat, lng, zoom) {
   const latRad = (lat * Math.PI) / 180;
   const size = 256 * 2 ** zoom;
@@ -51,30 +59,35 @@ export function projectCallout(lat, lng, zoom) {
 }
 
 /**
- * Pin tip and label tail are one projected point.
- * dx/dy stay in pixels at every zoom. A meter offset would grow as the zoom changes.
+ * Circle center is the projected lat/lng at every zoom.
+ * dx/dy move only the name, in screen pixels. A pixel shift on the circle
+ * would stay a fixed screen distance and slide across the ground as the zoom changes.
  */
 export function calloutAnchors({ lat, lng, dx = 0, dy = 0, zoom }) {
   const origin = projectCallout(lat, lng, zoom);
-  const pin = { x: origin.x + (Number(dx) || 0), y: origin.y + (Number(dy) || 0) };
-  return { origin, pin, labelTail: { x: pin.x, y: pin.y } };
+  const shiftX = Number(dx) || 0;
+  const shiftY = Number(dy) || 0;
+  return {
+    origin,
+    pin: { x: origin.x, y: origin.y },
+    labelTail: { x: origin.x + shiftX, y: origin.y + shiftY },
+  };
 }
 
 /**
- * One box for the label, its tail, and the pin.
- * inline-flex plus max-content gives the bubble a real width inside the
- * zero-size marker, so the tail stays on the pin instead of the left edge.
- * The pixel shift is separate from the centering translate.
+ * The 42px circle fills the marker. iconAnchor is its center, so Leaflet moves
+ * that point with the map. dx/dy translate the name only.
  */
 export function memberCalloutHtml({ dx = 0, dy = 0, dimmed = false, tailColor = '#fff', labelHtml = '', faceHtml = '' }) {
   const shiftX = Number(dx) || 0;
   const shiftY = Number(dy) || 0;
   const tail = tailColor === '#0084FF' ? '#0084FF' : '#fff';
-  return `<div data-callout style="position:absolute;left:0;top:0;transform:translate(${shiftX}px, ${shiftY}px);opacity:${dimmed ? '0.55' : '1'}">
-    <div data-bubble style="display:inline-flex;flex-direction:column;align-items:center;width:max-content;transform:translate(-50%,-100%)">
+  const pin = MEMBER_PIN_PX;
+  return `<div data-pin-root style="position:relative;width:${pin}px;height:${pin}px;opacity:${dimmed ? '0.55' : '1'}">
+    <div data-pin-anchor style="width:${pin}px;height:${pin}px;display:flex;align-items:center;justify-content:center">${faceHtml}</div>
+    <div data-callout style="position:absolute;left:50%;bottom:100%;width:max-content;transform:translate(calc(-50% + ${shiftX}px), ${shiftY}px)">
       ${labelHtml}
-      <span data-label-tail style="display:block;width:0;height:0;border-left:6px solid transparent;border-right:6px solid transparent;border-top:7px solid ${tail}"></span>
-      <span data-pin-anchor style="display:flex;align-items:center;justify-content:center">${faceHtml}</span>
+      <span data-label-tail style="display:block;width:0;height:0;margin:0 auto;border-left:6px solid transparent;border-right:6px solid transparent;border-top:7px solid ${tail}"></span>
     </div>
   </div>`;
 }
