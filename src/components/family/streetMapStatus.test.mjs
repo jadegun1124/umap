@@ -257,5 +257,13 @@ test('nearby members share one status chip and the markers stay put', async () =
   });
   const settled = zoneCenter();
   assert.ok(Math.abs(settled.lat - movedHome.lat) < 0.0001, `zone stayed behind at ${settled && settled.lat}`);
+  leafletMap.fire('movestart');
+  await render([near[0]], undefined, null);
+  assert.ok(zoneCenter(), 'zone removed while the finger was still down');
+  leafletMap.fire('moveend');
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 40));
+  });
+  assert.equal(zoneCenter(), null);
   root.unmount();
 });

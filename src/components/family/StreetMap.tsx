@@ -540,9 +540,8 @@ export const StreetMap = forwardRef<StreetMapHandle, {
         group.clearLayers();
         homeLayersRef.current = null;
         paintHome();
-      } else if (zone) {
-        // A drag updates the home center without a new data pass when the last
-        // sample already matches the finger-up center.
+      } else {
+        // Finger-up still moves the ring, and still removes it when the pick was cancelled.
         paintHome();
       }
 
