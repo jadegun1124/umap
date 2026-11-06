@@ -175,7 +175,9 @@ export const StreetMap = forwardRef<StreetMapHandle, {
   onUserView?: () => void;
   /** User drag or pinch. Cancels a follow pan already in flight. */
   onGesture?: () => void;
-}>(function StreetMap({ center, zoom, members, home, trails, trailColor, selectedId, onSelect, onClear, onMove, onUserView, onGesture }, ref) {
+  /** After the finger lifts. The follow chip updates here, not on the drag frame. */
+  onGestureEnd?: () => void;
+}>(function StreetMap({ center, zoom, members, home, trails, trailColor, selectedId, onSelect, onClear, onMove, onUserView, onGesture, onGestureEnd }, ref) {
   const nodeRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<L.Map | null>(null);
   const layersRef = useRef<L.LayerGroup | null>(null);
@@ -207,12 +209,14 @@ export const StreetMap = forwardRef<StreetMapHandle, {
   const onMoveRef = useRef(onMove);
   const onUserViewRef = useRef(onUserView);
   const onGestureRef = useRef(onGesture);
+  const onGestureEndRef = useRef(onGestureEnd);
   useEffect(() => {
     onSelectRef.current = onSelect;
     onClearRef.current = onClear;
     onMoveRef.current = onMove;
     onUserViewRef.current = onUserView;
     onGestureRef.current = onGesture;
+    onGestureEndRef.current = onGestureEnd;
   });
 
   useImperativeHandle(ref, () => ({
@@ -310,40 +314,68 @@ export const StreetMap = forwardRef<StreetMapHandle, {
       attributionControl: true,
       minZoom: 6,
       maxZoom: 19,
+      // Pinch keeps the fractional zoom under the fingers. Integer buttons still add 1.
+      zoomSnap: 0,
+      zoomDelta: 1,
+      inertia: true,
+      inertiaDeceleration: 3000,
+      zoomAnimation: true,
+      markerZoomAnimation: true,
+      fadeAnimation: true,
+      bounceAtZoomLimits: false,
     });
     map.attributionControl.setPosition('bottomleft');
     trailRef.current = L.layerGroup().addTo(map);
     layersRef.current = L.layerGroup().addTo(map);
     mapRef.current = map;
-    let moveTick = 0;
+    Object.defineProperty(node, '__kinnexMap', { value: map, configurable: true });
+    let moveFrame = 0;
+    let userGesture = false;
     const emitMove = () => {
+      moveFrame = 0;
       const current = map.getCenter();
       onMoveRef.current?.({ lat: current.lat, lng: current.lng });
     };
+    // One center read per frame. Home placement is the only listener that writes state.
     map.on('move', () => {
-      window.clearTimeout(moveTick);
-      moveTick = window.setTimeout(emitMove, 80);
+      if (moveFrame) return;
+      moveFrame = window.requestAnimationFrame(emitMove);
     });
-    map.on('moveend', emitMove);
+    map.on('moveend', () => {
+      if (moveFrame) window.cancelAnimationFrame(moveFrame);
+      moveFrame = 0;
+      emitMove();
+    });
     map.on('click', () => onClearRef.current?.());
     let moveSafety = 0;
+    let endFrame = 0;
+    const fingerDown = () => {
+      const dragging = map.dragging as { moving?: () => boolean } | undefined;
+      return typeof dragging?.moving === 'function' && dragging.moving();
+    };
     const onMoveStart = () => {
       movingRef.current = true;
       window.clearTimeout(moveSafety);
-      // A drag longer than this stays in the moving state until moveend.
-      // An animation that never ends still gets one layout.
+      // A stuck animation still lays out once. A finger that is still down does not.
       moveSafety = window.setTimeout(() => {
-        const dragging = (map.dragging as { _dragging?: boolean } | undefined)?._dragging;
-        if (dragging) return;
-        if (!movingRef.current) return;
+        if (fingerDown() || !movingRef.current) return;
         movingRef.current = false;
         placeRef.current('moveend');
       }, 1200);
     };
     const onMoveEnd = () => {
       window.clearTimeout(moveSafety);
+      const gesture = userGesture;
+      userGesture = false;
       movingRef.current = false;
-      placeRef.current('moveend');
+      if (gesture) onGestureEndRef.current?.();
+      // zoomend and moveend both fire for a pinch. One layout after the frame.
+      if (endFrame) return;
+      endFrame = window.requestAnimationFrame(() => {
+        endFrame = 0;
+        if (movingRef.current) return;
+        placeRef.current('moveend');
+      });
     };
     map.on('movestart', onMoveStart);
     map.on('zoomstart', onMoveStart);
@@ -351,12 +383,15 @@ export const StreetMap = forwardRef<StreetMapHandle, {
     map.on('zoomend', onMoveEnd);
     const noteUserView = (event: L.LeafletEvent) => {
       if (!(event as L.LeafletEvent & { originalEvent?: Event }).originalEvent) return;
+      userGesture = true;
       onUserViewRef.current?.();
       onGestureRef.current?.();
     };
     map.on('zoomstart', noteUserView);
+    // Leaflet already stops a pan animation before dragstart. Calling the public
+    // stop method here would setZoom and reset the pane under the finger.
     map.on('dragstart', () => {
-      map.stop();
+      userGesture = true;
       movingRef.current = true;
       onUserViewRef.current?.();
       onGestureRef.current?.();
@@ -369,14 +404,14 @@ export const StreetMap = forwardRef<StreetMapHandle, {
     const timer = window.setTimeout(resize, 250);
     return () => {
       window.clearTimeout(timer);
-      window.clearTimeout(moveTick);
+      if (moveFrame) window.cancelAnimationFrame(moveFrame);
+      if (endFrame) window.cancelAnimationFrame(endFrame);
       window.clearTimeout(moveSafety);
       if (layoutFrameRef.current) window.cancelAnimationFrame(layoutFrameRef.current);
       observer.disconnect();
       setReady(false);
       map.off('move');
-      map.off('moveend', emitMove);
-      map.off('moveend', onMoveEnd);
+      map.off('moveend');
       map.off('movestart', onMoveStart);
       map.off('zoomstart', onMoveStart);
       map.off('zoomend', onMoveEnd);
@@ -433,7 +468,11 @@ export const StreetMap = forwardRef<StreetMapHandle, {
       const zone = homeRef.current;
       const selected = selectedIdRef.current;
       if (!ready || !group || !map) return;
-      const moving = movingRef.current;
+      // A finger or pinch owns the frame. Members that arrive now wait for moveend.
+      if (movingRef.current && reason !== 'moveend') return;
+      if (nodeRef.current) {
+        nodeRef.current.dataset.layoutRuns = String(Number(nodeRef.current.dataset.layoutRuns || 0) + 1);
+      }
       if (reason === 'data') {
         group.clearLayers();
         if (zone) {
@@ -492,7 +531,7 @@ export const StreetMap = forwardRef<StreetMapHandle, {
           iconAnchor: pinIcon.iconAnchor,
         });
         if (held) {
-          if (!moving && movedEnough(held.marker, at.lat, at.lng)) held.marker.setLatLng([at.lat, at.lng]);
+          if (movedEnough(held.marker, at.lat, at.lng)) held.marker.setLatLng([at.lat, at.lng]);
           held.marker.setZIndexOffset(markerZIndex(dy, isSelected));
           paintHeld(held, html, icon);
           markHeld(held.marker, at.lat, at.lng, dx, dy);
@@ -533,7 +572,7 @@ export const StreetMap = forwardRef<StreetMapHandle, {
           iconAnchor: [21, 42],
         });
         if (held) {
-          if (!moving && movedEnough(held.marker, parked.lat, parked.lng)) held.marker.setLatLng([parked.lat, parked.lng]);
+          if (movedEnough(held.marker, parked.lat, parked.lng)) held.marker.setLatLng([parked.lat, parked.lng]);
           held.marker.setZIndexOffset(zIndex);
           paintHeld(held, html, icon);
           letStatusClicksThrough(held.marker);
@@ -558,7 +597,7 @@ export const StreetMap = forwardRef<StreetMapHandle, {
       }
       dropHeld(statusMarkersRef.current, seenStatus);
 
-      if (reason === 'obstacle' || moving) return;
+      if (reason === 'obstacle') return;
       if (layoutFrameRef.current) return;
       layoutFrameRef.current = window.requestAnimationFrame(() => {
         layoutFrameRef.current = 0;

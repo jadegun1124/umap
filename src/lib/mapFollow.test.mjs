@@ -87,6 +87,7 @@ test('follow stays quiet in the background, off the map, and while a finger is d
   assert.match(screen, /awaitingFamilyFit/);
   assert.match(screen, /familyFitPending/);
   assert.match(map, /dragstart/);
-  assert.match(map, /map\.stop\(\)/);
+  assert.equal(map.includes('map.stop()'), false);
   assert.match(map, /followTo/);
+  assert.match(map, /onGestureEnd/);
 });

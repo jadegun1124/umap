@@ -1043,7 +1043,9 @@ export function FamilyMapScreen() {
             }}
             onGesture={() => {
               followRef.current = noteUserDrag(followRef.current);
-              setFollowOn(false);
+            }}
+            onGestureEnd={() => {
+              setFollowOn(followRef.current.following);
             }}
             onMove={(next) => {
               if (!placingRef.current) return;

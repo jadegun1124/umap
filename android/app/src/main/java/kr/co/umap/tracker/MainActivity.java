@@ -6,6 +6,7 @@ import android.net.Uri;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
+import android.view.View;
 import android.view.WindowManager;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebView;
@@ -28,6 +29,11 @@ public class MainActivity extends BridgeActivity {
         LocationKeepService.restartIfWanted(this);
         WebView webView = bridge != null ? bridge.getWebView() : null;
         if (webView != null) {
+            // The window is already hardware accelerated. An extra LAYER_TYPE_HARDWARE
+            // on the WebView fights its own compositor, so it is not set.
+            webView.setOverScrollMode(View.OVER_SCROLL_NEVER);
+            webView.setVerticalScrollBarEnabled(false);
+            webView.setHorizontalScrollBarEnabled(false);
             webView.addJavascriptInterface(new UmapAndroidExit(this), "UmapAndroid");
         }
         captureChatIntent(getIntent());
