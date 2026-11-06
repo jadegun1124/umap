@@ -90,4 +90,6 @@ test('follow stays quiet in the background, off the map, and while a finger is d
   assert.equal(map.includes('map.stop()'), false);
   assert.match(map, /followTo/);
   assert.match(map, /onGestureEnd/);
+  const zoomBy = map.slice(map.indexOf('zoomBy(delta)'), map.indexOf('fit(points)'));
+  assert.match(zoomBy, /onGestureEndRef\.current\?\.\(\)/);
 });

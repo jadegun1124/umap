@@ -244,6 +244,8 @@ export const StreetMap = forwardRef<StreetMapHandle, {
       map.setZoom(Math.min(19, Math.max(7, map.getZoom() + delta)));
       onUserViewRef.current?.();
       onGestureRef.current?.();
+      // setZoom has no original event, so zoomend would not reveal 내 위치로.
+      onGestureEndRef.current?.();
     },
     fit(points) {
       const map = mapRef.current;
