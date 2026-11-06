@@ -14,6 +14,7 @@ import { noteDiag } from '../../lib/diagLog.mjs';
 import { shouldAutoFitRecord } from '../../lib/recordMapFit.mjs';
 import { createMapFollow, followTargetId, noteFollowTarget, noteRecenter, noteUserDrag, planFollowPan, recenterLabel } from '../../lib/mapFollow.mjs';
 import { shouldDeleteCreatedRoom } from '../../lib/familyRoom.mjs';
+import { inviteMintTarget, listFamilyRooms, syncRooms } from '../../lib/roomMerge.mjs';
 import { motionAlertCopy, motionNotifyNames, nextMotionAlert } from '../../lib/motionAlert.mjs';
 import { collapseDuplicateJourneys, collapseIndoorStayDisplay, displayCoordinate, displayLivePoints, historyDayKeys, historyDayLabel, lastTravelAt, liveMotionLabel, liveTrailDrawable, liveTrailPoints, MOTION_STILL_HOLD_MS, previewOpenJourney, seoulDayEndMs, seoulDayKey } from '../../lib/tracking.mjs';
 import { ackFamilyAlert, isFamilyAlertAcked, publishFamilyAlert, readFamilyAlert, subscribeFamilyAlerts, type FamilyAlert } from '../../services/familyAlert';
@@ -389,25 +390,32 @@ export function FamilyMapScreen() {
     };
     navigator.serviceWorker?.addEventListener('message', onPush);
     const stopLocal = subscribeFamilyAlerts(handle);
-    const stopRemote = startAdminRemoteSync(
-      { code: state.inviteCode, writeKey: state.syncWriteKey, readKey: state.syncReadKey },
-      {
-        onPlace: (place) => familyRef.current.applySharedPlace(place),
-        onProfiles: (profiles) => familyRef.current.applySharedProfiles(familyRef.current.state.inviteCode, profiles),
-        onTrails: (trails) => familyRef.current.applyCanonicalTrails(trails),
-        onAlert: handle,
-      },
-      {
-        memberId: state.profile?.profileKey ? state.profile.id : '',
-        profileKey: state.profile?.profileKey || '',
-      },
-    );
+    const rooms = syncRooms({
+      inviteCode: state.inviteCode,
+      guardians: state.guardians,
+      familyRoomCode: state.familyRoomCode || '',
+    });
+    const stopRemote = rooms.includeOwn
+      ? startAdminRemoteSync(
+        { code: state.inviteCode, writeKey: state.syncWriteKey, readKey: state.syncReadKey },
+        {
+          onPlace: (place) => familyRef.current.applySharedPlace(place),
+          onProfiles: (profiles) => familyRef.current.applySharedProfiles(familyRef.current.state.inviteCode, profiles),
+          onTrails: (trails) => familyRef.current.applyCanonicalTrails(trails),
+          onAlert: handle,
+        },
+        {
+          memberId: state.profile?.profileKey ? state.profile.id : '',
+          profileKey: state.profile?.profileKey || '',
+        },
+      )
+      : () => {};
     return () => {
       stopLocal();
       stopRemote();
       navigator.serviceWorker?.removeEventListener('message', onPush);
     };
-  }, [notifyOk, state.inviteCode, watchFamilyRoom, state.syncReadKey, state.syncWriteKey, state.profile?.id, state.profile?.profileKey]);
+  }, [notifyOk, state.inviteCode, state.familyRoomCode, state.guardians, watchFamilyRoom, state.syncReadKey, state.syncWriteKey, state.profile?.id, state.profile?.profileKey]);
 
   const dmRoomKey = `peer:${state.inviteCode}:${state.syncWriteKey}:${state.guardians.map((link) => `${link.code}:${link.syncToken ?? ''}`).join('|')}`;
   useEffect(() => {
@@ -1474,9 +1482,14 @@ export function FamilyMapScreen() {
             </button>
           </Sheet>
         )}
-        {sheet === 'invite' && (
+        {sheet === 'invite' && !inviteMintTarget({ inviteCode: state.inviteCode, familyRoomCode: state.familyRoomCode || '' }).canMint && (
+          <Sheet title="가족 초대" onClose={() => setSheet(null)}>
+            <p className="text-sm leading-6 text-slate-600">가족 방을 하나로 합쳤습니다. 이 폰은 그 방에 들어가 있고, 새 초대는 그룹장만 만듭니다.</p>
+          </Sheet>
+        )}
+        {sheet === 'invite' && inviteMintTarget({ inviteCode: state.inviteCode, familyRoomCode: state.familyRoomCode || '' }).canMint && (
           <AdminInviteSheet
-            code={state.inviteCode}
+            code={inviteMintTarget({ inviteCode: state.inviteCode, familyRoomCode: state.familyRoomCode || '' }).code}
             writeKey={state.syncWriteKey}
             readKey={state.syncReadKey}
             home={state.home}
@@ -1581,6 +1594,14 @@ export function FamilyMapScreen() {
               setMenuOpen(false);
               setSheet('accept');
             }}
+            onMergeRooms={!state.familyRoomCode && listFamilyRooms({
+              selfId: state.profile?.id || '',
+              inviteCode: state.inviteCode,
+              guardians: state.guardians,
+            }).length > 1 ? () => {
+              family.mergeRooms();
+              setMenuOpen(false);
+            } : undefined}
             onLeaveFamily={() => {
               setMenuOpen(false);
               setAdminSettings(false);
@@ -2092,6 +2113,7 @@ function AdminMenu({
   onSettings,
   onAlwaysGuide,
   onAcceptInvite,
+  onMergeRooms,
   onLeaveFamily,
 }: {
   name: string;
@@ -2107,6 +2129,7 @@ function AdminMenu({
   onSettings: () => void;
   onAlwaysGuide: () => void;
   onAcceptInvite: () => void;
+  onMergeRooms?: () => void;
   onLeaveFamily: () => void;
 }) {
   return (
@@ -2136,6 +2159,9 @@ function AdminMenu({
         </div>
         <div className="mt-4 overflow-hidden rounded-2xl bg-white shadow-sm">
           <MenuRow icon={<Settings className="h-4 w-4" />} label="설정" hint="위치 권한" onClick={onSettings} />
+          {onMergeRooms && (
+            <MenuRow icon={<UserPlus className="h-4 w-4" />} label="가족 방 합치기" hint="구성원과 기록을 한 방으로" onClick={onMergeRooms} />
+          )}
           <MenuRow icon={<X className="h-4 w-4" />} label="가족 방 지우기" hint="이 폰에서 나가고 동기화를 멈춥니다" onClick={onLeaveFamily} />
         </div>
       </div>
@@ -2143,12 +2169,17 @@ function AdminMenu({
   );
 }
 
-async function deliverMotionAlert(state: Pick<Session, 'inviteCode' | 'syncWriteKey' | 'syncReadKey' | 'guardians'>, from: string, body: string, targets: string[]) {
+async function deliverMotionAlert(state: Pick<Session, 'inviteCode' | 'syncWriteKey' | 'syncReadKey' | 'guardians' | 'familyRoomCode'>, from: string, body: string, targets: string[]) {
+  const live = syncRooms({
+    inviteCode: state.inviteCode,
+    guardians: state.guardians,
+    familyRoomCode: state.familyRoomCode || '',
+  });
   const rooms: { code: string; token: string }[] = [];
-  if (state.syncWriteKey && state.syncReadKey && /^\d{4,6}$/.test(state.inviteCode)) {
+  if (live.includeOwn && state.syncWriteKey && state.syncReadKey && /^\d{4,6}$/.test(state.inviteCode)) {
     rooms.push({ code: state.inviteCode, token: await syncTokenFor(state.syncWriteKey, state.syncReadKey) });
   }
-  for (const link of state.guardians) {
+  for (const link of live.guardians) {
     if (link.share === 'revoked' || !link.syncToken || rooms.some((room) => room.code === link.code)) continue;
     rooms.push({ code: link.code, token: link.syncToken });
   }
