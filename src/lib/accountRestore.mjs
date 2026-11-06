@@ -2,6 +2,7 @@
 // same so the family room does not mint a second card.
 
 import { formatRecoveryCode, normalizeRecoveryCode } from '../../sync/account.mjs';
+import { mergeJourneys, mergeRecordsById } from './historyMerge.mjs';
 import { keptFamilyRoomCode } from './roomMerge.mjs';
 
 export {
@@ -281,8 +282,8 @@ export function applyAccountSnapshot(state, account) {
     profileKey: account.profileKey,
     ...(photo ? { photo } : {}),
   };
-  const journeys = Array.isArray(account.journeys) ? account.journeys : [];
-  const visits = Array.isArray(account.visits) ? account.visits : [];
+  const journeys = mergeJourneys(selfJourneys(state && state.journeys, 'self'), Array.isArray(account.journeys) ? account.journeys : []);
+  const visits = mergeRecordsById(selfVisits(state && state.visits, 'self'), Array.isArray(account.visits) ? account.visits : []);
   const roster = Array.isArray(account.roster) ? account.roster : [];
   const mergedFrom = typeof account.mergedFrom === 'string' && MEMBER_ID.test(account.mergedFrom) ? account.mergedFrom : '';
   const others = roster
@@ -302,10 +303,10 @@ export function applyAccountSnapshot(state, account) {
     guardians: Array.isArray(account.guardians) ? account.guardians : [],
     familyRoomCode: keptFamilyRoomCode(state && state.familyRoomCode, account.room.code, account.guardians),
     home: account.home || null,
-    journeys: journeys.length ? { self: journeys } : {},
-    visits: visits.length ? { self: visits } : {},
-    tracks: {},
-    trailRevisions: {},
+    journeys: journeys.length ? { ...(state.journeys || {}), self: journeys } : (state.journeys || {}),
+    visits: visits.length ? { ...(state.visits || {}), self: visits } : (state.visits || {}),
+    tracks: state.tracks && typeof state.tracks === 'object' ? state.tracks : {},
+    trailRevisions: state.trailRevisions && typeof state.trailRevisions === 'object' ? state.trailRevisions : {},
     pendingInvite: null,
     pendingLeaveAlert: null,
     pendingSyncToken: null,

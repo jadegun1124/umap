@@ -2950,9 +2950,7 @@ export function trimJourneyList(list, now) {
   const kept = [];
   for (const day of [...byDay.keys()].sort()) {
     const bucket = byDay.get(day).slice().sort((left, right) => left.startedAt - right.startedAt);
-    const slice = bucket.length > JOURNEY_DAY_CAP ? bucket.slice(-JOURNEY_DAY_CAP) : bucket;
-    if (slice.length !== bucket.length) dropped = true;
-    kept.push(...slice);
+    kept.push(...bucket);
   }
   if (!dropped && sameList(list, kept)) return list;
   return kept;

@@ -30,5 +30,21 @@ test('a late seal restore cannot write after logout', () => {
   assert.match(source, /function cancelDeviceSealRestore\(\)/);
   const withdraw = sliceBetween('withdraw: () => {', 'clearFamilyRoom:');
   assert.match(withdraw, /cancelDeviceSealRestore\(\)/);
+  assert.match(withdraw, /forgetDurableSession\(\)/);
   assert.match(withdraw, /clearDiag\(\)/);
+});
+
+test('logout and reset drop the durable file before the next persist', () => {
+  const logout = sliceBetween('logout: () => {', 'withdraw: () => {');
+  const forgetAt = logout.indexOf('clearStoredSessions()');
+  const dispatchAt = logout.indexOf("dispatch({ type: 'logout' })");
+  assert.ok(forgetAt >= 0 && forgetAt < dispatchAt);
+  const forget = sliceBetween('function forgetDurableSession()', 'const SESSION_KEYS');
+  assert.match(forget, /durableHold = ''/);
+  assert.match(forget, /writeDurableSession\(''\)/);
+  assert.match(source, /function clearStoredSessions\(\) \{\n  forgetDurableSession\(\);/);
+  const restore = sliceBetween('if (!deviceReady || restoringDeviceSeal) return;', '}, [deviceReady, historyPulse, state.journeys, state.visits]);');
+  const asyncRestore = restore.slice(restore.indexOf('void (async'));
+  assert.ok(asyncRestore.indexOf('await loadFamilyAccount') < asyncRestore.indexOf('restoreOnce.current = true'));
+  assert.match(asyncRestore, /if \(cancel\) return;/);
 });

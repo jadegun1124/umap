@@ -164,6 +164,50 @@ test('kakao sign-in after uninstall restores the name, both members, and sealed 
   assert.equal(opened.journeys[0].id, 'j-walk');
 });
 
+test('a poorer sealed backup still opens the previous seal and keeps the vehicle trip', async () => {
+  const device = await mintDeviceKey();
+  const content = base64UrlToBytes(device.contentKey);
+  const drive = {
+    id: 'khoon-drive',
+    startedAt: Date.now() - 30 * 60_000,
+    endedAt: Date.now() - 10 * 60_000,
+    distanceM: 6400,
+    points: [
+      { lat: 37.5, lng: 127.02, at: Date.now() - 30 * 60_000 },
+      { lat: 37.55, lng: 127.08, at: Date.now() - 10 * 60_000 },
+    ],
+    start: { lat: 37.5, lng: 127.02, label: '집' },
+    end: { lat: 37.55, lng: 127.08, label: '학교' },
+  };
+  const later = {
+    id: 'walk-later',
+    startedAt: Date.now() - 8 * 60_000,
+    endedAt: Date.now() - 60_000,
+    distanceM: 300,
+    points: [
+      { lat: 37.55, lng: 127.08, at: Date.now() - 8 * 60_000 },
+      { lat: 37.552, lng: 127.081, at: Date.now() - 60_000 },
+    ],
+    start: { lat: 37.55, lng: 127.08, label: null },
+    end: { lat: 37.552, lng: 127.081, label: null },
+  };
+  const prior = await sealJson(content, device.publicKey, { journeys: [drive], visits: [], home: null });
+  const current = await sealJson(content, device.publicKey, { journeys: [later], visits: [], home: null });
+  const opened = await openAccountSecrets({
+    memberId: 'local-restore1',
+    journeys: [],
+    visits: [],
+    sealedHistory: current,
+    priorSeals: [prior],
+  }, {
+    getItem: (key) => (key === 'umap_seal_device_v1' ? JSON.stringify(device) : null),
+    setItem() {},
+  });
+  const ids = opened.journeys.map((item) => item.id);
+  assert.equal(ids.includes('khoon-drive'), true);
+  assert.equal(ids.includes('walk-later'), true);
+});
+
 function memoryStorage(initial = {}) {
   const storage = new Map(Object.entries(initial));
   return {

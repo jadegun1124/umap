@@ -22,7 +22,7 @@ const MAX_PLACE_BODY = 32 * 1024;
 const MAX_PROFILE_BODY = 32_768;
 const MAX_TRAIL_BODY = 160 * 1024;
 const MAX_TRAIL_POINTS = 800;
-const MAX_TRAIL_JOURNEYS = 16;
+const MAX_TRAIL_JOURNEYS = 40;
 const MAX_TRAIL_JOURNEY_POINTS = 240;
 const MAX_PHOTO = 24_000;
 const MAX_PLACES = 20;
@@ -470,7 +470,18 @@ export function applyPlace(room, place) {
   let nextRoom = { ...room, places };
   if (!place.sharing && place.memberId && nextRoom.trails && nextRoom.trails[place.memberId]) {
     const trails = { ...nextRoom.trails };
-    delete trails[place.memberId];
+    const kept = trails[place.memberId];
+    const journeys = kept && Array.isArray(kept.journeys) ? kept.journeys : [];
+    const hasHistory = journeys.length > 0 || !!(kept && kept.seal) || (kept && Array.isArray(kept.priorSeals) && kept.priorSeals.length > 0);
+    if (!hasHistory) delete trails[place.memberId];
+    else {
+      trails[place.memberId] = {
+        ...kept,
+        points: [],
+        moving: false,
+        at: Math.max(kept.at || 0, place.at || 0),
+      };
+    }
     nextRoom = { ...nextRoom, trails };
   }
   return { room: nextRoom, ignored: false };
@@ -664,8 +675,9 @@ export function cleanTrailInput(body, now) {
   for (const journey of Array.isArray(body.journeys) ? body.journeys : []) {
     const cleaned = cleanTrailJourney(journey);
     if (cleaned) journeys.push(cleaned);
-    if (journeys.length >= MAX_TRAIL_JOURNEYS) break;
   }
+  journeys.sort((left, right) => (left.endedAt || 0) - (right.endedAt || 0));
+  if (journeys.length > MAX_TRAIL_JOURNEYS) journeys.splice(0, journeys.length - MAX_TRAIL_JOURNEYS);
   return {
     trail: {
       memberId: body.memberId,
@@ -677,12 +689,61 @@ export function cleanTrailInput(body, now) {
   };
 }
 
+function unionTrailJourneys(existing, incoming) {
+  const map = new Map();
+  for (const item of [...(Array.isArray(existing) ? existing : []), ...(Array.isArray(incoming) ? incoming : [])]) {
+    if (!item || typeof item.id !== 'string' || !item.id) continue;
+    const prev = map.get(item.id);
+    if (!prev || (Number(item.distanceM) || 0) >= (Number(prev.distanceM) || 0)) map.set(item.id, item);
+  }
+  const all = [...map.values()].sort((left, right) => (left.endedAt || 0) - (right.endedAt || 0));
+  return all.length > MAX_TRAIL_JOURNEYS ? all.slice(-MAX_TRAIL_JOURNEYS) : all;
+}
+
+function unionTrailPoints(existing, incoming) {
+  const map = new Map();
+  for (const point of [...(Array.isArray(existing) ? existing : []), ...(Array.isArray(incoming) ? incoming : [])]) {
+    if (!point || typeof point.at !== 'number') continue;
+    map.set(point.at, point);
+  }
+  const all = [...map.values()].sort((left, right) => left.at - right.at);
+  return all.length > MAX_TRAIL_POINTS ? all.slice(-MAX_TRAIL_POINTS) : all;
+}
+
+function rememberTrailSeal(current, nextSeal) {
+  const prior = [];
+  const push = (seal) => {
+    if (!isSeal(seal) || !seal.ct || (nextSeal && seal.ct === nextSeal.ct)) return;
+    if (prior.some((item) => item.ct === seal.ct)) return;
+    prior.push({ v: 1, alg: 'A256GCM', kid: seal.kid, iv: seal.iv, ct: seal.ct });
+  };
+  if (current && current.seal) push(current.seal);
+  if (current && Array.isArray(current.priorSeals)) {
+    for (const seal of current.priorSeals) push(seal);
+  }
+  return prior.slice(-4);
+}
+
 export function applyTrail(room, trail) {
   const trails = { ...(room.trails && typeof room.trails === 'object' ? room.trails : {}) };
   const current = trails[trail.memberId];
   if (current && trail.at < current.at) return { room, ignored: true };
   if (current && trail.at === current.at && JSON.stringify(current) === JSON.stringify(trail)) return { room, ignored: true };
-  trails[trail.memberId] = trail;
+  const journeys = unionTrailJourneys(current && current.journeys, trail.journeys);
+  const points = unionTrailPoints(current && current.points, trail.points);
+  const seal = isSeal(trail.seal) ? trail.seal : (current && isSeal(current.seal) ? current.seal : null);
+  const priorSeals = rememberTrailSeal(current, seal);
+  const parts = current && Array.isArray(current.parts) ? current.parts : (Array.isArray(trail.parts) ? trail.parts : []);
+  trails[trail.memberId] = {
+    ...(current || {}),
+    ...trail,
+    journeys,
+    points: points.length ? points : ((current && current.points) || []),
+    ...(seal ? { seal } : {}),
+    ...(priorSeals.length ? { priorSeals } : {}),
+    ...(parts.length ? { parts } : {}),
+    at: Math.max((current && current.at) || 0, trail.at || 0),
+  };
   return { room: { ...room, trails }, ignored: false };
 }
 

@@ -277,25 +277,40 @@ export async function openAccountSecrets(account, storage, typedCode = '') {
     }
   }
   if (!readDevice(storage)) await ensureDevice(storage);
-  let journeys = account.journeys;
-  let visits = account.visits;
+  let journeys = Array.isArray(account.journeys) ? account.journeys : [];
+  let visits = Array.isArray(account.visits) ? account.visits : [];
   let home = account.home;
   let historyLocked = false;
-  if (account.sealedHistory) {
-    let opened = mergedPlain || await openJson(contentKeyBytes(readDevice(storage)), account.sealedHistory);
-    if (!opened) {
-      const device = readDevice(storage);
-      const saved = readJson(storage, HISTORY_SHARE_STORAGE);
-      const book = account.historyShares && typeof account.historyShares === 'object' ? account.historyShares : null;
-      const share = (book && book[account.memberId]) || (saved && saved.memberId === account.memberId ? saved.wrap : null);
-      const key = device && share ? await unwrapFamilyKey(device.privateKey, share, HISTORY_SHARE_KID) : null;
-      if (key) opened = await openJson(key, account.sealedHistory);
+  const seals = [];
+  if (account.sealedHistory) seals.push(account.sealedHistory);
+  if (Array.isArray(account.priorSeals)) {
+    for (const seal of account.priorSeals) {
+      if (seal) seals.push(seal);
     }
-    if (opened && typeof opened === 'object') {
-      journeys = Array.isArray(opened.journeys) ? opened.journeys : [];
-      visits = Array.isArray(opened.visits) ? opened.visits : [];
-      home = account.clearHome ? null : (account.home || opened.home || null);
-    } else if (!Array.isArray(account.journeys) || account.journeys.length === 0) {
+  }
+  if (seals.length) {
+    const { mergeJourneys, mergeRecordsById } = await import('./historyMerge.mjs');
+    let openedAny = false;
+    for (const seal of seals) {
+      let opened = seal === account.sealedHistory ? mergedPlain : null;
+      if (!opened) opened = await openJson(contentKeyBytes(readDevice(storage)), seal);
+      if (!opened) {
+        const device = readDevice(storage);
+        const saved = readJson(storage, HISTORY_SHARE_STORAGE);
+        const book = account.historyShares && typeof account.historyShares === 'object' ? account.historyShares : null;
+        const share = (book && book[account.memberId]) || (saved && saved.memberId === account.memberId ? saved.wrap : null);
+        const key = device && share ? await unwrapFamilyKey(device.privateKey, share, HISTORY_SHARE_KID) : null;
+        if (key) opened = await openJson(key, seal);
+      }
+      if (!opened || typeof opened !== 'object') continue;
+      openedAny = true;
+      journeys = mergeJourneys(journeys, opened.journeys);
+      visits = mergeRecordsById(visits, opened.visits);
+      if (!account.clearHome && opened.home) home = home || opened.home;
+    }
+    if (openedAny) {
+      home = account.clearHome ? null : (account.home || home || null);
+    } else if (journeys.length === 0 && visits.length === 0) {
       historyLocked = true;
     }
   }

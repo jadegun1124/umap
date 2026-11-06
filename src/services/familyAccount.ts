@@ -13,7 +13,8 @@ import {
   writeStoredAccountKey,
   writeStoredRecoveryCode,
 } from '../lib/accountRestore.mjs';
-import { prepareBackup } from '../lib/familyVault.mjs';
+import { openAccountSecrets, prepareBackup } from '../lib/familyVault.mjs';
+import { planAccountBackup } from '../lib/historyMerge.mjs';
 import { readDiagEvents } from '../lib/diagLog.mjs';
 import { familySyncUrl } from './familySync';
 
@@ -118,12 +119,44 @@ export async function loadFamilyAccount(accountKey = readStoredAccountKey(typeof
   return readAccountBody(response);
 }
 
+async function planBackupFromServer(snapshot: AccountSnapshot, accountKey: string): Promise<AccountSnapshot> {
+  const localJourneys = Array.isArray(snapshot.journeys) ? snapshot.journeys : [];
+  const localVisits = Array.isArray(snapshot.visits) ? snapshot.visits : [];
+  let remoteOk = false;
+  let remoteLocked = false;
+  let remoteJourneys: unknown[] = [];
+  let remoteVisits: unknown[] = [];
+  try {
+    const loaded = await loadFamilyAccount(accountKey);
+    if (loaded.ok && loaded.account) {
+      remoteOk = true;
+      const opened = await openAccountSecrets(loaded.account, typeof localStorage === 'undefined' ? null : localStorage);
+      remoteLocked = opened.historyLocked === true;
+      remoteJourneys = Array.isArray(opened.journeys) ? opened.journeys : [];
+      remoteVisits = Array.isArray(opened.visits) ? opened.visits : [];
+    }
+  } catch {
+    remoteOk = false;
+  }
+  const plan = planAccountBackup({
+    localJourneys,
+    localVisits,
+    remoteOk,
+    remoteLocked,
+    remoteJourneys,
+    remoteVisits,
+  });
+  if (plan.keepHistory) return { ...snapshot, journeys: [], visits: [], keepHistory: true };
+  return { ...snapshot, journeys: plan.journeys as AccountSnapshot['journeys'], visits: plan.visits as AccountSnapshot['visits'] };
+}
+
 export async function backupFamilyAccount(snapshot: AccountSnapshot, accountKey = readStoredAccountKey(localStorage)) {
   if (!accountKey) return registerFamilyAccount(snapshot);
+  const planned = await planBackupFromServer(snapshot, accountKey);
   const response = await request('/v1/account', {
     method: 'PUT',
     headers: accountHeaders(accountKey),
-    body: JSON.stringify(await sealedSnapshot(snapshot)),
+    body: JSON.stringify(await sealedSnapshot(planned)),
   });
   return readAccountBody(response);
 }

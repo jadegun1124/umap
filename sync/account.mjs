@@ -266,6 +266,49 @@ function cleanHome(input) {
   };
 }
 
+export function takeNewest(items, cap, stamp) {
+  const sorted = items.slice().sort((left, right) => (left[stamp] || 0) - (right[stamp] || 0) || String(left.id).localeCompare(String(right.id)));
+  return sorted.length > cap ? sorted.slice(-cap) : sorted;
+}
+
+function unionById(existing, incoming, clean, now, stamp, cap) {
+  const map = new Map();
+  for (const item of [...(Array.isArray(existing) ? existing : []), ...(Array.isArray(incoming) ? incoming : [])]) {
+    const cleaned = clean(item, now);
+    if (!cleaned) continue;
+    const prev = map.get(cleaned.id);
+    if (!prev) {
+      map.set(cleaned.id, cleaned);
+      continue;
+    }
+    const prevDistance = Number(prev.distanceM) || 0;
+    const nextDistance = Number(cleaned.distanceM) || 0;
+    const richer = nextDistance >= prevDistance ? cleaned : prev;
+    const other = richer === cleaned ? prev : cleaned;
+    map.set(cleaned.id, {
+      ...richer,
+      ...(richer.start || other.start ? { start: { ...(richer.start || other.start), label: (richer.start && richer.start.label) || (other.start && other.start.label) || null } } : {}),
+      ...(richer.end || other.end ? { end: { ...(richer.end || other.end), label: (richer.end && richer.end.label) || (other.end && other.end.label) || null } } : {}),
+      ...(richer.label || other.label ? { label: richer.label || other.label } : {}),
+    });
+  }
+  return takeNewest([...map.values()], cap, stamp);
+}
+
+function rememberPriorSeal(record, nextSeal) {
+  const prior = [];
+  const push = (seal) => {
+    if (!seal || !seal.ct || seal.ct === nextSeal.ct) return;
+    if (prior.some((item) => item.ct === seal.ct)) return;
+    prior.push(seal);
+  };
+  if (record && record.sealedHistory) push(record.sealedHistory);
+  if (record && Array.isArray(record.priorSeals)) {
+    for (const seal of record.priorSeals) push(seal);
+  }
+  return prior.slice(-4);
+}
+
 export function cleanAccountSnapshot(input, now = Date.now()) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return { error: 'snapshot' };
   if (typeof input.memberId !== 'string' || !MEMBER_ID.test(input.memberId)) return { error: 'member' };
@@ -293,12 +336,10 @@ export function cleanAccountSnapshot(input, now = Date.now()) {
     for (const item of Array.isArray(input.journeys) ? input.journeys : []) {
       const cleaned = cleanJourney(item, now);
       if (cleaned) journeys.push(cleaned);
-      if (journeys.length >= MAX_JOURNEYS) break;
     }
     for (const item of Array.isArray(input.visits) ? input.visits : []) {
       const cleaned = cleanVisit(item, now);
       if (cleaned) visits.push(cleaned);
-      if (visits.length >= MAX_VISITS) break;
     }
   }
   return {
@@ -309,8 +350,8 @@ export function cleanAccountSnapshot(input, now = Date.now()) {
       room,
       guardians,
       home: sealedHistory ? null : cleanHome(input.home),
-      journeys,
-      visits,
+      journeys: takeNewest(journeys, MAX_JOURNEYS, 'endedAt'),
+      visits: takeNewest(visits, MAX_VISITS, 'arrivedAt'),
       ...(vault ? { vault } : {}),
       ...(sealedHistory ? { sealedHistory } : {}),
       ...(keepHistory ? { keepHistory: true } : {}),
@@ -368,6 +409,7 @@ export function publicAccount(record, extras = {}) {
     vault: record.vault || null,
     ...(record.mergedVault ? { mergedVault: record.mergedVault } : {}),
     sealedHistory: record.sealedHistory || null,
+    ...(Array.isArray(record.priorSeals) && record.priorSeals.length ? { priorSeals: record.priorSeals } : {}),
     ...(Array.isArray(record.roster) && record.roster.length ? { roster: record.roster } : {}),
     ...(record.historyShares ? { historyShares: record.historyShares } : {}),
     ...(typeof record.mergedFrom === 'string' && MEMBER_ID.test(record.mergedFrom) ? { mergedFrom: record.mergedFrom } : {}),
@@ -551,16 +593,23 @@ function mergeSnapshot(record, snapshot, now) {
   if (Array.isArray(snapshot.roster)) next.roster = snapshot.roster;
   if (snapshot.historyShares) next.historyShares = snapshot.historyShares;
   if (snapshot.sealedHistory) {
+    const priorSeals = rememberPriorSeal(record, snapshot.sealedHistory);
     next.sealedHistory = snapshot.sealedHistory;
+    if (priorSeals.length) next.priorSeals = priorSeals;
     next.journeys = [];
     next.visits = [];
     next.home = null;
     next.clearHome = false;
   } else if (!snapshot.keepHistory) {
-    next.home = snapshot.home;
-    next.journeys = snapshot.journeys;
-    next.visits = snapshot.visits;
-    next.clearHome = false;
+    if (snapshot.clearHome === true) {
+      next.home = null;
+      next.clearHome = true;
+    } else if (snapshot.home) {
+      next.home = snapshot.home;
+      next.clearHome = false;
+    }
+    next.journeys = unionById(record.journeys, snapshot.journeys, cleanJourney, now, 'endedAt', MAX_JOURNEYS);
+    next.visits = unionById(record.visits, snapshot.visits, cleanVisit, now, 'arrivedAt', MAX_VISITS);
   } else if (snapshot.clearHome === true) {
     next.home = null;
     next.clearHome = true;

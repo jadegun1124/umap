@@ -7,6 +7,7 @@ import { openJson, sealJson, mintFamilyKey, unwrapFamilyKey, wrapFamilyKey } fro
 import { missingWrapMemberIds, placeForFamilyRoster } from '../lib/familyRosterSync.mjs';
 import { contentKeyBytes, ensureDevice, familyKeyRecord, historyShareToSave, rememberFamilyKey, syncHistoryDirectory } from '../lib/familyVault.mjs';
 import { readMergedFromMember } from '../lib/accountRestore.mjs';
+import { mergeJourneys, shouldApplyTrailResponse } from '../lib/historyMerge.mjs';
 import { mergeTrailPoints } from '../lib/trailParts.mjs';
 import { rememberPlaceName } from '../lib/placeAlias.mjs';
 import { optionalRouteMissing } from '../lib/syncRoute.mjs';
@@ -693,17 +694,34 @@ async function revealTrails(code: string, body: unknown): Promise<SharedTrail[]>
   const trails: SharedTrail[] = [];
   for (const item of (body as { trails: unknown[] }).trails) {
     if (!item || typeof item !== 'object') continue;
-    const trail = item as { memberId?: unknown; at?: unknown; moving?: unknown; points?: unknown; journeys?: unknown; seal?: unknown; parts?: unknown };
+    const trail = item as { memberId?: unknown; at?: unknown; moving?: unknown; points?: unknown; journeys?: unknown; seal?: unknown; parts?: unknown; priorSeals?: unknown };
     if (typeof trail.memberId !== 'string' || !/^local-[a-z0-9]{3,64}$/.test(trail.memberId)) continue;
     if (typeof trail.at !== 'number' || !Number.isFinite(trail.at)) continue;
     let points = trail.points;
     let journeys = trail.journeys;
-    if (trail.seal) {
+    const seals = [];
+    if (trail.seal) seals.push(trail.seal);
+    if (Array.isArray(trail.priorSeals)) {
+      for (const seal of trail.priorSeals) {
+        if (seal) seals.push(seal);
+      }
+    }
+    if (seals.length) {
       const record = typeof localStorage === 'undefined' ? null : familyKeyRecord(localStorage, code);
-      const opened = record ? await openJson(record.key, trail.seal) as { points?: unknown; journeys?: unknown } | null : null;
-      if (!opened) continue;
-      points = opened.points;
-      journeys = opened.journeys;
+      if (!record) continue;
+      let openedAny = false;
+      let mergedPoints = Array.isArray(points) ? points : [];
+      let mergedJourneys = Array.isArray(journeys) ? journeys : [];
+      for (const seal of seals) {
+        const opened = await openJson(record.key, seal) as { points?: unknown; journeys?: unknown } | null;
+        if (!opened) continue;
+        openedAny = true;
+        mergedPoints = mergeTrailPoints(mergedPoints, Array.isArray(opened.points) ? opened.points : []);
+        mergedJourneys = mergeJourneys(mergedJourneys, opened.journeys);
+      }
+      if (!openedAny) continue;
+      points = mergedPoints;
+      journeys = mergedJourneys;
     }
     if (Array.isArray(trail.parts) && trail.parts.length) {
       const record = typeof localStorage === 'undefined' ? null : familyKeyRecord(localStorage, code);
@@ -959,7 +977,7 @@ function readTrails(body: unknown): SharedTrail[] {
             start: card.start,
             end: card.end,
           }];
-        }).slice(0, 16)
+        }).slice(0, 40)
       : [];
     trails.push({ memberId: trail.memberId, at: trail.at, moving: trail.moving === true, points, journeys });
   }
@@ -1040,7 +1058,7 @@ export function startAdminRemoteSync(
       } else if (action === 'register' && self?.memberId && self.profileKey) {
         registering.add(link.code);
         await syncFamilyKeys(link.code, token, self.memberId, self.profileKey);
-      } else if (response.ok) {
+      } else if (response.ok && shouldApplyTrailResponse(response.status, [])) {
         registering.delete(link.code);
         const body: unknown = await response.json();
         if (self?.memberId && self.profileKey) await syncFamilyKeys(link.code, token, self.memberId, self.profileKey);
