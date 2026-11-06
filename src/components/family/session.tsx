@@ -72,6 +72,7 @@ let sealEpoch = 0;
 let durableChecked = !deviceSealAvailable();
 let durableWritable = false;
 let durableHold = '';
+let durableEpoch = 0;
 
 function cancelDeviceSealRestore() {
   sealEpoch += 1;
@@ -79,9 +80,16 @@ function cancelDeviceSealRestore() {
   pendingDeviceSeal = '';
   sealOpened = true;
 }
+
+function forgetDurableSession() {
+  durableEpoch += 1;
+  durableHold = '';
+  void writeDurableSession('');
+}
 const SESSION_KEYS = [STORAGE_KEY, `${STORAGE_KEY}:admin`, `${STORAGE_KEY}:managed`] as const;
 
 function clearStoredSessions() {
+  forgetDurableSession();
   sessionStorage.removeItem(STORAGE_KEY);
   clearPlainSession(typeof localStorage === 'undefined' ? null : localStorage);
   for (const key of SESSION_KEYS) {
@@ -1744,10 +1752,15 @@ export function FamilyProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     let cancel = false;
+    const epoch = durableEpoch;
     void readDurableSession().then((loaded) => {
-      if (cancel) return;
+      if (cancel || epoch !== durableEpoch) return;
       durableChecked = true;
       durableWritable = !!(loaded && loaded.ok);
+      if (epoch > 0) {
+        setDurableNonce(1);
+        return;
+      }
       durableHold = loaded && typeof loaded.raw === 'string' ? loaded.raw : durableHold;
       const parsed = parseStoredSession(durableHold);
       if (parsed && liveHistoryScore(parsed) > liveHistoryScore(state)) {
@@ -1828,8 +1841,8 @@ export function FamilyProvider({ children }: { children: React.ReactNode }) {
     const beforeJ = Object.values(state.journeys || {}).reduce((sum, list) => sum + (Array.isArray(list) ? list.length : 0), 0);
     const beforeV = Object.values(state.visits || {}).reduce((sum, list) => sum + (Array.isArray(list) ? list.length : 0), 0);
     const accountKey = readStoredAccountKey(storage);
-    restoreOnce.current = true;
     if (!accountKey) {
+      restoreOnce.current = true;
       noteDiag({ kind: 'restore', result: 'nokey', beforej: beforeJ, beforev: beforeV, afterj: beforeJ, afterv: beforeV });
       return;
     }
@@ -1838,6 +1851,7 @@ export function FamilyProvider({ children }: { children: React.ReactNode }) {
       const loaded = await loadFamilyAccount(accountKey).catch(() => ({ ok: false as const }));
       if (cancel) return;
       if (!loaded.ok || !loaded.account) {
+        restoreOnce.current = true;
         noteDiag({ kind: 'restore', result: 'off', beforej: beforeJ, beforev: beforeV, afterj: beforeJ, afterv: beforeV });
         return;
       }
@@ -1846,7 +1860,9 @@ export function FamilyProvider({ children }: { children: React.ReactNode }) {
       const bytes = account.sealedHistory ? JSON.stringify(account.sealedHistory).length : 0;
       const updated = typeof account.updatedAt === 'number' ? account.updatedAt : 0;
       const opened = await openAccountSecrets(loaded.account, storage).catch(() => null);
-      if (cancel || !opened) {
+      if (cancel) return;
+      if (!opened) {
+        restoreOnce.current = true;
         noteDiag({ kind: 'restore', result: 'off', seal, bytes, updated, beforej: beforeJ, beforev: beforeV, afterj: beforeJ, afterv: beforeV });
         return;
       }
@@ -1867,6 +1883,7 @@ export function FamilyProvider({ children }: { children: React.ReactNode }) {
         afterj: afterJ,
         afterv: afterV,
       });
+      restoreOnce.current = true;
       if (!patch || openedAccount.historyLocked) return;
       dispatch({
         type: 'fill-history',
@@ -1950,6 +1967,7 @@ export function FamilyProvider({ children }: { children: React.ReactNode }) {
     withdraw: () => {
       cancelAccountBackup();
       cancelDeviceSealRestore();
+      forgetDurableSession();
       clearDiag();
       clearDeviceAccount(
         typeof localStorage === 'undefined' ? null : localStorage,
