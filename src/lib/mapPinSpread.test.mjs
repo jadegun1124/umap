@@ -96,15 +96,18 @@ test('a pin without a status chip does not draw an empty callout', () => {
 
 test('a seated chip grows a leader when the slot leaves the pin', () => {
   const { JSDOM } = require('jsdom');
-  const dom = new JSDOM(`<div id="pin">${memberCalloutHtml({ dx: 0, dy: 0, labelHtml: '<span data-label>나</span>', faceHtml: '나' })}</div>`);
-  const root = dom.window.document.querySelector('[data-pin-root]');
+  const html = memberCalloutHtml({ dx: 0, dy: 0, dimmed: true, labelHtml: '<span data-label>나</span>', faceHtml: '나' });
+  const dom = new JSDOM(`<div class="leaflet-marker-icon">${html}</div>`);
+  const icon = dom.window.document.querySelector('.leaflet-marker-icon');
+  const root = icon.querySelector('[data-pin-root]');
   assert.equal(root.querySelector('[data-pin-leader]'), null);
-  syncCalloutGeometry(root, 160, -16);
+  syncCalloutGeometry(icon, 160, -16);
   const leader = root.querySelector('[data-pin-leader]');
   assert.ok(leader);
+  assert.equal(leader.parentElement, root);
   assert.match(leader.style.width, /px/);
   assert.notEqual(leader.style.display, 'none');
   assert.match(root.querySelector('[data-callout]').style.transform, /160px/);
-  syncCalloutGeometry(root, 0, 0);
+  syncCalloutGeometry(icon, 0, 0);
   assert.equal(root.querySelector('[data-pin-leader]').style.display, 'none');
 });

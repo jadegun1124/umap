@@ -179,23 +179,26 @@ function paintLeader(leader, shiftX, shiftY) {
 /** Move an existing chip. A seated chip has no leader until the slot leaves the pin. */
 export function syncCalloutGeometry(root, dx = 0, dy = 0) {
   if (!root || typeof root.querySelector !== 'function') return;
+  const pin = typeof root.matches === 'function' && root.matches('[data-pin-root]')
+    ? root
+    : root.querySelector('[data-pin-root]') || root;
   const shiftX = Number(dx) || 0;
   const shiftY = Number(dy) || 0;
-  const callout = root.querySelector('[data-callout]');
+  const callout = pin.querySelector('[data-callout]');
   if (callout) callout.style.transform = calloutTransform(shiftX, shiftY);
   const spec = calloutLeader(shiftX, shiftY);
-  let leader = root.querySelector('[data-pin-leader]');
+  let leader = pin.querySelector('[data-pin-leader]');
   if (!spec.needed) {
     if (leader) leader.style.display = 'none';
     return;
   }
-  if (!leader && root.ownerDocument && typeof root.ownerDocument.createElement === 'function') {
-    leader = root.ownerDocument.createElement('span');
+  if (!leader && pin.ownerDocument && typeof pin.ownerDocument.createElement === 'function') {
+    leader = pin.ownerDocument.createElement('span');
     leader.setAttribute('data-pin-leader', '');
     leader.setAttribute('aria-hidden', 'true');
-    const anchor = root.querySelector('[data-pin-anchor]');
-    if (anchor && anchor.parentNode === root) root.insertBefore(leader, anchor);
-    else root.appendChild(leader);
+    const anchor = pin.querySelector('[data-pin-anchor]');
+    if (anchor && anchor.parentNode === pin) pin.insertBefore(leader, anchor);
+    else pin.appendChild(leader);
   }
   if (leader) paintLeader(leader, shiftX, shiftY);
 }
