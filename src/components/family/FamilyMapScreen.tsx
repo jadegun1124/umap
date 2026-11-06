@@ -24,9 +24,9 @@ import { isMemberId } from '../../lib/sharedIdentity.mjs';
 import { Capacitor } from '@capacitor/core';
 import { CHAT_LIST_POLL_MS } from '../../lib/keySyncPace.mjs';
 import { abandonFamilySync, currentSyncPhase, deleteFamilyRoomRemote, familySyncConfigured, familySyncUrl, fetchMyDirectThreads, registerRoomPush, revokeFamilyPlace, rotateRemovedMember, splitSyncToken, startAdminRemoteSync, startSyncMonitor, subscribeSyncPhase, syncRetryDelay, syncTokenFor, type SyncPhase } from '../../services/familySync';
-import { KEEP_RESTART_HOLD_MS, keepBanner, keepBannerVisible, keepRestartStatus, nextKeepPhase, serviceAlive } from '../../lib/keepBanner.mjs';
+import { KEEP_RESTART_HOLD_MS, isSamsungMaker, keepBanner, keepBannerVisible, keepRestartStatus, nextKeepPhase, serviceAlive } from '../../lib/keepBanner.mjs';
 import { OLD_APP_PLACE_LABEL, syncBannerText } from '../../lib/syncBanner.mjs';
-import { consumePendingChat, listenChatOpen, openAppSettings, overlayPermissionGranted, umapLocation, umapLocationNative } from '../../services/umapLocation';
+import { consumePendingChat, listenChatOpen, openAppSettings, openSamsungPowerSettings, overlayPermissionGranted, umapLocation, umapLocationNative } from '../../services/umapLocation';
 import { sounds } from '../../utils/audio';
 import { DEFAULT_CENTER, type GuardianLink, type HomeZone, type Member, type Session } from '../../types/family';
 import { AlwaysAllowGuide, AlwaysAllowMapHint } from './AlwaysAllowGuide';
@@ -112,7 +112,7 @@ export function FamilyMapScreen() {
   const [keepPhase, setKeepPhase] = useState<'idle' | 'starting' | 'on' | 'blocked'>('idle');
   const keepDismissRef = useRef<{ kind: string; at: number } | null>(null);
   const keepPhaseRef = useRef<{ phase: 'idle' | 'starting' | 'on' | 'blocked'; until: number }>({ phase: 'idle', until: 0 });
-  const [keepLive, setKeepLive] = useState<{ battery: boolean | null; running: boolean; location: string }>({ battery: null, running: false, location: '' });
+  const [keepLive, setKeepLive] = useState<{ battery: boolean | null; running: boolean; location: string; samsung: boolean }>({ battery: null, running: false, location: '', samsung: false });
   const [profileOpen, setProfileOpen] = useState(false);
   const [recordId, setRecordId] = useState<string | null>(null);
   const [managedSettings, setManagedSettings] = useState(false);
@@ -173,10 +173,12 @@ export function FamilyMapScreen() {
           lastFixAt: status.lastFixAt,
           now: Date.now(),
         });
+        const samsung = status.samsung === true || isSamsungMaker(status.manufacturer);
         setKeepLive({
           battery: status.batteryUnrestricted === false ? false : status.batteryUnrestricted === true ? true : null,
           running: alive,
           location,
+          samsung,
         });
         const banner = keepBannerVisible(keepBanner({
           native: true,
@@ -189,6 +191,7 @@ export function FamilyMapScreen() {
           locationMode: location,
           batteryUnrestricted: status.batteryUnrestricted,
           reason: status.reason || '',
+          manufacturer: status.manufacturer || (samsung ? 'samsung' : ''),
         }), keepDismissRef.current, Date.now());
         setKeepHint(banner);
         const nextPhase = nextKeepPhase(keepPhaseRef.current, { alive, banner, now: Date.now() });
@@ -829,6 +832,10 @@ export function FamilyMapScreen() {
     followRef.current = planned.state;
     if (planned.pan) mapRef.current?.followTo(planned.pan.lat, planned.pan.lng);
   }, [awaitingFamilyFit, familyFitPending, followId, followLat, followLng, mapShown]);
+  const overlayKey = `${followOn ? 1 : 0}|${placingHome ? 1 : 0}|${keepHint ? keepHint.kind : ''}`;
+  useEffect(() => {
+    mapRef.current?.nudgeLayout();
+  }, [overlayKey]);
   const recenterFollow = () => {
     followRef.current = noteRecenter(followRef.current);
     setFollowOn(true);
@@ -935,6 +942,11 @@ export function FamilyMapScreen() {
   const openBatterySettings = () => {
     void askBattery().then((result) => setSettingsNote(result.note));
   };
+  const openSamsungPower = () => {
+    void openSamsungPowerSettings().then((result) => {
+      if (result.note) setSettingsNote(result.note);
+    });
+  };
   useEffect(() => consumeAndroidBack(() => {
     if (shareAsk) {
       setShareAsk(false);
@@ -1035,7 +1047,9 @@ export function FamilyMapScreen() {
             }}
             onGesture={() => {
               followRef.current = noteUserDrag(followRef.current);
-              setFollowOn(false);
+            }}
+            onGestureEnd={() => {
+              setFollowOn(followRef.current.following);
             }}
             onMove={(next) => {
               if (!placingRef.current) return;
@@ -1051,6 +1065,7 @@ export function FamilyMapScreen() {
           <>
             <button
               type="button"
+              data-map-obstacle=""
               aria-label="메뉴"
               onClick={() => setMenuOpen(true)}
               className="absolute left-3 top-3 z-30 flex h-11 w-11 items-center justify-center rounded-full bg-white shadow-md"
@@ -1059,6 +1074,7 @@ export function FamilyMapScreen() {
             </button>
           <button
             type="button"
+            data-map-obstacle=""
             aria-label="알림"
             onClick={() => setAlertsOpen(true)}
             className="absolute left-16 top-3 z-30 flex h-11 w-11 items-center justify-center rounded-full bg-white shadow-md"
@@ -1073,7 +1089,7 @@ export function FamilyMapScreen() {
           )}
 
           {(keepHint || keepPhase !== 'idle') && !placingHome && (
-            <div className="absolute inset-x-4 top-16 z-30 rounded-2xl bg-white px-4 py-3 text-left shadow">
+            <div data-map-obstacle="" className="absolute inset-x-4 top-16 z-30 rounded-2xl bg-white px-4 py-3 text-left shadow">
               <div className="flex items-start justify-between gap-2">
                 <p className="text-sm font-black text-slate-900">{keepHint ? keepHint.title : '위치 유지'}</p>
                 <button
@@ -1120,6 +1136,15 @@ export function FamilyMapScreen() {
                       {keepHint.settingsLabel}
                     </button>
                   )}
+                  {keepHint.samsungLabel && (
+                    <button
+                      type="button"
+                      onClick={openSamsungPower}
+                      className="rounded-full bg-slate-100 px-3 py-2 text-xs font-bold text-slate-800"
+                    >
+                      {keepHint.samsungLabel}
+                    </button>
+                  )}
                 </div>
               )}
             </div>
@@ -1133,7 +1158,7 @@ export function FamilyMapScreen() {
               }}
             />
           )}
-          <div className="absolute right-3 top-3 z-30 flex flex-col gap-2">
+          <div data-map-obstacle="" className="absolute right-3 top-3 z-30 flex flex-col gap-2">
             <RoundButton label="안심존 표시" onClick={() => setShowZone((value) => !value)}>
               <Home className={`h-5 w-5 ${showZone ? 'text-[#0084FF]' : 'text-slate-400'}`} />
             </RoundButton>
@@ -1182,6 +1207,7 @@ export function FamilyMapScreen() {
           )}
           <button
             type="button"
+            data-map-obstacle=""
             onClick={sirenOn ? stopIncoming : triggerSos}
             className={`absolute bottom-3 left-3 z-30 rounded-full px-5 py-4 text-base font-black text-white shadow-lg ${sirenOn ? 'bg-slate-900' : 'bg-red-600'}`}
           >
@@ -1209,6 +1235,7 @@ export function FamilyMapScreen() {
           {!followOn && !detailOpen && !placingHome && (
             <button
               type="button"
+              data-map-obstacle=""
               onClick={recenterFollow}
               className="absolute left-1/2 top-[38%] z-30 -translate-x-1/2 rounded-full bg-white px-4 py-2 text-sm font-black text-[#0084FF] shadow-md"
             >
@@ -1217,6 +1244,7 @@ export function FamilyMapScreen() {
           )}
           <button
             type="button"
+            data-map-obstacle=""
             aria-label="가족 추가"
             onClick={() => setSheet('add')}
             className="absolute bottom-3 right-3 z-30 flex h-12 w-12 items-center justify-center rounded-full bg-[#0084FF] text-white shadow-lg"
@@ -1235,7 +1263,7 @@ export function FamilyMapScreen() {
                 <ChevronLeft className="h-5 w-5" />
                 기록
               </button>
-              <div className="absolute right-3 top-3 z-30 flex flex-col gap-2">
+              <div data-map-obstacle="" className="absolute right-3 top-3 z-30 flex flex-col gap-2">
                 <RoundButton label="확대" onClick={() => mapRef.current?.zoomBy(1)}>
                   <Plus className="h-5 w-5" />
                 </RoundButton>
@@ -1656,6 +1684,11 @@ export function FamilyMapScreen() {
                 배터리 제한 없음
               </button>
             )}
+            {tracking.native && keepLive.samsung && (
+              <button type="button" onClick={openSamsungPower} className="mt-2 w-full rounded-full bg-slate-100 py-3 text-sm font-bold">
+                삼성 절전 앱에서 제외
+              </button>
+            )}
             {!(state.permissions.locationMode === 'always' && state.backgroundKeepAlive) && (
               <button
                 type="button"
@@ -1727,6 +1760,11 @@ export function FamilyMapScreen() {
                 }}
               />
             </div>
+            {tracking.native && keepLive.samsung && (
+              <button type="button" onClick={openSamsungPower} className="mt-2 w-full rounded-full bg-slate-100 py-3 text-sm font-bold">
+                삼성 절전 앱에서 제외
+              </button>
+            )}
             {state.backgroundKeepAlive && state.permissions.locationMode === 'always' && (
               <p className="text-xs font-semibold leading-5 text-slate-500">위치 유지가 켜져 있습니다. 끄는 버튼은 없습니다.</p>
             )}

@@ -85,10 +85,11 @@ test('the circle is the marker anchor and a shifted chip keeps a leader back to 
   const screen = text('../components/family/StreetMap.tsx');
   assert.match(screen, /memberCalloutHtml/);
   assert.match(screen, /memberPinIcon/);
-  assert.match(screen, /markerZIndex\(at\.dy, selected\)/);
+  assert.match(screen, /markerZIndex\(dy, isSelected\)/);
+  assert.match(screen, /iconSize: pinIcon\.iconSize/);
+  assert.match(screen, /iconAnchor: pinIcon\.iconAnchor/);
   const marker = screen.slice(screen.indexOf('const marker = L.marker([at.lat, at.lng]'), screen.indexOf("marker.on('click'"));
-  assert.match(marker, /iconSize: pinIcon\.iconSize/);
-  assert.match(marker, /iconAnchor: pinIcon\.iconAnchor/);
+  assert.match(marker, /\bicon,/);
   assert.equal(marker.includes('iconSize: [0, 0]'), false);
   assert.equal(marker.includes('iconAnchor: [0, 0]'), false);
   assert.equal((marker.match(/L\.marker/g) || []).length, 1);
@@ -105,5 +106,5 @@ test('the release notes do not promise dashed walks or a diag code', () => {
   assert.match(workflow, /키 업로드/);
   assert.match(workflow, /10초/);
   assert.match(workflow, /30초/);
-  assert.match(workflow, /1\.76\.0/);
+  assert.match(workflow, /1\.77\.0/);
 });

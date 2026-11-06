@@ -199,6 +199,23 @@ test('a blocked restart becomes on once the service is alive, then idle', () => 
   assert.equal(nextKeepPhase(recovered, { alive: true, banner: null, now: recovered.until }).phase, 'idle');
 });
 
+test('a samsung phone keeps the battery banner and adds a sleeping-apps button', () => {
+  const dead = keepBanner({ ...wanted, serviceRunning: false, manufacturer: 'samsung' });
+  assert.equal(dead.kind, 'dead');
+  assert.equal(dead.primary, '다시 켜기');
+  assert.equal(dead.settingsLabel, '');
+  assert.equal(dead.samsungLabel, '절전 앱 제외');
+  assert.equal(dead.samsungAction, 'samsung-sleep');
+  const battery = keepBanner({ ...wanted, serviceRunning: true, batteryUnrestricted: false, manufacturer: 'Samsung' });
+  assert.equal(battery.action, 'battery');
+  assert.equal(battery.settingsLabel, '배터리 설정');
+  assert.equal(battery.settingsAction, 'battery');
+  assert.equal(battery.samsungAction, 'samsung-sleep');
+  const other = keepBanner({ ...wanted, serviceRunning: false, manufacturer: 'Google' });
+  assert.equal(other.samsungLabel, '');
+  assert.equal(keepBanner({ ...wanted, serviceRunning: true, batteryUnrestricted: true, manufacturer: 'samsung' }), null);
+});
+
 test('the map banner has a restart button, a settings path, and a dismiss control', () => {
   const screen = readFileSync(new URL('../components/family/FamilyMapScreen.tsx', import.meta.url), 'utf8');
   assert.match(screen, /keepBannerVisible/);

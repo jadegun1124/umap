@@ -10,6 +10,7 @@
     margin: 0;
     padding: 0;
     overflow: hidden;
+    overscroll-behavior: none;
     font-family: -apple-system, BlinkMacSystemFont, "Pretendard Variable", Pretendard, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
     -webkit-font-smoothing: antialiased;
   }
@@ -28,6 +29,11 @@
   min-height: 240px;
   background: #d7e3ee;
   font-family: inherit;
+  /* Leaflet's drag-only rule is touch-action: pinch-zoom, so a WebView can
+     steal the finger. The map handles pan and pinch itself. */
+  touch-action: none;
+  -ms-touch-action: none;
+  overscroll-behavior: none;
 }
 
 .leaflet-container img,

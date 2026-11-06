@@ -275,14 +275,41 @@ public class LocationKeepService {
         }
         if (!anySharing(config)) IO.execute(() -> publish(context, null));
         else scheduleHeartbeat(context);
+        touchMovingWake(context);
         LocationKeepProcess.hold(context);
         return true;
     }
 
+    /**
+     * Re-take the moving CPU lock. A 10 minute timeout used to expire during a
+     * long walk because nothing acquired it again until the next state change,
+     * and that next fix never arrived once the CPU was asleep. The foreground
+     * service calls this every 15 seconds, and the heartbeat alarm calls it too.
+     * A process restart reads the saved moving flag and takes the lock before
+     * the next GPS fix.
+     */
+    public static void touchMovingWake(Context context) {
+        if (context == null || !wanted(context)) return;
+        boolean moving;
+        synchronized (LOCK) {
+            if (!movingStream && prefs(context).getBoolean("movingStream", false)) movingStream = true;
+            moving = movingStream;
+        }
+        if (moving) LocationKeepProcess.setMovingWake(context, true);
+        else LocationKeepProcess.renewMovingWake(context);
+    }
+
+    private static void applyMovingWake(Context context) {
+        if (context == null) return;
+        prefs(context).edit().putBoolean("movingStream", movingStream).apply();
+        LocationKeepProcess.setMovingWake(context, movingStream);
+    }
+
     public static void stop(Context context) {
         attach(context);
-        prefs(context).edit().remove("config").putBoolean("registered", false).putBoolean("keepWanted", false).commit();
+        prefs(context).edit().remove("config").putBoolean("registered", false).putBoolean("keepWanted", false).putBoolean("movingStream", false).commit();
         synchronized (LOCK) {
+            movingStream = false;
             clearFilter(context);
             removeUpdates(context);
             cancelHeartbeat(context);
@@ -293,8 +320,9 @@ public class LocationKeepService {
     }
 
     public static void markUserStopped(Context context) {
-        prefs(context).edit().remove("config").putBoolean("registered", false).putBoolean("keepWanted", false).putBoolean("userStopped", true).commit();
+        prefs(context).edit().remove("config").putBoolean("registered", false).putBoolean("keepWanted", false).putBoolean("userStopped", true).putBoolean("movingStream", false).commit();
         synchronized (LOCK) {
+            movingStream = false;
             clearFilter(context);
             removeUpdates(context);
             cancelHeartbeat(context);
@@ -395,8 +423,9 @@ public class LocationKeepService {
     }
 
     private static void disarm(Context context) {
-        prefs(context).edit().putBoolean("registered", false).commit();
+        prefs(context).edit().putBoolean("registered", false).putBoolean("movingStream", false).commit();
         synchronized (LOCK) {
+            movingStream = false;
             removeUpdates(context);
             cancelHeartbeat(context);
         }
@@ -425,6 +454,7 @@ public class LocationKeepService {
                     movingNow = movingStream;
                 }
                 noteHeartbeat(context);
+                touchMovingWake(context);
                 long lastFix = lastFixAt(context);
                 boolean freshFix = lastFix > 0L && System.currentTimeMillis() - lastFix < FIX_STALE_STILL_MS;
                 if (last != null && freshFix && anySharing(readConfig(context))) {
@@ -808,7 +838,7 @@ public class LocationKeepService {
         lastSampleAt = now;
         prefs(context).edit().putLong("lastFixAt", now).apply();
         noteHeartbeat(context);
-        LocationKeepProcess.setMovingWake(context, movingStream);
+        applyMovingWake(context);
         boolean record = recordFix(moving);
         if (record) rememberPoint(location, fixAt);
         long gap = moving ? UPLOAD_MOVING_MS : UPLOAD_STILL_MS;
@@ -915,6 +945,7 @@ public class LocationKeepService {
     private static boolean noteMovement(Location fix, long fixAt) {
         float speed = fix.hasSpeed() ? fix.getSpeed() : -1f;
         if (motionAnchor == null) {
+            boolean restoredMoving = movingStream;
             motionAnchor = new Location(fix);
             motionAnchor.setTime(fixAt);
             stillSinceMs = fixAt;
@@ -925,6 +956,13 @@ public class LocationKeepService {
             // drive does not wait out a stay probe before the next sample.
             if (opening >= 8f) {
                 lastRideAt = fixAt;
+                stillSinceMs = 0L;
+                movingStream = true;
+                return true;
+            }
+            // A restarted walk has no in-memory anchor. Clearing the flag here
+            // dropped the CPU lock and the 2s stream on the first step.
+            if (restoredMoving) {
                 stillSinceMs = 0L;
                 movingStream = true;
                 return true;

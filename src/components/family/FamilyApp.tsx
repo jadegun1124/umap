@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { alwaysAllowGateCovers } from '../../lib/alwaysAllowGate.mjs';
+import { bindScreenWake } from '../../lib/screenWake.mjs';
 import { bindAndroidBack } from '../../platform/androidExit';
 import { umapLocationNative } from '../../services/umapLocation';
 import { AlwaysAllowGate } from './AlwaysAllowGate';
@@ -35,6 +36,7 @@ function AndroidExitToast() {
 }
 
 export function FamilyApp() {
+  useEffect(() => bindScreenWake(), []);
   return (
     <FamilyProvider>
       <FamilyRouter />
