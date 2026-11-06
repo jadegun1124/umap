@@ -132,11 +132,22 @@ export function groupStatusLabelHtml({ place = '', rows = [] } = {}) {
       : '';
     return `<span data-member-row data-member-id="${escapeHtml(row?.id)}" style="display:flex;flex-direction:column;align-items:stretch;width:100%;box-sizing:border-box;border-radius:8px;padding:2px 4px;opacity:${dimmed ? '0.55' : '1'};background:${selected ? '#0084FF' : 'transparent'};color:${selected ? '#fff' : '#0f172a'}"><span style="display:flex;align-items:center;gap:8px;width:100%"><span data-name style="white-space:nowrap">${escapeHtml(row?.name)}</span><span style="display:inline-flex;align-items:center;margin-left:auto;min-width:0">${row?.batteryHtml || ''}</span></span>${ageHtml}</span>`;
   }).join('');
-  return `<span data-label data-status-group style="display:inline-flex;flex-direction:column;align-items:stretch;gap:2px;margin-bottom:4px;padding:4px 8px;border-radius:12px;font-size:11px;font-weight:700;min-width:108px;max-width:220px;box-shadow:0 1px 4px rgba(15,23,42,.16);background:#fff;color:#0f172a">${placeHtml}${body}</span>`;
+  return `<span data-label data-status-group style="display:inline-flex;flex-direction:column;align-items:stretch;gap:2px;margin-bottom:4px;padding:4px 8px;border-radius:12px;font-size:11px;font-weight:700;min-width:108px;max-width:220px;box-shadow:0 1px 2px rgba(15,23,42,.16);background:#fff;color:#0f172a">${placeHtml}${body}</span>`;
 }
 
-/** Screen pixels between the group centroid and the chip tail. The line stays with the marker when the map zooms. */
+/** Screen pixels between a pin center and the merged chip tail. */
 export const STATUS_LIFT_PX = 72;
+
+/**
+ * Callout dy inside a pin whose anchor is the circle center.
+ * The tail stays STATUS_LIFT_PX above that center, so the chip matches
+ * the old lift while sharing the pin's transform.
+ */
+export function groupPinShiftY(pinPx = 42) {
+  const pin = Number(pinPx);
+  const half = Number.isFinite(pin) ? pin / 2 : 21;
+  return -(STATUS_LIFT_PX - half);
+}
 
 function cssOffset(value) {
   const rounded = Math.round(Number(value) * 1000) / 1000;

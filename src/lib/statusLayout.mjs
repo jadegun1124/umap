@@ -223,9 +223,16 @@ export function chooseChipOffset({
     obstacles,
     occupied,
   ) === 0;
-  if (previous && Number.isFinite(Number(previous.dx)) && Number.isFinite(Number(previous.dy)) && hit(previous) <= OVERLAP_HOLD_PX && onScreen(previous)) {
-    if (!sameOffset(previous, prefer) && clearlyFree(prefer)) return { dx: Number(prefer.dx) || 0, dy: Number(prefer.dy) || 0 };
-    return { dx: Number(previous.dx) || 0, dy: Number(previous.dy) || 0 };
+  if (previous && Number.isFinite(Number(previous.dx)) && Number.isFinite(Number(previous.dy)) && onScreen(previous)) {
+    const stayed = chipBox(kind, anchor, previous, size);
+    // A button overlap of any size leaves the slot. Chip-to-chip overlap
+    // under OVERLAP_HOLD_PX does not, so two labels do not trade places.
+    const buttonHit = slotPressure(stayed, obstacles, []);
+    const chipHit = slotPressure(stayed, [], occupied);
+    if (buttonHit === 0 && chipHit <= OVERLAP_HOLD_PX) {
+      if (!sameOffset(previous, prefer) && clearlyFree(prefer)) return { dx: Number(prefer.dx) || 0, dy: Number(prefer.dy) || 0 };
+      return { dx: Number(previous.dx) || 0, dy: Number(previous.dy) || 0 };
+    }
   }
   let best = { dx: Number(prefer.dx) || 0, dy: Number(prefer.dy) || 0 };
   let bestHit = Infinity;

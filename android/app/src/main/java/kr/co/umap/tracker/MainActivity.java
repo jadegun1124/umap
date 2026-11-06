@@ -13,6 +13,7 @@ import android.view.View;
 import android.view.WindowManager;
 import android.webkit.JavascriptInterface;
 import android.webkit.RenderProcessGoneDetail;
+import android.webkit.WebSettings;
 import android.webkit.WebView;
 import androidx.activity.OnBackPressedCallback;
 import com.getcapacitor.BridgeActivity;
@@ -39,6 +40,8 @@ public class MainActivity extends BridgeActivity {
         if (webView != null) {
             // The window is already hardware accelerated. An extra LAYER_TYPE_HARDWARE
             // on the WebView fights its own compositor, so it is not set.
+            // Respect tile Cache-Control. The service worker also keeps base tiles.
+            webView.getSettings().setCacheMode(WebSettings.LOAD_DEFAULT);
             webView.setOverScrollMode(View.OVER_SCROLL_NEVER);
             webView.setVerticalScrollBarEnabled(false);
             webView.setHorizontalScrollBarEnabled(false);

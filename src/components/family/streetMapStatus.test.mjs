@@ -143,18 +143,21 @@ test('nearby members share one status chip and the markers stay put', async () =
   assert.match(chip, /65%/);
   assert.match(chip, /분 전/);
   assert.match(chip, /data-member-id="khoon"[^>]*opacity:0\.55/);
-  for (const pin of pins) assert.equal(pin.innerHTML.includes('data-status-group'), false);
-  const solo = document.querySelector('.umap-member-pin');
+  const groupedPins = pins.filter((pin) => pin.querySelector('[data-status-group]'));
+  assert.equal(groupedPins.length, 1);
+  assert.equal(groupedPins[0], status[0]);
+  const face = status[0].querySelector('[data-pin-anchor]');
+  assert.ok(face);
+  assert.equal(face.closest('.leaflet-marker-icon'), status[0]);
   assert.ok(pins.some((pin) => pin.innerHTML.includes('data-label') && pin.innerHTML.includes('삼촌')));
-  assert.ok(pins.filter((pin) => pin.innerHTML.includes('data-label')).length === 1);
-  assert.ok(solo);
+  assert.equal(pins.filter((pin) => pin.innerHTML.includes('data-label')).length, 2);
 
   const pinNodes = pins;
   const statusNode = status[0];
   const heldBefore = statusNode.dataset.heldLat;
   assert.match(heldBefore, /37\.637/);
   const moved = near.map((person, index) => (
-    index === 0 ? { ...person, lat: person.lat + 0.00001, battery: 28 } : person
+    index === 0 ? { ...person, lat: person.lat + 0.000002, battery: 28 } : person
   ));
   await render([...moved, far]);
   const pinsAfter = [...document.querySelectorAll('.umap-member-pin')];

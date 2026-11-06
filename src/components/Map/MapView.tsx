@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import L from 'leaflet';
+import { baseTileLayerOptions } from '../../lib/mapTiles.mjs';
 import { VWORLD_ATTRIBUTION, vworldApiKey, vworldBaseTileUrl } from '../../services/vworld';
 import { Device, Geofence } from '../../types';
 
@@ -45,8 +46,8 @@ export const MapView: React.FC<MapViewProps> = ({
     const key = vworldApiKey();
     if (key) {
       L.tileLayer(vworldBaseTileUrl(key), {
+        ...baseTileLayerOptions(),
         attribution: VWORLD_ATTRIBUTION,
-        maxZoom: 19,
       }).addTo(map);
     }
     geofenceLayersRef.current = L.layerGroup().addTo(map);

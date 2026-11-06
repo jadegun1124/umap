@@ -121,6 +121,26 @@ test('a chip keeps its slot until it covers a button, then returns only when the
   assert.equal(crowded.offsets.get('status:a').dx !== 0 || crowded.offsets.get('status:a').dy !== -72, true);
 });
 
+test('a few pixels of button overlap still leaves the slot', () => {
+  const anchor = { x: 200, y: 300 };
+  const size = { width: 120, height: 80 };
+  const button = [{ left: 150, right: 250, top: 224, bottom: 260 }];
+  const stayed = chipBox('status', anchor, { dx: 0, dy: -72 }, size);
+  assert.ok(overlapDepth(stayed, button[0]) > 0);
+  assert.ok(overlapDepth(stayed, button[0]) <= 8);
+  const moved = chooseChipOffset({
+    kind: 'status',
+    anchor,
+    size,
+    obstacles: button,
+    previous: { dx: 0, dy: -72 },
+    preferred: { dx: 0, dy: -72 },
+  });
+  const box = chipBox('status', anchor, moved, size);
+  assert.equal(overlapDepth(box, button[0]), 0);
+  assert.ok(moved.dx !== 0 || moved.dy !== -72);
+});
+
 test('a chip beside the top buttons stays on screen instead of climbing off the map', () => {
   const anchor = { x: 300, y: 140 };
   const size = groupChipSize(2);

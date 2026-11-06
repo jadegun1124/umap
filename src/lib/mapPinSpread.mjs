@@ -147,6 +147,35 @@ function leaderMarkup(dx, dy) {
   return `<span data-pin-leader aria-hidden="true" style="position:absolute;left:calc(50% + ${x}px);top:calc(50% + ${y}px);width:${length}px;height:2px;margin-top:-1px;background:#64748b;box-shadow:0 0 0 1px #fff;transform-origin:0 50%;transform:rotate(${angle}deg);pointer-events:none;z-index:0"></span>`;
 }
 
+export function calloutTransform(dx = 0, dy = 0) {
+  const shiftX = Number(dx) || 0;
+  const shiftY = Number(dy) || 0;
+  return `translate(calc(-50% + ${cssNumber(shiftX)}px), ${cssNumber(shiftY)}px)`;
+}
+
+/** Move an existing chip. Replacing the marker HTML would skip the CSS transition. */
+export function syncCalloutGeometry(root, dx = 0, dy = 0) {
+  if (!root || typeof root.querySelector !== 'function') return;
+  const shiftX = Number(dx) || 0;
+  const shiftY = Number(dy) || 0;
+  const callout = root.querySelector('[data-callout]');
+  if (callout) callout.style.transform = calloutTransform(shiftX, shiftY);
+  const leader = root.querySelector('[data-pin-leader]');
+  if (!leader) return;
+  const spec = calloutLeader(shiftX, shiftY);
+  if (!spec.needed) {
+    leader.style.display = 'none';
+    return;
+  }
+  const runX = spec.to.x - spec.from.x;
+  const runY = spec.to.y - spec.from.y;
+  leader.style.display = '';
+  leader.style.left = `calc(50% + ${cssNumber(spec.from.x)}px)`;
+  leader.style.top = `calc(50% + ${cssNumber(spec.from.y)}px)`;
+  leader.style.width = `${cssNumber(Math.hypot(runX, runY))}px`;
+  leader.style.transform = `rotate(${cssNumber(Math.atan2(runY, runX) * 180 / Math.PI)}deg)`;
+}
+
 /**
  * The 42px circle fills the marker. iconAnchor is its center, so Leaflet moves
  * the circle, the chip, and the leader together. A zero offset puts the chip
@@ -159,7 +188,7 @@ export function memberCalloutHtml({ dx = 0, dy = 0, dimmed = false, tailColor = 
   const pin = MEMBER_PIN_PX;
   const labeled = String(labelHtml || '').trim().length > 0;
   const callout = labeled
-    ? `<div data-callout style="position:absolute;z-index:2;left:50%;bottom:100%;width:max-content;transform:translate(calc(-50% + ${shiftX}px), ${shiftY}px)">
+    ? `<div data-callout style="position:absolute;z-index:2;left:50%;bottom:100%;width:max-content;transform:${calloutTransform(shiftX, shiftY)}">
       ${labelHtml}
       <span data-label-tail style="display:block;width:0;height:0;margin:0 auto;border-left:6px solid transparent;border-right:6px solid transparent;border-top:7px solid ${tail}"></span>
     </div>`
