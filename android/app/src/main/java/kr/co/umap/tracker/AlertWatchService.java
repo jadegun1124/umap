@@ -428,8 +428,8 @@ public class AlertWatchService {
                 String first = nextSeen.iterator().next();
                 nextSeen.remove(first);
             }
-            long floor = System.currentTimeMillis() - ALERT_CURSOR_OVERLAP_MS;
-            if (cursor < floor) cursor = floor;
+            // Chat GET is not filtered by since. Keep the newest message time
+            // only, so a late message older than one minute is still notified.
             prefs(context).edit().putLong(sinceKey, cursor).putStringSet("chatSeen", nextSeen).apply();
             return status;
         } catch (Exception ignored) {

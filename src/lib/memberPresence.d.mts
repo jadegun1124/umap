@@ -24,6 +24,8 @@ export function pinAgeLabel(presence: MemberPresence | null | undefined): string
 
 export function memberIsStale(presence: MemberPresence | null | undefined): boolean;
 
+export function memberIsDimmed(presence: MemberPresence | null | undefined): boolean;
+
 export function cleanDepartedIds(values: unknown): string[];
 
 export function sharedPlaceStopsReporting(place: { sharing?: boolean } | null | undefined): boolean;

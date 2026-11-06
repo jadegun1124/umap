@@ -28,6 +28,8 @@ test('the room poll recovers a 403 instead of freezing the cursor', () => {
   assert.match(watch, /x-umap-profile-key/);
   assert.match(watch, /status == 401 \|\| status == 403/);
   assert.match(watch, /ALERT_CURSOR_OVERLAP_MS = 60_000L/);
+  const chat = watch.slice(watch.indexOf('private static int pullChat'), watch.indexOf('private static void notifyAlert'));
+  assert.equal(chat.includes('ALERT_CURSOR_OVERLAP_MS'), false);
   const kept = watch.slice(watch.indexOf('if (status < 200 || status >= 300) return status;'), watch.indexOf('JSONObject body'));
   assert.equal(kept.includes('putLong("since"'), false);
 });

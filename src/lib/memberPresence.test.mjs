@@ -5,6 +5,7 @@ import {
   MEMBER_STALE_MS,
   cleanDepartedIds,
   hideLeftPublishers,
+  memberIsDimmed,
   memberIsStale,
   memberPresence,
   memberPresenceLabel,
@@ -25,7 +26,8 @@ test('a live member keeps the usual status and a stopped phone keeps last locati
   assert.equal(memberIsStale(memberPresence(live, now)), false);
   assert.equal(memberPresence(fading, now).kind, 'live');
   assert.equal(memberPresence(fading, now).ago, '4분 전');
-  assert.equal(memberIsStale(memberPresence(fading, now)), true);
+  assert.equal(memberIsStale(memberPresence(fading, now)), false);
+  assert.equal(memberIsDimmed(memberPresence(fading, now)), true);
   assert.equal(memberPresence(stale, now).kind, 'stale');
   assert.equal(memberPresenceLabel(memberPresence(stale, now)), '마지막 위치 · 3시간 전');
   assert.equal(pinAgeLabel(memberPresence(stale, now)), '마지막 위치 · 3시간 전');

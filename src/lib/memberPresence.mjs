@@ -49,7 +49,12 @@ export function pinAgeLabel(presence) {
 }
 
 export function memberIsStale(presence) {
-  return presence?.kind === 'stale' || presence?.kind === 'disconnected' || presence?.faded === true;
+  return presence?.kind === 'stale' || presence?.kind === 'disconnected';
+}
+
+/** Dim the pin and card. A faded live pin still keeps its trail. */
+export function memberIsDimmed(presence) {
+  return memberIsStale(presence) || presence?.faded === true;
 }
 
 export function cleanDepartedIds(values) {

@@ -5,7 +5,7 @@ import { noteDiag } from '../../lib/diagLog.mjs';
 import { hasLocation } from '../../lib/geo';
 import { MEMBER_PIN_PX, memberCalloutHtml, memberPinIcon, spreadPinPositions } from '../../lib/mapPinSpread.mjs';
 import { savedPlaceLabel } from '../../lib/memberPlace.mjs';
-import { memberIsStale, memberPresence, pinAgeLabel } from '../../lib/memberPresence.mjs';
+import { memberIsDimmed, memberPresence, pinAgeLabel } from '../../lib/memberPresence.mjs';
 import { appendLiveTip, trailDrawParts } from '../../lib/tracking.mjs';
 import { VWORLD_ATTRIBUTION, vworldApiKey, vworldBaseTileUrl } from '../../services/vworld';
 import type { HomeZone, Member, TrackPoint } from '../../types/family';
@@ -287,7 +287,7 @@ export const StreetMap = forwardRef<StreetMapHandle, {
       const at = pins.get(member.id) || { lat: member.lat, lng: member.lng, dx: 0, dy: 0 };
       const selected = member.id === selectedId;
       const presence = memberPresence(member, Date.now());
-      const dimmed = memberIsStale(presence);
+      const dimmed = memberIsDimmed(presence);
       const age = escapeHtml(pinAgeLabel(presence));
       const color = '#0084FF';
       const self = member.role === 'self';

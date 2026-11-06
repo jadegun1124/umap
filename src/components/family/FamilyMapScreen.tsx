@@ -33,7 +33,7 @@ import { AlwaysAllowGuide, AlwaysAllowMapHint } from './AlwaysAllowGuide';
 import { AlwaysAllowSetup } from './AlwaysAllowSetup';
 import { memberFocusStep } from '../../lib/memberFocus.mjs';
 import { memberPlaceLabel } from '../../lib/memberPlace.mjs';
-import { memberIsStale, memberPresence, memberPresenceLabel, pinAgeLabel } from '../../lib/memberPresence.mjs';
+import { memberIsDimmed, memberIsStale, memberPresence, memberPresenceLabel, pinAgeLabel } from '../../lib/memberPresence.mjs';
 import { mapMembers, rosterMembers } from '../../lib/peerFamily.mjs';
 import { AlwaysAllowNotice } from './AlwaysAllowNotice';
 import { InviteQrImage, InviteQrScan } from './InviteQr';
@@ -2332,7 +2332,8 @@ function MemberCard({
   onRemove?: () => void;
 }) {
   const presence = memberPresence(member, Date.now());
-  const dimmed = memberIsStale(presence);
+  const dimmed = memberIsDimmed(presence);
+  const stale = memberIsStale(presence);
   const disconnected = presence.kind === 'disconnected';
   return (
     <div className={`flex w-full items-center gap-3 rounded-2xl px-1 py-2 text-left ${selected ? 'bg-blue-50' : ''} ${dimmed ? 'opacity-60' : ''}`}>
@@ -2348,7 +2349,7 @@ function MemberCard({
         </span>
       </button>
       {unread > 0 && <span className="shrink-0 rounded-full bg-[#ff8a34] px-2 py-0.5 text-[10px] font-black text-white">{unread}</span>}
-      {member.battery != null && !dimmed && <span className="shrink-0 text-xs font-bold text-slate-500">{member.battery}%</span>}
+      {member.battery != null && !stale && <span className="shrink-0 text-xs font-bold text-slate-500">{member.battery}%</span>}
       {onRemove && disconnected && (
         <button type="button" onClick={onRemove} className="shrink-0 rounded-full bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-700">
           지우기
