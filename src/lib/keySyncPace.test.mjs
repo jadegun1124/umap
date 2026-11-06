@@ -22,11 +22,12 @@ test('a phone that already has the family key does not upload keys every poll', 
   assert.ok(KEY_PUT_WINDOW_MS >= 30_000 && KEY_PUT_WINDOW_MS <= 60_000);
 });
 
-test('a member 403 can register once, and any other 403 stops the room', () => {
+test('a member 403 can register once, then a profile-key 403 retries instead of stopping', () => {
   assert.equal(roomPollAction(200, '', { canRegister: true, attempted: false }), 'continue');
   assert.equal(roomPollAction(403, 'member', { canRegister: true, attempted: false }), 'register');
-  assert.equal(roomPollAction(403, 'member', { canRegister: true, attempted: true }), 'block');
-  assert.equal(roomPollAction(403, 'member', { canRegister: false, attempted: false }), 'block');
+  assert.equal(roomPollAction(403, 'member', { canRegister: true, attempted: true }), 'recover');
+  assert.equal(roomPollAction(403, 'member', { canRegister: false, attempted: false }), 'recover');
+  assert.equal(roomPollAction(403, 'profile-key', { canRegister: true, attempted: true }), 'recover');
   assert.equal(roomPollAction(403, 'read-key', { canRegister: true, attempted: false }), 'block');
   assert.equal(roomPollAction(403, 'revoked', { canRegister: true, attempted: false }), 'block');
   const source = readFileSync(new URL('../services/familySync.ts', import.meta.url), 'utf8');

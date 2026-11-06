@@ -131,7 +131,7 @@ test('chat shade notification is one event and opens that conversation', () => {
   assert.match(watch, /\/chat\?me=/);
   assert.match(watch, /umap_chat_peer/);
   assert.match(watch, /CATEGORY_MESSAGE/);
-  assert.match(watch, /pullChat\(context, base, code, token, me, !MainActivity\.isResumed\(\)\)/);
+  assert.match(watch, /pullChat\(context, base, code, token, me, !MainActivity\.isResumed\(\), room\)/);
   assert.match(activity, /umap_chat_code/);
   assert.match(activity, /UmapLocationPlugin\.openChat/);
   assert.match(plugin, /consumePendingChat/);

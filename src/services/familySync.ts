@@ -1,4 +1,6 @@
 import { Capacitor, CapacitorHttp } from '@capacitor/core';
+import { nextAlertCursor } from '../lib/alertCursor.mjs';
+import { APP_VERSION_CODE, APP_VERSION_NAME } from '../lib/appRelease.mjs';
 import { noteDiag } from '../lib/diagLog.mjs';
 import { BACKGROUND_POLL_MIN_MS, FAMILY_POLL_MS, HEALTH_POLL_MS, QUOTA_RETRY_MS, ROOM_POLL_MS, blockRoom, quotaPollPaused, roomBlocked, roomPollAction, shouldRefreshFamilyKeys, syncPhaseAfterResponse } from '../lib/keySyncPace.mjs';
 import { openJson, sealJson, mintFamilyKey, unwrapFamilyKey, wrapFamilyKey } from '../lib/familySeal.mjs';
@@ -130,10 +132,12 @@ async function request(path: string, init: RequestInit): Promise<Response> {
         data = init.body;
       }
     }
+    const headers = headerRecord(init.headers);
+    headers['X-App-Version'] = `${APP_VERSION_NAME} ${APP_VERSION_CODE}`;
     const response = await CapacitorHttp.request({
       url,
       method,
-      headers: headerRecord(init.headers),
+      headers,
       data,
     });
     const payload = response.data == null
@@ -143,7 +147,9 @@ async function request(path: string, init: RequestInit): Promise<Response> {
         : JSON.stringify(response.data);
     return new Response(payload, { status: response.status });
   }
-  return fetch(url, { ...init, signal: timeoutSignal(8000), cache: 'no-store' });
+  const headers = new Headers(init.headers || {});
+  headers.set('X-App-Version', `${APP_VERSION_NAME} ${APP_VERSION_CODE}`);
+  return fetch(url, { ...init, headers, signal: timeoutSignal(8000), cache: 'no-store' });
 }
 
 let limitedUntil = 0;
@@ -1026,7 +1032,12 @@ export function startAdminRemoteSync(
         settleBackoff('room', outcome);
         return;
       }
-      if (action === 'register' && self?.memberId && self.profileKey) {
+      if (action === 'recover') {
+        outcome = foldSyncOutcome(outcome, 'server');
+        if (self?.memberId && self.profileKey) {
+          await syncFamilyKeys(link.code, token, self.memberId, self.profileKey);
+        }
+      } else if (action === 'register' && self?.memberId && self.profileKey) {
         registering.add(link.code);
         await syncFamilyKeys(link.code, token, self.memberId, self.profileKey);
       } else if (response.ok) {
@@ -1046,8 +1057,8 @@ export function startAdminRemoteSync(
         for (const alert of alerts) {
           if (!isRemoteAlert(alert)) continue;
           handlers.onAlert(alert);
-          if (alert.at > since) since = alert.at;
         }
+        since = nextAlertCursor(since, alerts, Date.now());
       } else if (action !== 'register' && error === 'quota') {
         delay = QUOTA_RETRY_MS;
       }
@@ -1164,6 +1175,13 @@ export function startManagedFamilySync(
         });
         if (action === 'block') {
           blockRoom(link.code);
+          continue;
+        }
+        if (action === 'recover') {
+          outcome = foldSyncOutcome(outcome, 'server');
+          if (self?.memberId && self.profileKey) {
+            await syncFamilyKeys(link.code, link.token, self.memberId, self.profileKey);
+          }
           continue;
         }
         if (action === 'register' && self?.memberId && self.profileKey) {

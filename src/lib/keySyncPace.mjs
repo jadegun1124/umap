@@ -50,14 +50,16 @@ export function roomBlocked(code) {
 }
 
 // A 403 from a room the phone can still join is the registration signal:
-// one key upload adds the member. Read-key, revoked, and a second member
-// refusal stop the poll until login or an explicit rejoin.
+// one key upload adds the member. A later member or profile-key refusal
+// retries that upload instead of freezing the last place on screen.
+// Read-key and revoked stay blocked until login or an explicit rejoin.
 export function roomPollAction(status, error, options = {}) {
   if (status !== 403) return 'continue';
   const canRegister = options.canRegister === true;
   const attempted = options.attempted === true;
   if (error === 'member' && canRegister && !attempted) return 'register';
-  return 'block';
+  if (error === 'read-key' || error === 'revoked') return 'block';
+  return 'recover';
 }
 
 export function resetBlockedRooms() {

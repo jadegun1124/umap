@@ -11,7 +11,7 @@ export const KEY_PUT_WINDOW_MS: number;
 export function blockRoom(code: string): void;
 export function resumeRoom(code?: string): void;
 export function roomBlocked(code: string): boolean;
-export function roomPollAction(status: number, error: string, options?: { canRegister?: boolean; attempted?: boolean }): 'continue' | 'register' | 'block';
+export function roomPollAction(status: number, error: string, options?: { canRegister?: boolean; attempted?: boolean }): 'continue' | 'register' | 'recover' | 'block';
 export function resetBlockedRooms(): void;
 export function keyPutLimited(lastAt: number | undefined, now: number, windowMs?: number): boolean;
 export function quotaPollPaused(phase: string, now: number, limitedUntil: number): boolean;

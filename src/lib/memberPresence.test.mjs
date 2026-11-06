@@ -5,9 +5,11 @@ import {
   MEMBER_STALE_MS,
   cleanDepartedIds,
   hideLeftPublishers,
+  memberIsDimmed,
   memberIsStale,
   memberPresence,
   memberPresenceLabel,
+  pinAgeLabel,
   relativePlaceAge,
   sharedPlaceStopsReporting,
 } from './memberPresence.mjs';
@@ -15,11 +17,20 @@ import {
 test('a live member keeps the usual status and a stopped phone keeps last location', () => {
   const now = Date.UTC(2026, 9, 29, 0, 0);
   const live = { id: 'm-1', role: 'child', updatedAt: now - 2 * 60_000 };
+  const fading = { id: 'm-1', role: 'child', updatedAt: now - 4 * 60_000 };
   const stale = { id: 'm-1', role: 'child', updatedAt: now - 3 * 60 * 60_000 };
   assert.equal(memberPresence(live, now).kind, 'live');
+  assert.equal(memberPresence(live, now).ago, '2분 전');
+  assert.equal(pinAgeLabel(memberPresence(live, now)), '2분 전');
   assert.equal(memberPresenceLabel(memberPresence(live, now)), '');
+  assert.equal(memberIsStale(memberPresence(live, now)), false);
+  assert.equal(memberPresence(fading, now).kind, 'live');
+  assert.equal(memberPresence(fading, now).ago, '4분 전');
+  assert.equal(memberIsStale(memberPresence(fading, now)), false);
+  assert.equal(memberIsDimmed(memberPresence(fading, now)), true);
   assert.equal(memberPresence(stale, now).kind, 'stale');
   assert.equal(memberPresenceLabel(memberPresence(stale, now)), '마지막 위치 · 3시간 전');
+  assert.equal(pinAgeLabel(memberPresence(stale, now)), '마지막 위치 · 3시간 전');
   assert.equal(memberIsStale(memberPresence(stale, now)), true);
   assert.equal(relativePlaceAge(now - MEMBER_STALE_MS, now), '10분 전');
 });
