@@ -1,3 +1,4 @@
+import { bindScreenWake } from '../lib/screenWake.mjs';
 import { realtimeApi } from './api';
 import { gpsPipeline, GpsFilteredResult } from '../utils/gpsFilter';
 
@@ -21,32 +22,7 @@ export class BrowserGeolocationTracker {
   private isTracking: boolean = false;
   private deviceId: string = 'my-real-device';
   private resultListeners: GpsEventListener[] = [];
-  private wakeLockSentinel: any = null;
-
-  // Request WakeLock so smartphone screen stays awake during active tracking
-  private async requestWakeLock() {
-    try {
-      if ('wakeLock' in navigator) {
-        this.wakeLockSentinel = await (navigator as any).wakeLock.request('screen');
-        this.wakeLockSentinel.addEventListener('release', () => {
-          this.wakeLockSentinel = null;
-        });
-      }
-    } catch (err) {
-      console.warn('[WakeLock] Unable to acquire wake lock:', err);
-    }
-  }
-
-  private releaseWakeLock() {
-    if (this.wakeLockSentinel) {
-      try {
-        this.wakeLockSentinel.release();
-      } catch (e) {
-        // ignore
-      }
-      this.wakeLockSentinel = null;
-    }
-  }
+  private unbindWake: (() => void) | null = null;
 
   start(deviceId: string, onResult: GpsEventListener): boolean {
     if (!('geolocation' in navigator)) {
@@ -64,7 +40,8 @@ export class BrowserGeolocationTracker {
     }
 
     this.isTracking = true;
-    this.requestWakeLock();
+    this.unbindWake?.();
+    this.unbindWake = bindScreenWake();
 
     this.watchId = navigator.geolocation.watchPosition(
       async (pos) => {
@@ -126,7 +103,8 @@ export class BrowserGeolocationTracker {
     }
     this.isTracking = false;
     this.resultListeners = [];
-    this.releaseWakeLock();
+    this.unbindWake?.();
+    this.unbindWake = null;
   }
 
   getStatus() {

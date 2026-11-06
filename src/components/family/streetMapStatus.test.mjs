@@ -149,6 +149,8 @@ test('nearby members share one status chip and the markers stay put', async () =
 
   const pinNodes = pins;
   const statusNode = status[0];
+  const heldBefore = statusNode.dataset.heldLat;
+  assert.match(heldBefore, /37\.637/);
   const moved = near.map((person, index) => (
     index === 0 ? { ...person, lat: person.lat + 0.00001, battery: 28 } : person
   ));
@@ -158,7 +160,9 @@ test('nearby members share one status chip and the markers stay put', async () =
   assert.equal(pinsAfter.length, 4);
   assert.equal(statusAfter, statusNode);
   assert.deepEqual(pinsAfter, pinNodes);
+  assert.equal(statusAfter.dataset.heldLat, heldBefore);
   assert.match(statusAfter.innerHTML, /28%/);
+  assert.match(statusAfter.innerHTML, /data-pin-leader/);
 
   const row = statusAfter.querySelector('[data-member-id="mom"]');
   row.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));

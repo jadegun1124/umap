@@ -11,6 +11,8 @@
             <category android:name="android.intent.category.DEFAULT" />
         </intent>
         <package android:name="com.samsung.android.permissioncontroller" />
+        <package android:name="com.samsung.android.lool" />
+        <package android:name="com.samsung.android.sm" />
         <package android:name="com.google.android.permissioncontroller" />
         <package android:name="com.android.permissioncontroller" />
         <package android:name="com.kakao.talk" />

@@ -35,4 +35,8 @@ export function groupStatusLabelHtml(input?: {
   }>;
 }): string;
 
-export function statusCalloutHtml(labelHtml?: string, tailColor?: string): string;
+export function statusCalloutHtml(
+  labelHtml?: string,
+  tailColor?: string,
+  offset?: { dx?: number; dy?: number } | null,
+): string;

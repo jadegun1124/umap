@@ -6,6 +6,7 @@ import android.net.Uri;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
+import android.view.WindowManager;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebView;
 import androidx.activity.OnBackPressedCallback;
@@ -71,18 +72,29 @@ public class MainActivity extends BridgeActivity {
     public void onResume() {
         super.onResume();
         resumed = true;
+        keepScreenOn(true);
     }
 
     @Override
     public void onWindowFocusChanged(boolean hasFocus) {
         super.onWindowFocusChanged(hasFocus);
-        if (hasFocus) UmapAuthPlugin.onMainWindowFocused();
+        if (!hasFocus) return;
+        keepScreenOn(true);
+        UmapAuthPlugin.onMainWindowFocused();
     }
 
     @Override
     public void onPause() {
+        keepScreenOn(false);
         resumed = false;
         super.onPause();
+    }
+
+    /** The open activity stays lit. Leaving the app lets the screen sleep again. */
+    private void keepScreenOn(boolean on) {
+        if (getWindow() == null) return;
+        if (on) getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        else getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
     }
 
     private void captureChatIntent(Intent intent) {

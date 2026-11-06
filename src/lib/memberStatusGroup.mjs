@@ -138,13 +138,36 @@ export function groupStatusLabelHtml({ place = '', rows = [] } = {}) {
 /** Screen pixels between the group centroid and the chip tail. The line stays with the marker when the map zooms. */
 export const STATUS_LIFT_PX = 72;
 
-/** Chip above a lat/lng. iconAnchor should be the bottom center so the leader ends on that point. */
-export function statusCalloutHtml(labelHtml = '', tailColor = '#fff') {
+function cssOffset(value) {
+  const rounded = Math.round(Number(value) * 1000) / 1000;
+  return String(Object.is(rounded, -0) ? 0 : rounded);
+}
+
+/**
+ * Chip above a lat/lng. iconAnchor should be the bottom center so the leader
+ * ends on that point. The default offset is straight up by STATUS_LIFT_PX.
+ * Any other offset keeps the same marker, so a pan moves the chip with the map.
+ */
+export function statusCalloutHtml(labelHtml = '', tailColor = '#fff', offset = null) {
   const tail = tailColor === '#0084FF' ? '#0084FF' : '#fff';
+  const shiftX = offset && Number.isFinite(Number(offset.dx)) ? Number(offset.dx) : 0;
+  const shiftY = offset && Number.isFinite(Number(offset.dy)) ? Number(offset.dy) : -STATUS_LIFT_PX;
+  const straightUp = shiftX === 0 && shiftY === -STATUS_LIFT_PX;
   const lift = STATUS_LIFT_PX;
+  const leader = straightUp
+    ? `<span data-pin-leader aria-hidden="true" style="position:absolute;left:50%;bottom:0;width:${lift}px;height:2px;background:#64748b;box-shadow:0 0 0 1px #fff;transform-origin:0 50%;transform:rotate(-90deg);pointer-events:none;z-index:0"></span>`
+    : (() => {
+      const length = cssOffset(Math.hypot(shiftX, shiftY));
+      const angle = cssOffset(Math.atan2(shiftY, shiftX) * 180 / Math.PI);
+      if (length === '0') return '';
+      return `<span data-pin-leader aria-hidden="true" style="position:absolute;left:50%;bottom:0;width:${length}px;height:2px;background:#64748b;box-shadow:0 0 0 1px #fff;transform-origin:0 50%;transform:rotate(${angle}deg);pointer-events:none;z-index:0"></span>`;
+    })();
+  const slide = straightUp
+    ? `translate(-50%, -${lift}px)`
+    : `translate(calc(-50% + ${cssOffset(shiftX)}px), ${cssOffset(shiftY)}px)`;
   return `<div data-status-root style="position:relative;width:42px;height:42px;overflow:visible;pointer-events:none">
-    <span data-pin-leader aria-hidden="true" style="position:absolute;left:50%;bottom:0;width:${lift}px;height:2px;background:#64748b;box-shadow:0 0 0 1px #fff;transform-origin:0 50%;transform:rotate(-90deg);pointer-events:none;z-index:0"></span>
-    <div data-callout style="position:absolute;z-index:2;left:50%;bottom:0;width:max-content;transform:translate(-50%, -${lift}px);pointer-events:auto">
+    ${leader}
+    <div data-callout style="position:absolute;z-index:2;left:50%;bottom:0;width:max-content;transform:${slide};pointer-events:auto">
       ${labelHtml}
       <span data-label-tail style="display:block;width:0;height:0;margin:0 auto;border-left:6px solid transparent;border-right:6px solid transparent;border-top:7px solid ${tail}"></span>
     </div>

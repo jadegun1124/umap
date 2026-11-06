@@ -6,7 +6,8 @@ import { hasLocation } from '../../lib/geo';
 import { MEMBER_PIN_PX, markerZIndex, memberCalloutHtml, memberPinIcon, spreadPinPositions } from '../../lib/mapPinSpread.mjs';
 import { savedPlaceLabel } from '../../lib/memberPlace.mjs';
 import { memberIsDimmed, memberPresence, pinAgeLabel } from '../../lib/memberPresence.mjs';
-import { firstPlaceLabel, groupMembersByPlace, groupStatusLabelHtml, orderStatusMembers, statusCalloutHtml } from '../../lib/memberStatusGroup.mjs';
+import { firstPlaceLabel, groupStatusLabelHtml, orderStatusMembers, STATUS_LIFT_PX, statusCalloutHtml } from '../../lib/memberStatusGroup.mjs';
+import { assignChipOffsets, groupChipSize, holdAnchor, holdSpread, inflateRect, soloChipSize, stablePlaceGroups } from '../../lib/statusLayout.mjs';
 import { appendLiveTip, trailDrawParts } from '../../lib/tracking.mjs';
 import { VWORLD_ATTRIBUTION, vworldApiKey, vworldBaseTileUrl } from '../../services/vworld';
 import type { HomeZone, Member, TrackPoint } from '../../types/family';
@@ -120,6 +121,45 @@ function dropHeld(store: Map<string, HeldMarker>, keep: Set<string>) {
   }
 }
 
+function movedEnough(marker: L.Marker, lat: number, lng: number): boolean {
+  const at = marker.getLatLng();
+  if (!at) return true;
+  const dLat = ((at.lat - lat) * Math.PI) / 180;
+  const dLng = ((at.lng - lng) * Math.PI) / 180;
+  const lat1 = (at.lat * Math.PI) / 180;
+  const lat2 = (lat * Math.PI) / 180;
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
+  return 2 * 6371000 * Math.asin(Math.min(1, Math.sqrt(h))) > 0.4;
+}
+
+function markHeld(marker: L.Marker, lat: number, lng: number, dx: number, dy: number) {
+  const el = marker.getElement();
+  if (!el) return;
+  el.dataset.heldLat = lat.toFixed(7);
+  el.dataset.heldLng = lng.toFixed(7);
+  el.dataset.offsetX = String(dx);
+  el.dataset.offsetY = String(dy);
+}
+
+function measureObstacles(map: L.Map) {
+  const container = map.getContainer();
+  const host = container.parentElement?.parentElement;
+  if (!host) return [];
+  const origin = container.getBoundingClientRect();
+  const rects: { left: number; right: number; top: number; bottom: number }[] = [];
+  host.querySelectorAll('[data-map-obstacle]').forEach((node) => {
+    const box = node.getBoundingClientRect();
+    if (box.width < 1 || box.height < 1) return;
+    rects.push(inflateRect({
+      left: box.left - origin.left,
+      top: box.top - origin.top,
+      right: box.right - origin.left,
+      bottom: box.bottom - origin.top,
+    }, 6));
+  });
+  return rects;
+}
+
 export const StreetMap = forwardRef<StreetMapHandle, {
   center: { lat: number; lng: number };
   zoom: number;
@@ -143,6 +183,19 @@ export const StreetMap = forwardRef<StreetMapHandle, {
   const pinMarkersRef = useRef(new Map<string, HeldMarker>());
   const statusMarkersRef = useRef(new Map<string, HeldMarker>());
   const statusAnchorRef = useRef(new Map<string, string>());
+  const groupsRef = useRef<Array<{ key: string; members: Member[]; anchor: { lat: number; lng: number }; anchorId: string }>>([]);
+  const anchorsRef = useRef(new Map<string, { lat: number; lng: number }>());
+  const spreadRef = useRef(new Map<string, { lat: number; lng: number; dx: number; dy: number }>());
+  const offsetsRef = useRef(new Map<string, { dx: number; dy: number }>());
+  const movingRef = useRef(false);
+  const layoutFrameRef = useRef(0);
+  const placeRef = useRef<(reason?: 'data' | 'moveend' | 'obstacle') => void>(() => {});
+  const membersRef = useRef(members);
+  const homeRef = useRef(home);
+  const selectedIdRef = useRef(selectedId);
+  membersRef.current = members;
+  homeRef.current = home;
+  selectedIdRef.current = selectedId;
   const playbackRef = useRef<L.Marker | null>(null);
   const playbackPanRef = useRef(0);
   const [ready, setReady] = useState(false);
@@ -273,6 +326,29 @@ export const StreetMap = forwardRef<StreetMapHandle, {
     });
     map.on('moveend', emitMove);
     map.on('click', () => onClearRef.current?.());
+    let moveSafety = 0;
+    const onMoveStart = () => {
+      movingRef.current = true;
+      window.clearTimeout(moveSafety);
+      // A drag longer than this stays in the moving state until moveend.
+      // An animation that never ends still gets one layout.
+      moveSafety = window.setTimeout(() => {
+        const dragging = (map.dragging as { _dragging?: boolean } | undefined)?._dragging;
+        if (dragging) return;
+        if (!movingRef.current) return;
+        movingRef.current = false;
+        placeRef.current('moveend');
+      }, 1200);
+    };
+    const onMoveEnd = () => {
+      window.clearTimeout(moveSafety);
+      movingRef.current = false;
+      placeRef.current('moveend');
+    };
+    map.on('movestart', onMoveStart);
+    map.on('zoomstart', onMoveStart);
+    map.on('moveend', onMoveEnd);
+    map.on('zoomend', onMoveEnd);
     const noteUserView = (event: L.LeafletEvent) => {
       if (!(event as L.LeafletEvent & { originalEvent?: Event }).originalEvent) return;
       onUserViewRef.current?.();
@@ -281,6 +357,7 @@ export const StreetMap = forwardRef<StreetMapHandle, {
     map.on('zoomstart', noteUserView);
     map.on('dragstart', () => {
       map.stop();
+      movingRef.current = true;
       onUserViewRef.current?.();
       onGestureRef.current?.();
     });
@@ -293,10 +370,16 @@ export const StreetMap = forwardRef<StreetMapHandle, {
     return () => {
       window.clearTimeout(timer);
       window.clearTimeout(moveTick);
+      window.clearTimeout(moveSafety);
+      if (layoutFrameRef.current) window.cancelAnimationFrame(layoutFrameRef.current);
       observer.disconnect();
       setReady(false);
       map.off('move');
-      map.off('moveend');
+      map.off('moveend', emitMove);
+      map.off('moveend', onMoveEnd);
+      map.off('movestart', onMoveStart);
+      map.off('zoomstart', onMoveStart);
+      map.off('zoomend', onMoveEnd);
       map.off('click');
       map.off('zoomstart', noteUserView);
       map.off('dragstart');
@@ -343,128 +426,195 @@ export const StreetMap = forwardRef<StreetMapHandle, {
   }, [key, ready]);
 
   useEffect(() => {
-    const group = layersRef.current;
-    if (!ready || !group) return;
-    group.clearLayers();
+    const place = (reason: 'data' | 'moveend' | 'obstacle' = 'data') => {
+      const group = layersRef.current;
+      const map = mapRef.current;
+      const people = membersRef.current;
+      const zone = homeRef.current;
+      const selected = selectedIdRef.current;
+      if (!ready || !group || !map) return;
+      const moving = movingRef.current;
+      if (reason === 'data') {
+        group.clearLayers();
+        if (zone) {
+          L.circle([zone.lat, zone.lng], {
+            radius: zone.radiusM,
+            color: '#0084FF',
+            weight: 2,
+            fillColor: '#0084FF',
+            fillOpacity: 0.14,
+          }).addTo(group);
+          L.marker([zone.lat, zone.lng], {
+            interactive: false,
+            icon: L.divIcon({
+              className: 'umap-home-label',
+              html: '<span style="display:inline-block;padding:2px 8px;border-radius:999px;background:#fff;color:#0f172a;font-size:11px;font-weight:700;box-shadow:0 1px 4px rgba(15,23,42,.16)">우리 집</span>',
+              iconSize: [64, 22],
+              iconAnchor: [32, 28],
+            }),
+          }).addTo(group);
+        }
+      }
 
-    if (home) {
-      L.circle([home.lat, home.lng], {
-        radius: home.radiusM,
-        color: '#0084FF',
-        weight: 2,
-        fillColor: '#0084FF',
-        fillOpacity: 0.14,
-      }).addTo(group);
-      L.marker([home.lat, home.lng], {
-        interactive: false,
-        icon: L.divIcon({
-          className: 'umap-home-label',
-          html: '<span style="display:inline-block;padding:2px 8px;border-radius:999px;background:#fff;color:#0f172a;font-size:11px;font-weight:700;box-shadow:0 1px 4px rgba(15,23,42,.16)">우리 집</span>',
-          iconSize: [64, 22],
-          iconAnchor: [32, 28],
-        }),
-      }).addTo(group);
-    }
-
-    const map = mapRef.current;
-    if (!map) return;
-    const now = Date.now();
-    const pins = spreadPinPositions(members);
-    const pinIcon = memberPinIcon();
-    const clusters = groupMembersByPlace(members);
-    const clusterOf = new Map(clusters.flatMap((cluster) => cluster.members.map((member) => [member.id, cluster] as const)));
-    const seenPins = new Set<string>();
-    for (const member of members) {
-      if (!hasLocation(member)) continue;
-      seenPins.add(member.id);
-      const at = pins.get(member.id) || { lat: member.lat, lng: member.lng, dx: 0, dy: 0 };
-      const cluster = clusterOf.get(member.id);
-      const grouped = (cluster?.members.length || 0) > 1;
-      const selected = member.id === selectedId;
-      const presence = memberPresence(member, now);
-      const dimmed = memberIsDimmed(presence);
-      const html = memberCalloutHtml({
-        dx: at.dx,
-        dy: at.dy,
-        dimmed,
-        tailColor: selected ? '#0084FF' : '#fff',
-        labelHtml: grouped ? '' : soloLabelHtml(member, home, selected, now),
-        faceHtml: pinFaceHtml(member),
-      });
-      const held = pinMarkersRef.current.get(member.id);
-      if (held) {
-        held.marker.setLatLng([at.lat, at.lng]);
-        held.marker.setZIndexOffset(markerZIndex(at.dy, selected));
-        paintHeld(held, html, L.divIcon({
+      const now = Date.now();
+      const pins = holdSpread(spreadRef.current, spreadPinPositions(people));
+      spreadRef.current = pins;
+      const pinIcon = memberPinIcon();
+      const clusters = stablePlaceGroups(people, groupsRef.current);
+      groupsRef.current = clusters;
+      const clusterOf = new Map(clusters.flatMap((cluster) => cluster.members.map((member) => [member.id, cluster] as const)));
+      const seenPins = new Set<string>();
+      for (const member of people) {
+        if (!hasLocation(member)) continue;
+        seenPins.add(member.id);
+        const at = pins.get(member.id) || { lat: member.lat, lng: member.lng, dx: 0, dy: 0 };
+        const cluster = clusterOf.get(member.id);
+        const grouped = (cluster?.members.length || 0) > 1;
+        const chosen = offsetsRef.current.get(`pin:${member.id}`);
+        const dx = !grouped && chosen ? chosen.dx : at.dx;
+        const dy = !grouped && chosen ? chosen.dy : at.dy;
+        const isSelected = member.id === selected;
+        const presence = memberPresence(member, now);
+        const dimmed = memberIsDimmed(presence);
+        const html = memberCalloutHtml({
+          dx,
+          dy,
+          dimmed,
+          tailColor: isSelected ? '#0084FF' : '#fff',
+          labelHtml: grouped ? '' : soloLabelHtml(member, zone, isSelected, now),
+          faceHtml: pinFaceHtml(member),
+        });
+        const held = pinMarkersRef.current.get(member.id);
+        const icon = L.divIcon({
           className: 'umap-member-pin',
           html,
           iconSize: pinIcon.iconSize,
           iconAnchor: pinIcon.iconAnchor,
-        }));
-        continue;
+        });
+        if (held) {
+          if (!moving && movedEnough(held.marker, at.lat, at.lng)) held.marker.setLatLng([at.lat, at.lng]);
+          held.marker.setZIndexOffset(markerZIndex(dy, isSelected));
+          paintHeld(held, html, icon);
+          markHeld(held.marker, at.lat, at.lng, dx, dy);
+          continue;
+        }
+        const marker = L.marker([at.lat, at.lng], {
+          zIndexOffset: markerZIndex(dy, isSelected),
+          icon,
+        });
+        marker.on('click', (event) => {
+          L.DomEvent.stopPropagation(event);
+          onSelectRef.current(memberIdFromEvent(event) || member.id);
+        });
+        marker.addTo(map);
+        pinMarkersRef.current.set(member.id, { marker, html });
+        markHeld(marker, at.lat, at.lng, dx, dy);
       }
-      const marker = L.marker([at.lat, at.lng], {
-        zIndexOffset: markerZIndex(at.dy, selected),
-        icon: L.divIcon({
-          className: 'umap-member-pin',
-          html,
-          iconSize: pinIcon.iconSize,
-          iconAnchor: pinIcon.iconAnchor,
-        }),
-      });
-      marker.on('click', (event) => {
-        L.DomEvent.stopPropagation(event);
-        onSelectRef.current(memberIdFromEvent(event) || member.id);
-      });
-      marker.addTo(map);
-      pinMarkersRef.current.set(member.id, { marker, html });
-    }
-    dropHeld(pinMarkersRef.current, seenPins);
+      dropHeld(pinMarkersRef.current, seenPins);
 
-    const seenStatus = new Set<string>();
-    const anchors = new Map<string, string>();
-    for (const cluster of clusters) {
-      if (cluster.members.length < 2) continue;
-      seenStatus.add(cluster.key);
-      anchors.set(cluster.key, cluster.anchorId);
-      const label = groupLabelHtml(cluster.members, home, selectedId, now);
-      const html = statusCalloutHtml(label, '#fff');
-      const raised = cluster.members.some((member) => member.id === selectedId);
-      const zIndex = raised ? 3000 : 2500;
-      const held = statusMarkersRef.current.get(cluster.key);
-      if (held) {
-        held.marker.setLatLng([cluster.anchor.lat, cluster.anchor.lng]);
-        held.marker.setZIndexOffset(zIndex);
-        paintHeld(held, html, L.divIcon({
+      const seenStatus = new Set<string>();
+      const anchorIds = new Map<string, string>();
+      for (const cluster of clusters) {
+        if (cluster.members.length < 2) continue;
+        seenStatus.add(cluster.key);
+        anchorIds.set(cluster.key, cluster.anchorId);
+        const parked = holdAnchor(anchorsRef.current.get(cluster.key), cluster.anchor) || cluster.anchor;
+        anchorsRef.current.set(cluster.key, parked);
+        const chosen = offsetsRef.current.get(`status:${cluster.key}`) || { dx: 0, dy: -STATUS_LIFT_PX };
+        const label = groupLabelHtml(cluster.members, zone, selected, now);
+        const html = statusCalloutHtml(label, '#fff', chosen);
+        const raised = cluster.members.some((member) => member.id === selected);
+        const zIndex = raised ? 3000 : 2500;
+        const held = statusMarkersRef.current.get(cluster.key);
+        const icon = L.divIcon({
           className: 'umap-member-status',
           html,
           iconSize: [42, 42],
           iconAnchor: [21, 42],
-        }));
-        letStatusClicksThrough(held.marker);
-        continue;
+        });
+        if (held) {
+          if (!moving && movedEnough(held.marker, parked.lat, parked.lng)) held.marker.setLatLng([parked.lat, parked.lng]);
+          held.marker.setZIndexOffset(zIndex);
+          paintHeld(held, html, icon);
+          letStatusClicksThrough(held.marker);
+          markHeld(held.marker, parked.lat, parked.lng, chosen.dx, chosen.dy);
+          continue;
+        }
+        const status = L.marker([parked.lat, parked.lng], { zIndexOffset: zIndex, icon });
+        const groupKey = cluster.key;
+        status.on('click', (event) => {
+          L.DomEvent.stopPropagation(event);
+          const picked = memberIdFromEvent(event) || statusAnchorRef.current.get(groupKey) || '';
+          if (picked) onSelectRef.current(picked);
+        });
+        status.addTo(map);
+        letStatusClicksThrough(status);
+        statusMarkersRef.current.set(cluster.key, { marker: status, html });
+        markHeld(status, parked.lat, parked.lng, chosen.dx, chosen.dy);
       }
-      const status = L.marker([cluster.anchor.lat, cluster.anchor.lng], {
-        zIndexOffset: zIndex,
-        icon: L.divIcon({
-          className: 'umap-member-status',
-          html,
-          iconSize: [42, 42],
-          iconAnchor: [21, 42],
-        }),
+      statusAnchorRef.current = anchorIds;
+      for (const key of anchorsRef.current.keys()) {
+        if (!seenStatus.has(key)) anchorsRef.current.delete(key);
+      }
+      dropHeld(statusMarkersRef.current, seenStatus);
+
+      if (reason === 'obstacle' || moving) return;
+      if (layoutFrameRef.current) return;
+      layoutFrameRef.current = window.requestAnimationFrame(() => {
+        layoutFrameRef.current = 0;
+        const current = mapRef.current;
+        if (movingRef.current || !current) return;
+        try {
+        const obstacles = measureObstacles(current);
+        const size = current.getSize();
+        const viewport = { width: size.x, height: size.y };
+        const grouped = new Set<string>();
+        const chips = [];
+        for (const cluster of groupsRef.current) {
+          if (cluster.members.length < 2) continue;
+          for (const member of cluster.members) grouped.add(member.id);
+          const at = anchorsRef.current.get(cluster.key) || cluster.anchor;
+          const point = current.latLngToContainerPoint([at.lat, at.lng]);
+          chips.push({
+            id: `status:${cluster.key}`,
+            kind: 'status' as const,
+            anchor: { x: point.x, y: point.y },
+            size: groupChipSize(cluster.members.length),
+            obstacles,
+            previous: offsetsRef.current.get(`status:${cluster.key}`) || null,
+            preferred: { dx: 0, dy: -STATUS_LIFT_PX },
+            viewport,
+          });
+        }
+        for (const member of membersRef.current) {
+          if (!hasLocation(member) || grouped.has(member.id)) continue;
+          const point = current.latLngToContainerPoint([member.lat, member.lng]);
+          const slot = spreadRef.current.get(member.id);
+          chips.push({
+            id: `pin:${member.id}`,
+            kind: 'pin' as const,
+            anchor: { x: point.x, y: point.y },
+            size: soloChipSize(),
+            obstacles,
+            previous: offsetsRef.current.get(`pin:${member.id}`) || null,
+            preferred: { dx: slot?.dx || 0, dy: slot?.dy || 0 },
+            viewport,
+          });
+        }
+        const assigned = assignChipOffsets(chips);
+        const live = new Set(assigned.offsets.keys());
+        for (const key of offsetsRef.current.keys()) {
+          if (!live.has(key)) offsetsRef.current.delete(key);
+        }
+        for (const [id, offset] of assigned.offsets) offsetsRef.current.set(id, offset);
+        if (assigned.changed) placeRef.current('obstacle');
+        } catch {
+          /* The map has no container point until it has a size. */
+        }
       });
-      const groupKey = cluster.key;
-      status.on('click', (event) => {
-        L.DomEvent.stopPropagation(event);
-        const picked = memberIdFromEvent(event) || statusAnchorRef.current.get(groupKey) || '';
-        if (picked) onSelectRef.current(picked);
-      });
-      status.addTo(map);
-      letStatusClicksThrough(status);
-      statusMarkersRef.current.set(cluster.key, { marker: status, html });
-    }
-    statusAnchorRef.current = anchors;
-    dropHeld(statusMarkersRef.current, seenStatus);
+    };
+    placeRef.current = place;
+    place('data');
   }, [home, members, ready, selectedId]);
 
   useEffect(() => {
