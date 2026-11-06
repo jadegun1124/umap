@@ -23,7 +23,7 @@ import { hiddenKeysForMember, placeHidden } from '../../lib/familyRoom.mjs';
 import { bindPlaceToMember, placeIsSelf, placeMemberId } from '../../lib/placeBinding.mjs';
 import { hideLeftPublishers, sharedPlaceStopsReporting } from '../../lib/memberPresence.mjs';
 import { familyPinId, isMemberId, moveKeyed } from '../../lib/sharedIdentity.mjs';
-import { extraRoomDecision, mergePointTrails, mergeRecordLists, planFamilyRoomMerge } from '../../lib/roomMerge.mjs';
+import { applyMergeIdentity, extraRoomDecision, mergePointTrails, mergeRecordLists, planFamilyRoomMerge } from '../../lib/roomMerge.mjs';
 import { absorbPlaceholderMembers } from '../../lib/memberRoster.mjs';
 import { clearDiag, noteDiag } from '../../lib/diagLog.mjs';
 import { HISTORY_DAYS, JOURNEY_POINT_CAP, TRAIL_POINT_CAP, fixShowsRide, isWithinHistory, journeysWithinHistory, labelJourneyPlace, lastTravelAt, mergeJourneyLists, seoulDayKey, mergeVisitStops, settleTrailPoint, stayLabelDwellMs, storedTrackAfterArchive, tracksWithinHistory, trimJourneyList, visitsWithinHistory, walkLeavesStay, type JourneyRecord } from '../../lib/tracking.mjs';
@@ -906,14 +906,17 @@ function reduceSession(state: Session, action: Action): Session {
         journeys = mergeRecordLists(journeys, move.from, move.to);
       }
       const owned = plan.canonical.own === true;
+      const identity = applyMergeIdentity(plan, state.hiddenMemberIds, state.motionNotifyIds);
       return {
         ...state,
-        members: plan.members,
+        members: identity.members,
         tracks,
         visits,
         journeys,
         guardians: plan.guardians,
         familyRoomCode: plan.canonical.code,
+        hiddenMemberIds: identity.hiddenMemberIds,
+        motionNotifyIds: identity.motionNotifyIds,
         notices: [notice(
           '가족 방을 합쳤습니다',
           owned

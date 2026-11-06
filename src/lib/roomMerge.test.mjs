@@ -2,10 +2,12 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import {
+  applyMergeIdentity,
   canonicalWrapMembers,
   chooseCanonicalRoom,
   extraRoomDecision,
   inviteMintTarget,
+  keptFamilyRoomCode,
   listFamilyRooms,
   mergePointTrails,
   mergeRecordLists,
@@ -206,6 +208,32 @@ test('the surviving room rewraps every current member who does not have the key 
     revoked: [dad],
   });
   assert.deepEqual(ids, [mom]);
+});
+
+test('merge retargets hidden people and motion alerts onto the surviving card', () => {
+  const plan = planFamilyRoomMerge({
+    selfId,
+    inviteCode: '55555',
+    guardians: [{ id: 'g-1700000001000', code: '44444', ownerMemberId: mom }],
+    members: [
+      member('family:55555:local-mommmmm', { publisherId: mom, name: '엄마', lat: 1, lng: 2, updatedAt: 10 }),
+      member('family:44444:local-mommmmm', { publisherId: mom, name: '엄마', lat: 3, lng: 4, updatedAt: 20 }),
+      member('family:44444:local-daddddd', { publisherId: dad, name: '아빠', lat: 5, lng: 6, updatedAt: 20 }),
+    ],
+  });
+  const hidden = applyMergeIdentity(plan, ['family:44444:local-daddddd'], ['family:44444:local-mommmmm']);
+  assert.equal(hidden.members.some((item) => item.publisherId === dad), false);
+  assert.equal(hidden.members.some((item) => item.publisherId === mom), true);
+  assert.ok(hidden.hiddenMemberIds.includes('family:55555:local-daddddd'));
+  assert.ok(hidden.hiddenMemberIds.includes('family:44444:local-daddddd'));
+  assert.deepEqual(hidden.motionNotifyIds, ['family:55555:local-mommmmm']);
+});
+
+test('a restored account drops a room lock that is no longer one of its rooms', () => {
+  assert.equal(keptFamilyRoomCode('55555', '99999', [{ code: '44444' }]), '');
+  assert.equal(keptFamilyRoomCode('99999', '99999', []), '99999');
+  assert.equal(keptFamilyRoomCode('44444', '99999', [{ code: '44444' }]), '44444');
+  assert.equal(syncRooms({ inviteCode: '99999', guardians: [{ code: '44444' }], familyRoomCode: '' }).codes.length, 2);
 });
 
 test('the menu offers one admin merge and does not add a worker route', () => {

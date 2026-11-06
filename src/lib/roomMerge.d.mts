@@ -65,6 +65,24 @@ export function inviteMintTarget(input: {
   familyRoomCode?: string;
 }): { code: string; canMint: boolean };
 
+export function remapMemberIds(
+  ids: string[] | null | undefined,
+  moves: Array<{ from?: string; to?: string }> | null | undefined,
+  options?: { keepSource?: boolean },
+): string[];
+
+export function applyMergeIdentity<T extends { id?: string; role?: string; publisherId?: string; inviteCode?: string; name?: string }>(
+  plan: { members?: T[] | null; moves?: Array<{ from?: string; to?: string }> | null } | null | undefined,
+  hiddenMemberIds: string[] | null | undefined,
+  motionNotifyIds: string[] | null | undefined,
+): { members: T[]; hiddenMemberIds: string[]; motionNotifyIds: string[] };
+
+export function keptFamilyRoomCode(
+  previous: string | null | undefined,
+  inviteCode: string | null | undefined,
+  guardians: Array<{ code?: string }> | null | undefined,
+): string;
+
 export function canonicalWrapMembers(
   selfId: string,
   members: Array<{ id?: string; role?: string; publisherId?: string }> | null | undefined,

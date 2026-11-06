@@ -191,6 +191,57 @@ export function inviteMintTarget({ inviteCode, familyRoomCode }) {
   return { code: locked, canMint: false };
 }
 
+export function remapMemberIds(ids, moves, { keepSource = false } = {}) {
+  const map = new Map();
+  for (const move of Array.isArray(moves) ? moves : []) {
+    if (move && move.from && move.to) map.set(move.from, move.to);
+  }
+  const next = [];
+  const push = (id) => {
+    if (typeof id === 'string' && id && !next.includes(id)) next.push(id);
+  };
+  for (const id of Array.isArray(ids) ? ids : []) {
+    if (typeof id !== 'string' || !id) continue;
+    const named = /^family:(\d{4,6}):(.+)$/.exec(id);
+    let mapped = map.get(id) || id;
+    if (!map.has(id) && named) {
+      const move = (Array.isArray(moves) ? moves : []).find((item) => item && typeof item.from === 'string' && item.from.startsWith(`family:${named[1]}:`));
+      const canonical = move && /^family:(\d{4,6}):/.exec(move.to);
+      if (canonical) mapped = `family:${canonical[1]}:${named[2]}`;
+    }
+    push(mapped);
+    if (keepSource && mapped !== id) push(id);
+  }
+  return next;
+}
+
+export function applyMergeIdentity(plan, hiddenMemberIds, motionNotifyIds) {
+  const moves = plan && Array.isArray(plan.moves) ? plan.moves : [];
+  const hiddenMemberIdsNext = remapMemberIds(hiddenMemberIds, moves, { keepSource: true });
+  const hidden = new Set(hiddenMemberIdsNext);
+  const members = (plan && Array.isArray(plan.members) ? plan.members : []).filter((member) => {
+    if (!member || member.id === 'self' || member.role === 'self') return true;
+    if (member.id && hidden.has(member.id)) return false;
+    if (member.publisherId && hidden.has(member.publisherId)) return false;
+    if (member.inviteCode && member.name && hidden.has(`family:${member.inviteCode}:${member.name}`)) return false;
+    if (!member.publisherId && member.name && hidden.has(`name:${member.name}`)) return false;
+    return true;
+  });
+  return {
+    members,
+    hiddenMemberIds: hiddenMemberIdsNext,
+    motionNotifyIds: remapMemberIds(motionNotifyIds, moves),
+  };
+}
+
+export function keptFamilyRoomCode(previous, inviteCode, guardians) {
+  const code = typeof previous === 'string' ? previous.replace(/\D/g, '').slice(0, 6) : '';
+  if (code.length < 4) return '';
+  if (code === inviteCode) return code;
+  if ((Array.isArray(guardians) ? guardians : []).some((link) => link && link.code === code)) return code;
+  return '';
+}
+
 export function canonicalWrapMembers(selfId, members, keys) {
   const pubs = keys && keys.pubs && typeof keys.pubs === 'object' ? keys.pubs : {};
   const live = new Set();
