@@ -72,56 +72,53 @@ function rgbaAt(png, x, y) {
   return png.pixels.subarray(index, index + 4);
 }
 
-test('KINVO artwork fills more of the adaptive circle and the letters stay inside it', () => {
+test('KINVO fills the visible launcher face and the letters stay inside the circle', () => {
   const source = readFileSync(repo('../../resources/kinvo-app-icon.png'));
   assert.equal(source.readUInt32BE(16), 1080);
   assert.equal(source.readUInt32BE(20), 1080);
   const agents = text('../../AGENTS.md');
   assert.match(agents, /kinvo-app-icon\.png/);
-  assert.match(agents, /66dp/);
+  assert.match(agents, /0\.92/);
   const script = text('../../scripts/render-kinvo-icon.py');
-  assert.match(script, /66 \/ 108/);
-  assert.match(script, /sqrt\(2\)/);
-  assert.match(script, /SAFE_INSET = 1\.18/);
+  assert.match(script, /72 \/ 108/);
+  assert.match(script, /VISIBLE_SCALE = 0\.92/);
+  assert.equal(script.includes('SAFE_INSET = 1.18'), false);
   assert.equal(script.includes('SAFE_INSET = 0.96'), false);
 
   const foreground = decodeRgbaPng(readFileSync(repo('../../android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_foreground.png')));
   assert.deepEqual([foreground.width, foreground.height], [432, 432]);
-  assert.equal(rgbaAt(foreground, 2, 2)[3], 0);
+  const last = foreground.width - 1;
+  for (const [x, y] of [[0, 0], [last, 0], [0, last], [last, last], [0, Math.floor(last / 2)]]) {
+    const edge = rgbaAt(foreground, x, y);
+    assert.equal(edge[3], 255, `transparent launcher edge at ${x},${y}`);
+    assert.ok(edge[2] > 140 && edge[2] > edge[0] + 30, `edge is not blue at ${x},${y}: ${edge}`);
+  }
   const center = rgbaAt(foreground, Math.floor(foreground.width / 2), Math.floor(foreground.height / 2));
   assert.equal(center[3], 255);
   assert.equal(center[0] > 240 && center[1] > 240 && center[2] > 240, false);
-  const cx = (foreground.width - 1) / 2;
-  const cy = (foreground.height - 1) / 2;
-  const radius = foreground.width * (66 / 108) / 2;
-  const oldRadius = radius * 0.96;
+
+  // The launcher shows the center 72dp of this 108dp layer, then clips a circle.
+  const view = Math.round(foreground.width * (72 / 108));
+  const origin = Math.floor((foreground.width - view) / 2);
+  const cx = origin + (view - 1) / 2;
+  const cy = origin + (view - 1) / 2;
+  const radius = view / 2;
   let wordmark = 0;
   let wordFar = 0;
-  let minX = foreground.width;
-  let minY = foreground.height;
-  let maxX = 0;
-  let maxY = 0;
-  for (let y = 0; y < foreground.height; y += 1) {
-    for (let x = 0; x < foreground.width; x += 1) {
+  for (let y = origin; y < origin + view; y += 1) {
+    for (let x = origin; x < origin + view; x += 1) {
       const pixel = rgbaAt(foreground, x, y);
-      if (pixel[3] === 0) continue;
-      if (x < minX) minX = x;
-      if (y < minY) minY = y;
-      if (x > maxX) maxX = x;
-      if (y > maxY) maxY = y;
-      if (pixel[3] > 200 && pixel[0] >= 248 && pixel[1] >= 248 && pixel[2] >= 248) {
+      if (pixel[3] < 255) assert.fail(`hole in the visible face at ${x},${y}`);
+      if (y < origin + view * 0.68) continue;
+      if (pixel[0] >= 246 && pixel[1] >= 246 && pixel[2] >= 246 && pixel[0] - Math.min(pixel[0], pixel[1], pixel[2]) <= 18) {
         wordmark += 1;
         wordFar = Math.max(wordFar, Math.hypot(x - cx, y - cy));
       }
     }
   }
   assert.ok(wordmark > 400, `KINVO letters collapsed to ${wordmark} near-white pixels`);
-  assert.ok(wordFar <= radius + 2, `KINVO pixel at ${wordFar} is outside safe radius ${radius}`);
-  let far = 0;
-  for (const [x, y] of [[minX, minY], [maxX, minY], [minX, maxY], [maxX, maxY]]) {
-    far = Math.max(far, Math.hypot(x - cx, y - cy));
-  }
-  assert.ok(far > oldRadius + 4, `artwork still sits in the old 0.96 inset (${far} vs ${oldRadius})`);
+  assert.ok(wordFar <= radius + 1, `KINVO pixel at ${wordFar} is outside the circle ${radius}`);
+  assert.ok(wordFar >= radius * 0.96, `KINVO shrank away from the circle (${wordFar} vs ${radius})`);
 });
 
 test('Android adaptive background is deep blue and the foreground is the KINVO bitmap', () => {
@@ -131,8 +128,9 @@ test('Android adaptive background is deep blue and the foreground is the KINVO b
   assert.match(adaptive, /@drawable\/ic_launcher_monochrome/);
 
   const background = text('../../android/app/src/main/res/drawable/ic_launcher_background.xml');
-  assert.match(background, /#FF0149D3/);
+  assert.match(background, /#FF1486E8/);
   assert.equal(background.includes('<gradient'), false);
+  assert.match(text('../../android/app/src/main/res/values/ic_launcher_background.xml'), /#1486E8/);
 
   const foreground = text('../../android/app/src/main/res/drawable/ic_launcher_foreground.xml');
   assert.match(foreground, /<bitmap/);
