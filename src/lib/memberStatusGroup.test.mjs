@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import {
   SAME_PLACE_METERS,
@@ -119,6 +120,13 @@ test('status order puts me first and keeps everyone else in roster order', () =>
   const place = firstPlaceLabel(ordered, (member) => (member.id === 'mom' ? '하계청구아파트' : ''));
   assert.equal(place, '하계청구아파트');
   assert.equal(firstPlaceLabel([{ id: 'self', role: 'self' }, { id: 'mom' }], () => ''), '');
+});
+
+test('the merged status marker uses the same overflow override as pins', () => {
+  const css = readFileSync(new URL('../index.css', import.meta.url), 'utf8');
+  assert.match(css, /\.umap-member-status,/);
+  assert.match(css, /\.leaflet-marker-icon\.umap-member-status,/);
+  assert.match(css, /overflow: visible !important/);
 });
 
 test('the merged chip is lifted above the group center on a leader', () => {
