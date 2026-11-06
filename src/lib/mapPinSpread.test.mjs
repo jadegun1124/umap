@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { spreadPinPositions } from './mapPinSpread.mjs';
 
-test('two members on the same spot shift their bubbles in screen pixels', () => {
+test('two members on the same spot keep the real coordinate and shift only the label', () => {
   const members = [
     { id: 'self', lat: 37.6372, lng: 127.07085 },
     { id: 'khoon', lat: 37.6372, lng: 127.07085 },
@@ -12,6 +12,8 @@ test('two members on the same spot shift their bubbles in screen pixels', () => 
   const right = placed.get('self');
   assert.ok(left && right);
   assert.equal(left.lat, members[1].lat);
+  assert.equal(left.lng, members[1].lng);
+  assert.equal(right.lat, members[0].lat);
   assert.equal(right.lng, members[0].lng);
   assert.ok(Math.abs((left.dx || 0) - (right.dx || 0)) >= 200, `dx ${left.dx},${right.dx}`);
 });

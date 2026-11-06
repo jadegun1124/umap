@@ -3,7 +3,7 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { noteDiag } from '../../lib/diagLog.mjs';
 import { hasLocation } from '../../lib/geo';
-import { memberCalloutHtml, spreadPinPositions } from '../../lib/mapPinSpread.mjs';
+import { MEMBER_PIN_PX, memberCalloutHtml, memberPinIcon, spreadPinPositions } from '../../lib/mapPinSpread.mjs';
 import { savedPlaceLabel } from '../../lib/memberPlace.mjs';
 import { memberIsStale, memberPresence } from '../../lib/memberPresence.mjs';
 import { appendLiveTip, trailDrawParts } from '../../lib/tracking.mjs';
@@ -280,6 +280,8 @@ export const StreetMap = forwardRef<StreetMapHandle, {
     }
 
     const pins = spreadPinPositions(members);
+    const pinIcon = memberPinIcon();
+    const faceBox = `width:${MEMBER_PIN_PX}px;height:${MEMBER_PIN_PX}px;box-sizing:border-box;border-radius:999px;border:4px solid #fff;box-shadow:0 6px 16px rgba(15,23,42,.2)`;
     for (const member of members) {
       if (!hasLocation(member)) continue;
       const at = pins.get(member.id) || { lat: member.lat, lng: member.lng, dx: 0, dy: 0 };
@@ -297,8 +299,8 @@ export const StreetMap = forwardRef<StreetMapHandle, {
         ? member.photo
         : '';
       const face = photo
-        ? `<img alt="" src="${escapeHtml(photo)}" style="width:42px;height:42px;border-radius:999px;object-fit:cover;border:4px solid #fff;box-shadow:0 6px 16px rgba(15,23,42,.2)"/>`
-        : `<span style="width:42px;height:42px;border-radius:999px;border:4px solid #fff;background:${color};color:#fff;display:flex;align-items:center;justify-content:center;font-weight:900;box-shadow:0 6px 16px rgba(15,23,42,.2)">${initial}</span>`;
+        ? `<img alt="" src="${escapeHtml(photo)}" style="${faceBox};object-fit:cover"/>`
+        : `<span style="${faceBox};background:${color};color:#fff;display:flex;align-items:center;justify-content:center;font-weight:900">${initial}</span>`;
       const marker = L.marker([at.lat, at.lng], {
         zIndexOffset: selected ? 800 : 400,
         icon: L.divIcon({
@@ -311,8 +313,8 @@ export const StreetMap = forwardRef<StreetMapHandle, {
             labelHtml: `<span data-label style="display:inline-flex;flex-direction:column;align-items:center;margin-bottom:4px;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:700;max-width:180px;box-shadow:0 1px 4px rgba(15,23,42,.16);background:${selected ? '#0084FF' : '#fff'};color:${selected ? '#fff' : '#0f172a'}"><span style="display:inline-flex;align-items:center;white-space:nowrap">${label}${battery}</span>${place ? `<span style="display:block;max-width:164px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;font-weight:600;opacity:.85">${place}</span>` : ''}</span>`,
             faceHtml: face,
           }),
-          iconSize: [0, 0],
-          iconAnchor: [0, 0],
+          iconSize: pinIcon.iconSize,
+          iconAnchor: pinIcon.iconAnchor,
         }),
       });
       marker.on('click', (event) => {
