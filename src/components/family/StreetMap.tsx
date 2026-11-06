@@ -20,6 +20,8 @@ export interface StreetMapHandle {
   fit: (points: { lat: number; lng: number }[]) => void;
   getCenter: () => { lat: number; lng: number };
   invalidateSize: () => void;
+  /** Re-place chips after a button or banner appears. No-op while a finger is down. */
+  nudgeLayout: () => void;
   setPlayback: (frame: { lat: number; lng: number; label: string } | null, follow?: boolean) => void;
 }
 
@@ -262,6 +264,10 @@ export const StreetMap = forwardRef<StreetMapHandle, {
     },
     invalidateSize() {
       mapRef.current?.invalidateSize();
+    },
+    nudgeLayout() {
+      if (movingRef.current) return;
+      placeRef.current('data');
     },
     setPlayback(frame, follow) {
       const map = mapRef.current;

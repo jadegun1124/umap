@@ -945,6 +945,7 @@ public class LocationKeepService {
     private static boolean noteMovement(Location fix, long fixAt) {
         float speed = fix.hasSpeed() ? fix.getSpeed() : -1f;
         if (motionAnchor == null) {
+            boolean restoredMoving = movingStream;
             motionAnchor = new Location(fix);
             motionAnchor.setTime(fixAt);
             stillSinceMs = fixAt;
@@ -955,6 +956,13 @@ public class LocationKeepService {
             // drive does not wait out a stay probe before the next sample.
             if (opening >= 8f) {
                 lastRideAt = fixAt;
+                stillSinceMs = 0L;
+                movingStream = true;
+                return true;
+            }
+            // A restarted walk has no in-memory anchor. Clearing the flag here
+            // dropped the CPU lock and the 2s stream on the first step.
+            if (restoredMoving) {
                 stillSinceMs = 0L;
                 movingStream = true;
                 return true;

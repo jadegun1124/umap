@@ -832,6 +832,10 @@ export function FamilyMapScreen() {
     followRef.current = planned.state;
     if (planned.pan) mapRef.current?.followTo(planned.pan.lat, planned.pan.lng);
   }, [awaitingFamilyFit, familyFitPending, followId, followLat, followLng, mapShown]);
+  const overlayKey = `${followOn ? 1 : 0}|${placingHome ? 1 : 0}|${keepHint ? keepHint.kind : ''}`;
+  useEffect(() => {
+    mapRef.current?.nudgeLayout();
+  }, [overlayKey]);
   const recenterFollow = () => {
     followRef.current = noteRecenter(followRef.current);
     setFollowOn(true);

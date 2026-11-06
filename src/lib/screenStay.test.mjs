@@ -35,6 +35,8 @@ test('the moving wake lock is refreshed before its timeout and restored after a 
   assert.match(service, /putBoolean\("movingStream", movingStream\)/);
   assert.match(service, /getBoolean\("movingStream", false\)/);
   assert.match(service, /applyMovingWake\(context\)/);
+  assert.match(service, /boolean restoredMoving = movingStream/);
+  assert.match(service, /if \(restoredMoving\)/);
   const manifest = text('../../android/app/src/main/AndroidManifest.xml');
   assert.match(manifest, /android:foregroundServiceType="location"/);
   assert.match(manifest, /FOREGROUND_SERVICE_LOCATION/);
@@ -52,7 +54,9 @@ test('samsung sleeping apps is a separate button and does not replace the batter
   assert.match(screen, /keepHint\.samsungLabel/);
   assert.match(screen, /openSamsungPower/);
   assert.match(screen, /data-map-obstacle/);
+  assert.match(screen, /nudgeLayout\(\)/);
   const map = text('../components/family/StreetMap.tsx');
+  assert.match(map, /nudgeLayout\(\)/);
   assert.match(map, /movingRef/);
   assert.match(map, /placeRef\.current\('moveend'\)/);
   assert.match(map, /movedEnough\(held\.marker/);
