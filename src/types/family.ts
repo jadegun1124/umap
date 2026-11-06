@@ -165,6 +165,8 @@ export interface Session {
   motionNotifyIds: string[];
   /** Last start/stop phase. unknown adopts the current trip without sending. */
   motionAlertPhase: 'unknown' | 'still' | 'moving';
+  /** Set by 가족 방 합치기. Polls, publishes, and new invites stay on this code. */
+  familyRoomCode?: string;
 }
 
 export const DEFAULT_CENTER = { lat: 37.6366, lng: 127.0672 };

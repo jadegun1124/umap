@@ -8,6 +8,7 @@ import type { AcceptedFix } from '../../lib/tracking.mjs';
 import { readSharedPlaces, publishSharedPlace, subscribeSharedPlaces, type SharedPlace } from '../../services/familyShare';
 import { bytesToBase64Url } from '../../lib/familySeal.mjs';
 import { familyKeyRecord } from '../../lib/familyVault.mjs';
+import { syncRooms } from '../../lib/roomMerge.mjs';
 import { familyEndpointAvailable, familySyncUrl, publishProfileRemote, publishTrailRemote, splitSyncToken, startManagedFamilySync, syncFamilyKeys, syncTokenFor } from '../../services/familySync';
 import { startLocationWatch } from '../../services/locationWatch';
 import { cleanPlace, savedPlaceLabel } from '../../lib/memberPlace.mjs';
@@ -29,6 +30,14 @@ interface BatteryLike {
   charging: boolean;
   addEventListener: (type: string, listener: () => void) => void;
   removeEventListener: (type: string, listener: () => void) => void;
+}
+
+function liveRooms<T extends { code: string }>(state: { inviteCode: string; guardians: T[]; familyRoomCode?: string }) {
+  return syncRooms({
+    inviteCode: state.inviteCode,
+    guardians: state.guardians,
+    familyRoomCode: state.familyRoomCode || '',
+  }) as { includeOwn: boolean; guardians: T[]; codes: string[] };
 }
 
 export function useFamilyTracking(onFirstFix: (lat: number, lng: number) => void): { waiting: string | null; familyShareNote: string | null; native: boolean; openSettings: () => ReturnType<typeof openAlwaysLocation> } {
@@ -186,8 +195,9 @@ export function useFamilyTracking(onFirstFix: (lat: number, lng: number) => void
     if (state.locationConsent === false) return;
     const name = (state.profile?.name || self?.name || '가족').trim().slice(0, 20) || '가족';
     const memberId = state.profile?.profileKey ? state.profile.id : undefined;
+    const rooms = liveRooms(state);
     const nextTokens: Record<string, string> = {};
-    for (const link of state.guardians) {
+    for (const link of rooms.guardians) {
       if (link.syncToken) nextTokens[link.code] = link.syncToken;
     }
     for (const [code, token] of Object.entries(sharedTokens.current)) {
@@ -207,9 +217,9 @@ export function useFamilyTracking(onFirstFix: (lat: number, lng: number) => void
       }, token, state.profile?.profileKey);
     }
     sharedTokens.current = nextTokens;
-    if (state.guardians.length === 0) return;
+    if (rooms.guardians.length === 0) return;
     const located = self && hasLocation(self) ? self : null;
-    for (const link of state.guardians) {
+    for (const link of rooms.guardians) {
       const sharing = link.share === 'allowed';
       const remote = link.syncToken && (sharing || link.share === 'revoked') ? link.syncToken : null;
       if (nativeKeeps && sharing && located) continue;
@@ -231,10 +241,11 @@ export function useFamilyTracking(onFirstFix: (lat: number, lng: number) => void
         charging: sharing ? (self?.charging ?? null) : null,
       }, remote, state.profile?.profileKey);
     }
-  }, [nativeKeeps, selfPublishKey, state.guardians, state.mode, state.profile?.id, state.profile?.name, state.profile?.profileKey]);
+  }, [nativeKeeps, selfPublishKey, state.familyRoomCode, state.guardians, state.mode, state.profile?.id, state.profile?.name, state.profile?.profileKey]);
 
   useEffect(() => {
     if (state.locationConsent === false) return;
+    if (!liveRooms(state).includeOwn) return;
     if (!state.syncWriteKey || !state.syncReadKey) return;
     let cancel = false;
     const name = (state.profile?.name || self?.name || '가족').trim().slice(0, 20) || '가족';
@@ -275,7 +286,7 @@ export function useFamilyTracking(onFirstFix: (lat: number, lng: number) => void
     return () => {
       cancel = true;
     };
-  }, [nativeKeeps, selfPublishKey, state.inviteCode, state.mode, state.profile?.id, state.profile?.name, state.profile?.profileKey, state.shareSelfWithFamily, state.syncReadKey, state.syncWriteKey]);
+  }, [nativeKeeps, selfPublishKey, state.familyRoomCode, state.inviteCode, state.mode, state.profile?.id, state.profile?.name, state.profile?.profileKey, state.shareSelfWithFamily, state.syncReadKey, state.syncWriteKey]);
 
   const profileSyncKey = [
     state.mode,
@@ -286,6 +297,7 @@ export function useFamilyTracking(onFirstFix: (lat: number, lng: number) => void
     state.inviteCode,
     state.syncWriteKey,
     state.syncReadKey,
+    state.familyRoomCode ?? '',
     state.guardians.map((link) => `${link.code}:${link.syncToken ?? ''}`).join('|'),
   ].join('~');
   useEffect(() => {
@@ -302,10 +314,11 @@ export function useFamilyTracking(onFirstFix: (lat: number, lng: number) => void
         at: Date.now(),
       }, code, token, profile.profileKey);
     };
-    for (const link of current.guardians) {
+    const rooms = liveRooms(current);
+    for (const link of rooms.guardians) {
       if (link.syncToken) send(link.code, link.syncToken);
     }
-    if (current.syncWriteKey && current.syncReadKey) {
+    if (rooms.includeOwn && current.syncWriteKey && current.syncReadKey) {
       void syncTokenFor(current.syncWriteKey, current.syncReadKey).then((token) => {
         if (!cancel) send(current.inviteCode, token);
       });
@@ -328,6 +341,7 @@ export function useFamilyTracking(onFirstFix: (lat: number, lng: number) => void
     state.inviteCode,
     state.syncWriteKey,
     state.syncReadKey,
+    state.familyRoomCode ?? '',
     state.guardians.map((link) => `${link.code}:${link.share}:${link.syncToken ?? ''}`).join('|'),
   ].join('~');
 
@@ -350,12 +364,13 @@ export function useFamilyTracking(onFirstFix: (lat: number, lng: number) => void
         return;
       }
       const targets: KeepAliveTarget[] = [];
-      for (const link of current.guardians) {
+      const rooms = liveRooms(current);
+      for (const link of rooms.guardians) {
         if (!link.syncToken || !splitSyncToken(link.syncToken)) continue;
         if (link.share !== 'allowed' && link.share !== 'revoked') continue;
         targets.push({ token: link.syncToken, code: link.code, audience: 'family', sharing: link.share === 'allowed' });
       }
-      if (current.shareSelfWithFamily || nativeAdminShared.current) {
+      if (rooms.includeOwn && (current.shareSelfWithFamily || nativeAdminShared.current)) {
         const token = await syncTokenFor(current.syncWriteKey, current.syncReadKey);
         if (splitSyncToken(token) && await familyEndpointAvailable(current.inviteCode, token)) {
           targets.push({ token, code: current.inviteCode, audience: 'family', sharing: current.shareSelfWithFamily });
@@ -417,16 +432,17 @@ export function useFamilyTracking(onFirstFix: (lat: number, lng: number) => void
     };
   }, [keepKey]);
 
-  const familyLinkKey = `${state.inviteCode}:${state.syncWriteKey}:${state.guardians.map((link) => `${link.code}:${link.syncToken ?? ''}`).join('|')}`;
+  const familyLinkKey = `${state.familyRoomCode ?? ''}:${state.inviteCode}:${state.syncWriteKey}:${state.guardians.map((link) => `${link.code}:${link.syncToken ?? ''}`).join('|')}`;
   useEffect(() => {
     let stopped = false;
     let stop = () => {};
     void (async () => {
       const current = familyRef.current.state;
-      const links = current.guardians
+      const rooms = liveRooms(current);
+      const links = rooms.guardians
         .filter((link) => link.syncToken)
         .map((link) => ({ code: link.code, token: link.syncToken as string }));
-      if (current.syncWriteKey && current.syncReadKey) {
+      if (rooms.includeOwn && current.syncWriteKey && current.syncReadKey) {
         const token = await syncTokenFor(current.syncWriteKey, current.syncReadKey);
         if (!stopped && splitSyncToken(token)) links.push({ code: current.inviteCode, token });
       }
@@ -486,11 +502,12 @@ export function useFamilyTracking(onFirstFix: (lat: number, lng: number) => void
     const fire = async () => {
       if (cancel) return;
       trailSentRef.current = Date.now();
-      for (const link of current.guardians) {
+      const rooms = liveRooms(current);
+      for (const link of rooms.guardians) {
         if (link.share !== 'allowed' || !link.syncToken) continue;
         publishTrailRemote(link.code, link.syncToken, body, profileKey);
       }
-      if (!current.shareSelfWithFamily || !current.syncWriteKey || !current.syncReadKey) return;
+      if (!rooms.includeOwn || !current.shareSelfWithFamily || !current.syncWriteKey || !current.syncReadKey) return;
       const token = await syncTokenFor(current.syncWriteKey, current.syncReadKey);
       if (cancel || !splitSyncToken(token)) return;
       publishTrailRemote(current.inviteCode, token, body, profileKey);
@@ -504,11 +521,10 @@ export function useFamilyTracking(onFirstFix: (lat: number, lng: number) => void
       cancel = true;
       window.clearTimeout(timer);
     };
-  }, [trailKey, state.backgroundKeepAlive, state.permissions.locationMode]);
+  }, [trailKey, state.backgroundKeepAlive, state.familyRoomCode, state.guardians, state.permissions.locationMode]);
 
   useEffect(() => {
-    const joined = new Set(state.guardians.map((link) => link.code));
-    if (state.inviteCode) joined.add(state.inviteCode);
+    const joined = new Set(liveRooms(state).codes);
     if (joined.size === 0) return;
     const apply = () => {
       const current = familyRef.current.state;

@@ -23,6 +23,7 @@ import { hiddenKeysForMember, placeHidden } from '../../lib/familyRoom.mjs';
 import { bindPlaceToMember, placeIsSelf, placeMemberId } from '../../lib/placeBinding.mjs';
 import { hideLeftPublishers, sharedPlaceStopsReporting } from '../../lib/memberPresence.mjs';
 import { familyPinId, isMemberId, moveKeyed } from '../../lib/sharedIdentity.mjs';
+import { extraRoomDecision, mergePointTrails, mergeRecordLists, planFamilyRoomMerge } from '../../lib/roomMerge.mjs';
 import { absorbPlaceholderMembers } from '../../lib/memberRoster.mjs';
 import { clearDiag, noteDiag } from '../../lib/diagLog.mjs';
 import { HISTORY_DAYS, JOURNEY_POINT_CAP, TRAIL_POINT_CAP, fixShowsRide, isWithinHistory, journeysWithinHistory, labelJourneyPlace, lastTravelAt, mergeJourneyLists, seoulDayKey, mergeVisitStops, settleTrailPoint, stayLabelDwellMs, storedTrackAfterArchive, tracksWithinHistory, trimJourneyList, visitsWithinHistory, walkLeavesStay, type JourneyRecord } from '../../lib/tracking.mjs';
@@ -174,6 +175,7 @@ function fresh(stage: Stage = 'splash'): Session {
     hiddenMemberIds: [],
     motionNotifyIds: [],
     motionAlertPhase: 'unknown',
+    familyRoomCode: '',
   };
 }
 
@@ -452,6 +454,13 @@ function cleanGuardians(value: unknown): GuardianLink[] {
   return links;
 }
 
+function cleanFamilyRoomCode(value: unknown, inviteCode: string, guardians: GuardianLink[]) {
+  const code = typeof value === 'string' ? value.replace(/\D/g, '').slice(0, 6) : '';
+  if (code.length < 4) return '';
+  if (code === inviteCode || guardians.some((link) => link.code === code)) return code;
+  return '';
+}
+
 function scrubSeed(member: Member, share: ShareState): Member {
   if (hasLocation(member) && isSeedLocation(member.lat, member.lng) && member.accuracyM === 18) {
     return { ...member, share, lat: null, lng: null };
@@ -579,6 +588,8 @@ function load(): Session {
     const parsed = merged;
     const invite = readInvite();
     const base = fresh();
+    const loadedGuardians = cleanGuardians(parsed.guardians);
+    const familyRoomCode = cleanFamilyRoomCode((parsed as Session).familyRoomCode, typeof parsed.inviteCode === 'string' ? parsed.inviteCode : '', loadedGuardians);
     const session: Session = {
       ...base,
       ...parsed,
@@ -588,7 +599,8 @@ function load(): Session {
       home: cleanHome(parsed.home),
       pendingInvite: invite || parsed.pendingInvite,
       mode: null,
-      guardians: cleanGuardians(parsed.guardians),
+      guardians: familyRoomCode ? loadedGuardians.filter((link) => link.code === familyRoomCode) : loadedGuardians,
+      familyRoomCode,
       pendingLeaveAlert: readLeaveAlert() || cleanLeaveAlert(parsed.pendingLeaveAlert),
       syncWriteKey: isKeyPart(parsed.syncWriteKey) ? parsed.syncWriteKey : base.syncWriteKey,
       syncReadKey: isKeyPart(parsed.syncReadKey) ? parsed.syncReadKey : base.syncReadKey,
@@ -664,6 +676,7 @@ type Action =
   | { type: 'clear-home' }
   | { type: 'add-member'; name: string; code: string }
   | { type: 'remove-member'; id: string }
+  | { type: 'merge-family-rooms' }
   | { type: 'accept-invite'; label: string; code: string; syncToken: string | null; rosterName: string | null; adminName: string | null; ownerMemberId: string | null }
   | { type: 'set-guardian-share'; code: string; share: 'allowed' | 'revoked' }
   | { type: 'leave-guardian'; id: string }
@@ -876,10 +889,52 @@ function reduceSession(state: Session, action: Action): Session {
         notices: [notice('가족을 지웠습니다', `${removed.name} 님을 이 기기의 목록과 지도에서 뺐습니다. 같은 방이 다시 받아도 이 폰에는 돌아오지 않습니다.`), ...state.notices],
       };
     }
+    case 'merge-family-rooms': {
+      const plan = planFamilyRoomMerge({
+        selfId: state.profile?.id || '',
+        inviteCode: state.inviteCode,
+        guardians: state.guardians,
+        members: state.members,
+      });
+      if (!plan.needed || !plan.canonical) return state;
+      let tracks = state.tracks;
+      let visits = state.visits;
+      let journeys = state.journeys;
+      for (const move of plan.moves) {
+        tracks = mergePointTrails(tracks, move.from, move.to);
+        visits = mergeRecordLists(visits, move.from, move.to);
+        journeys = mergeRecordLists(journeys, move.from, move.to);
+      }
+      const owned = plan.canonical.own === true;
+      return {
+        ...state,
+        members: plan.members,
+        tracks,
+        visits,
+        journeys,
+        guardians: plan.guardians,
+        familyRoomCode: plan.canonical.code,
+        notices: [notice(
+          '가족 방을 합쳤습니다',
+          owned
+            ? '구성원, 위치, 배터리, 기록을 이 폰이 그룹장인 방 하나로 모았습니다. 새 초대는 이 방에서만 만듭니다.'
+            : '구성원, 위치, 배터리, 기록을 가장 오래된 가족 방으로 모았습니다. 새 초대는 그 방의 그룹장만 만듭니다.',
+        ), ...state.notices].slice(0, 40),
+      };
+    }
     case 'accept-invite': {
       const code = action.code.replace(/\D/g, '').slice(0, 6);
       const label = action.label.trim().slice(0, 20) || '가족';
       if (code.length < 4) return state;
+      const roomDecision = extraRoomDecision(state.familyRoomCode || '', code);
+      if (roomDecision === 'same') return { ...state, pendingInvite: null };
+      if (roomDecision === 'refuse') {
+        return {
+          ...state,
+          pendingInvite: null,
+          notices: [notice('가족 방이 하나로 있습니다', '합친 뒤에는 다른 방을 더하지 않습니다. 새 가족은 그 방의 초대로 들어옵니다.'), ...state.notices].slice(0, 40),
+        };
+      }
       if (state.guardians.some((link) => link.code === code)) return state;
       const leaveAlert = state.pendingInvite === code || readInvite() === code ? state.pendingLeaveAlert : null;
       const syncToken = cleanSyncToken(action.syncToken) || (state.pendingInvite === code ? cleanSyncToken(state.pendingSyncToken) : null);
@@ -1546,6 +1601,7 @@ function reduceSession(state: Session, action: Action): Session {
         visits: state.visits.self ? { self: state.visits.self } : {},
         journeys: state.journeys?.self ? { self: state.journeys.self } : {},
         guardians: [],
+        familyRoomCode: '',
         home: null,
         homeCleared: true,
         inviteCode: next.inviteCode,
@@ -1595,6 +1651,7 @@ interface FamilyApi {
   acceptInvite: (label: string, code: string, syncToken?: string | null, rosterName?: string | null, adminName?: string | null, ownerMemberId?: string | null) => void;
   setGuardianShare: (code: string, share: 'allowed' | 'revoked') => void;
   leaveGuardian: (id: string) => void;
+  mergeRooms: () => void;
   dismissInvite: () => void;
   markAlertsRead: () => void;
   updateSelf: (lat: number, lng: number, accuracyM: number, speedMps?: number | null) => void;
@@ -1808,6 +1865,7 @@ export function FamilyProvider({ children }: { children: React.ReactNode }) {
     },
     setGuardianShare: (code, share) => dispatch({ type: 'set-guardian-share', code, share }),
     leaveGuardian: (id) => dispatch({ type: 'leave-guardian', id }),
+    mergeRooms: () => dispatch({ type: 'merge-family-rooms' }),
     dismissInvite: () => dispatch({ type: 'dismiss-invite' }),
     markAlertsRead: () => dispatch({ type: 'mark-alerts-read' }),
     updateSelf: (lat, lng, accuracyM, speedMps) => dispatch({ type: 'update-self', lat, lng, accuracyM, speedMps: speedMps ?? null }),
