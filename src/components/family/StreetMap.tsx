@@ -6,6 +6,7 @@ import { hasLocation } from '../../lib/geo';
 import { MEMBER_PIN_PX, markerZIndex, memberCalloutHtml, memberPinIcon, spreadPinPositions } from '../../lib/mapPinSpread.mjs';
 import { savedPlaceLabel } from '../../lib/memberPlace.mjs';
 import { memberIsDimmed, memberPresence, pinAgeLabel } from '../../lib/memberPresence.mjs';
+import { firstPlaceLabel, groupMembersByPlace, groupStatusLabelHtml, orderStatusMembers, statusCalloutHtml } from '../../lib/memberStatusGroup.mjs';
 import { appendLiveTip, trailDrawParts } from '../../lib/tracking.mjs';
 import { VWORLD_ATTRIBUTION, vworldApiKey, vworldBaseTileUrl } from '../../services/vworld';
 import type { HomeZone, Member, TrackPoint } from '../../types/family';
@@ -41,6 +42,84 @@ function batteryIcon(pct: number, color: string): string {
   return `<svg width="16" height="12" viewBox="0 0 20 12" aria-hidden="true"><rect x="0.75" y="1.25" width="16.5" height="9.5" rx="2" fill="none" stroke="${color}" stroke-width="1.4"/><rect x="17.6" y="4" width="1.6" height="4" rx="0.6" fill="${color}"/><rect x="2.2" y="3" width="${fillWidth}" height="6" rx="1" fill="${color}"/></svg>`;
 }
 
+type HeldMarker = { marker: L.Marker; html: string };
+
+function memberIdFromEvent(event: { originalEvent?: Event }): string {
+  const target = event.originalEvent?.target;
+  const el = target instanceof Element ? target : target instanceof Node ? target.parentElement : null;
+  return el?.closest('[data-member-id]')?.getAttribute('data-member-id') || '';
+}
+
+function memberPlaceText(member: Member, home: HomeZone | null): string {
+  if (!hasLocation(member)) return '';
+  const savedPlace = savedPlaceLabel(member.lat, member.lng, home);
+  const placeText = savedPlace || (typeof member.place === 'string' ? member.place.trim() : '');
+  return placeText && placeText !== '근처' ? placeText : '';
+}
+
+function soloLabelHtml(member: Member, home: HomeZone | null, selected: boolean, now: number): string {
+  const presence = memberPresence(member, now);
+  const age = escapeHtml(pinAgeLabel(presence));
+  const label = escapeHtml(member.role === 'self' ? '나' : member.name);
+  const place = escapeHtml(memberPlaceText(member, home));
+  const battery = batteryMarkup(member, selected);
+  return `<span data-label style="display:inline-flex;flex-direction:column;align-items:center;margin-bottom:4px;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:700;max-width:180px;box-shadow:0 1px 4px rgba(15,23,42,.16);background:${selected ? '#0084FF' : '#fff'};color:${selected ? '#fff' : '#0f172a'}"><span style="display:inline-flex;align-items:center;white-space:nowrap">${label}${battery}</span>${place ? `<span style="display:block;max-width:164px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;font-weight:600;opacity:.85">${place}</span>` : ''}${age ? `<span style="display:block;max-width:164px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;font-weight:700;opacity:.9">${age}</span>` : ''}</span>`;
+}
+
+function groupLabelHtml(members: Member[], home: HomeZone | null, selectedId: string | undefined, now: number): string {
+  const rows = orderStatusMembers(members).map((member) => {
+    const selected = member.id === selectedId;
+    const presence = memberPresence(member, now);
+    return {
+      id: member.id,
+      name: member.role === 'self' ? '나' : member.name,
+      batteryHtml: batteryMarkup(member, selected),
+      age: pinAgeLabel(presence),
+      dimmed: memberIsDimmed(presence),
+      selected,
+    };
+  });
+  return groupStatusLabelHtml({ place: firstPlaceLabel(members, (member) => memberPlaceText(member, home)), rows });
+}
+
+function pinFaceHtml(member: Member): string {
+  const color = '#0084FF';
+  const self = member.role === 'self';
+  const initial = escapeHtml(self ? '나' : member.name.slice(0, 1));
+  const faceBox = `width:${MEMBER_PIN_PX}px;height:${MEMBER_PIN_PX}px;box-sizing:border-box;border-radius:999px;border:4px solid #fff;box-shadow:0 6px 16px rgba(15,23,42,.2)`;
+  const photo = typeof member.photo === 'string' && member.photo.startsWith('data:image/') && member.photo.length < 120_000
+    ? member.photo
+    : '';
+  return photo
+    ? `<img alt="" src="${escapeHtml(photo)}" style="${faceBox};object-fit:cover"/>`
+    : `<span style="${faceBox};background:${color};color:#fff;display:flex;align-items:center;justify-content:center;font-weight:900">${initial}</span>`;
+}
+
+function letStatusClicksThrough(marker: L.Marker) {
+  const el = marker.getElement();
+  if (el) el.style.pointerEvents = 'none';
+}
+
+function paintHeld(held: HeldMarker, html: string, icon: L.DivIcon) {
+  if (held.html === html) return;
+  const el = held.marker.getElement();
+  if (el) {
+    el.innerHTML = html;
+    held.html = html;
+    return;
+  }
+  held.marker.setIcon(icon);
+  held.html = html;
+}
+
+function dropHeld(store: Map<string, HeldMarker>, keep: Set<string>) {
+  for (const [id, held] of store) {
+    if (keep.has(id)) continue;
+    held.marker.remove();
+    store.delete(id);
+  }
+}
+
 export const StreetMap = forwardRef<StreetMapHandle, {
   center: { lat: number; lng: number };
   zoom: number;
@@ -61,6 +140,9 @@ export const StreetMap = forwardRef<StreetMapHandle, {
   const mapRef = useRef<L.Map | null>(null);
   const layersRef = useRef<L.LayerGroup | null>(null);
   const trailRef = useRef<L.LayerGroup | null>(null);
+  const pinMarkersRef = useRef(new Map<string, HeldMarker>());
+  const statusMarkersRef = useRef(new Map<string, HeldMarker>());
+  const statusAnchorRef = useRef(new Map<string, string>());
   const playbackRef = useRef<L.Marker | null>(null);
   const playbackPanRef = useRef(0);
   const [ready, setReady] = useState(false);
@@ -219,6 +301,11 @@ export const StreetMap = forwardRef<StreetMapHandle, {
       map.off('zoomstart', noteUserView);
       map.off('dragstart');
       playbackRef.current = null;
+      pinMarkersRef.current.forEach((held) => held.marker.remove());
+      pinMarkersRef.current.clear();
+      statusMarkersRef.current.forEach((held) => held.marker.remove());
+      statusMarkersRef.current.clear();
+      statusAnchorRef.current.clear();
       map.remove();
       mapRef.current = null;
       layersRef.current = null;
@@ -279,52 +366,105 @@ export const StreetMap = forwardRef<StreetMapHandle, {
       }).addTo(group);
     }
 
+    const map = mapRef.current;
+    if (!map) return;
+    const now = Date.now();
     const pins = spreadPinPositions(members);
     const pinIcon = memberPinIcon();
-    const faceBox = `width:${MEMBER_PIN_PX}px;height:${MEMBER_PIN_PX}px;box-sizing:border-box;border-radius:999px;border:4px solid #fff;box-shadow:0 6px 16px rgba(15,23,42,.2)`;
+    const clusters = groupMembersByPlace(members);
+    const clusterOf = new Map(clusters.flatMap((cluster) => cluster.members.map((member) => [member.id, cluster] as const)));
+    const seenPins = new Set<string>();
     for (const member of members) {
       if (!hasLocation(member)) continue;
+      seenPins.add(member.id);
       const at = pins.get(member.id) || { lat: member.lat, lng: member.lng, dx: 0, dy: 0 };
+      const cluster = clusterOf.get(member.id);
+      const grouped = (cluster?.members.length || 0) > 1;
       const selected = member.id === selectedId;
-      const presence = memberPresence(member, Date.now());
+      const presence = memberPresence(member, now);
       const dimmed = memberIsDimmed(presence);
-      const age = escapeHtml(pinAgeLabel(presence));
-      const color = '#0084FF';
-      const self = member.role === 'self';
-      const label = escapeHtml(self ? '나' : member.name);
-      const savedPlace = savedPlaceLabel(member.lat, member.lng, home);
-      const placeText = savedPlace || (typeof member.place === 'string' ? member.place.trim() : '');
-      const place = placeText && placeText !== '근처' ? escapeHtml(placeText) : '';
-      const initial = escapeHtml(self ? '나' : member.name.slice(0, 1));
-      const battery = batteryMarkup(member, selected);
-      const photo = typeof member.photo === 'string' && member.photo.startsWith('data:image/') && member.photo.length < 120_000
-        ? member.photo
-        : '';
-      const face = photo
-        ? `<img alt="" src="${escapeHtml(photo)}" style="${faceBox};object-fit:cover"/>`
-        : `<span style="${faceBox};background:${color};color:#fff;display:flex;align-items:center;justify-content:center;font-weight:900">${initial}</span>`;
+      const html = memberCalloutHtml({
+        dx: at.dx,
+        dy: at.dy,
+        dimmed,
+        tailColor: selected ? '#0084FF' : '#fff',
+        labelHtml: grouped ? '' : soloLabelHtml(member, home, selected, now),
+        faceHtml: pinFaceHtml(member),
+      });
+      const held = pinMarkersRef.current.get(member.id);
+      if (held) {
+        held.marker.setLatLng([at.lat, at.lng]);
+        held.marker.setZIndexOffset(markerZIndex(at.dy, selected));
+        paintHeld(held, html, L.divIcon({
+          className: 'umap-member-pin',
+          html,
+          iconSize: pinIcon.iconSize,
+          iconAnchor: pinIcon.iconAnchor,
+        }));
+        continue;
+      }
       const marker = L.marker([at.lat, at.lng], {
         zIndexOffset: markerZIndex(at.dy, selected),
         icon: L.divIcon({
           className: 'umap-member-pin',
-          html: memberCalloutHtml({
-            dx: at.dx,
-            dy: at.dy,
-            dimmed,
-            tailColor: selected ? '#0084FF' : '#fff',
-            labelHtml: `<span data-label style="display:inline-flex;flex-direction:column;align-items:center;margin-bottom:4px;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:700;max-width:180px;box-shadow:0 1px 4px rgba(15,23,42,.16);background:${selected ? '#0084FF' : '#fff'};color:${selected ? '#fff' : '#0f172a'}"><span style="display:inline-flex;align-items:center;white-space:nowrap">${label}${battery}</span>${place ? `<span style="display:block;max-width:164px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;font-weight:600;opacity:.85">${place}</span>` : ''}${age ? `<span style="display:block;max-width:164px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;font-weight:700;opacity:.9">${age}</span>` : ''}</span>`,
-            faceHtml: face,
-          }),
+          html,
           iconSize: pinIcon.iconSize,
           iconAnchor: pinIcon.iconAnchor,
         }),
       });
       marker.on('click', (event) => {
         L.DomEvent.stopPropagation(event);
-        onSelectRef.current(member.id);
+        onSelectRef.current(memberIdFromEvent(event) || member.id);
       });
-      marker.addTo(group);
+      marker.addTo(map);
+      pinMarkersRef.current.set(member.id, { marker, html });
     }
+    dropHeld(pinMarkersRef.current, seenPins);
+
+    const seenStatus = new Set<string>();
+    const anchors = new Map<string, string>();
+    for (const cluster of clusters) {
+      if (cluster.members.length < 2) continue;
+      seenStatus.add(cluster.key);
+      anchors.set(cluster.key, cluster.anchorId);
+      const label = groupLabelHtml(cluster.members, home, selectedId, now);
+      const html = statusCalloutHtml(label, '#fff');
+      const raised = cluster.members.some((member) => member.id === selectedId);
+      const zIndex = raised ? 3000 : 2500;
+      const held = statusMarkersRef.current.get(cluster.key);
+      if (held) {
+        held.marker.setLatLng([cluster.anchor.lat, cluster.anchor.lng]);
+        held.marker.setZIndexOffset(zIndex);
+        paintHeld(held, html, L.divIcon({
+          className: 'umap-member-status',
+          html,
+          iconSize: [42, 42],
+          iconAnchor: [21, 42],
+        }));
+        letStatusClicksThrough(held.marker);
+        continue;
+      }
+      const status = L.marker([cluster.anchor.lat, cluster.anchor.lng], {
+        zIndexOffset: zIndex,
+        icon: L.divIcon({
+          className: 'umap-member-status',
+          html,
+          iconSize: [42, 42],
+          iconAnchor: [21, 42],
+        }),
+      });
+      const groupKey = cluster.key;
+      status.on('click', (event) => {
+        L.DomEvent.stopPropagation(event);
+        const picked = memberIdFromEvent(event) || statusAnchorRef.current.get(groupKey) || '';
+        if (picked) onSelectRef.current(picked);
+      });
+      status.addTo(map);
+      letStatusClicksThrough(status);
+      statusMarkersRef.current.set(cluster.key, { marker: status, html });
+    }
+    statusAnchorRef.current = anchors;
+    dropHeld(statusMarkersRef.current, seenStatus);
   }, [home, members, ready, selectedId]);
 
   useEffect(() => {

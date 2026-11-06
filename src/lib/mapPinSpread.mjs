@@ -157,12 +157,16 @@ export function memberCalloutHtml({ dx = 0, dy = 0, dimmed = false, tailColor = 
   const shiftY = Number(dy) || 0;
   const tail = tailColor === '#0084FF' ? '#0084FF' : '#fff';
   const pin = MEMBER_PIN_PX;
-  return `<div data-pin-root style="position:relative;width:${pin}px;height:${pin}px;overflow:visible;opacity:${dimmed ? '0.55' : '1'}">
-    ${leaderMarkup(shiftX, shiftY)}
-    <div data-pin-anchor style="position:relative;z-index:1;width:${pin}px;height:${pin}px;display:flex;align-items:center;justify-content:center">${faceHtml}</div>
-    <div data-callout style="position:absolute;z-index:2;left:50%;bottom:100%;width:max-content;transform:translate(calc(-50% + ${shiftX}px), ${shiftY}px)">
+  const labeled = String(labelHtml || '').trim().length > 0;
+  const callout = labeled
+    ? `<div data-callout style="position:absolute;z-index:2;left:50%;bottom:100%;width:max-content;transform:translate(calc(-50% + ${shiftX}px), ${shiftY}px)">
       ${labelHtml}
       <span data-label-tail style="display:block;width:0;height:0;margin:0 auto;border-left:6px solid transparent;border-right:6px solid transparent;border-top:7px solid ${tail}"></span>
-    </div>
+    </div>`
+    : '';
+  return `<div data-pin-root style="position:relative;width:${pin}px;height:${pin}px;overflow:visible;opacity:${dimmed ? '0.55' : '1'}">
+    ${labeled ? leaderMarkup(shiftX, shiftY) : ''}
+    <div data-pin-anchor style="position:relative;z-index:1;width:${pin}px;height:${pin}px;display:flex;align-items:center;justify-content:center">${faceHtml}</div>
+    ${callout}
   </div>`;
 }
