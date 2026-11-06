@@ -129,14 +129,22 @@ export function calloutBoxesOverlap(a, b) {
   return a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
 }
 
+function cssNumber(value) {
+  const rounded = Math.round(value * 1000) / 1000;
+  return String(Object.is(rounded, -0) ? 0 : rounded);
+}
+
+/** A real-sized bar. A 0×0 SVG is not painted by Android WebView. */
 function leaderMarkup(dx, dy) {
   const leader = calloutLeader(dx, dy);
   if (!leader.needed) return '';
-  const { from, to } = leader;
-  const line = (color, width) => (
-    `<line x1="${from.x}" y1="${from.y}" x2="${to.x}" y2="${to.y}" stroke="${color}" stroke-width="${width}" stroke-linecap="round"/>`
-  );
-  return `<svg data-pin-leader width="0" height="0" aria-hidden="true" style="position:absolute;left:50%;top:50%;overflow:visible;pointer-events:none;z-index:0">${line('#ffffff', 4)}${line('#64748b', 1.5)}</svg>`;
+  const runX = leader.to.x - leader.from.x;
+  const runY = leader.to.y - leader.from.y;
+  const length = cssNumber(Math.hypot(runX, runY));
+  const angle = cssNumber(Math.atan2(runY, runX) * 180 / Math.PI);
+  const x = cssNumber(leader.from.x);
+  const y = cssNumber(leader.from.y);
+  return `<span data-pin-leader aria-hidden="true" style="position:absolute;left:calc(50% + ${x}px);top:calc(50% + ${y}px);width:${length}px;height:2px;margin-top:-1px;background:#64748b;box-shadow:0 0 0 1px #fff;transform-origin:0 50%;transform:rotate(${angle}deg);pointer-events:none;z-index:0"></span>`;
 }
 
 /**
