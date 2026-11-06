@@ -6,15 +6,21 @@ import android.net.Uri;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.SystemClock;
 import android.view.View;
 import android.view.WindowManager;
 import android.webkit.JavascriptInterface;
+import android.webkit.RenderProcessGoneDetail;
 import android.webkit.WebView;
 import androidx.activity.OnBackPressedCallback;
 import com.getcapacitor.BridgeActivity;
+import com.getcapacitor.WebViewListener;
 
 public class MainActivity extends BridgeActivity {
     private static volatile boolean resumed;
+    private static long lastRendererRecoverAt;
 
     public static boolean isResumed() {
         return resumed;
@@ -36,6 +42,7 @@ public class MainActivity extends BridgeActivity {
             webView.setHorizontalScrollBarEnabled(false);
             webView.addJavascriptInterface(new UmapAndroidExit(this), "UmapAndroid");
         }
+        watchRenderer();
         captureChatIntent(getIntent());
         captureInviteIntent(getIntent());
         getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
@@ -94,6 +101,34 @@ public class MainActivity extends BridgeActivity {
         keepScreenOn(false);
         resumed = false;
         super.onPause();
+    }
+
+    /**
+     * A dead renderer used to take the whole process down because nothing
+     * returned true from onRenderProcessGone. Recreate the activity so the
+     * WebView is new. A second death inside the cooldown stays handled
+     * without recreating in a loop.
+     */
+    private void watchRenderer() {
+        if (bridge == null) return;
+        bridge.addWebViewListener(new WebViewListener() {
+            @Override
+            public boolean onRenderProcessGone(WebView webView, RenderProcessGoneDetail detail) {
+                long now = SystemClock.uptimeMillis();
+                if (now - lastRendererRecoverAt >= 8_000L) {
+                    lastRendererRecoverAt = now;
+                    new Handler(Looper.getMainLooper()).post(() -> {
+                        if (isFinishing() || isDestroyed()) return;
+                        try {
+                            recreate();
+                        } catch (RuntimeException ignored) {
+                            /* true below already kept the process alive */
+                        }
+                    });
+                }
+                return true;
+            }
+        });
     }
 
     /** The open activity stays lit. Leaving the app lets the screen sleep again. */

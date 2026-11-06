@@ -12,6 +12,13 @@ export function recordsDayTrails(input: {
   liveDrawable?: boolean;
 }): { lat: number; lng: number; at: number }[][];
 
+export function screenMapTrails<T extends { lat: number; lng: number; at: number }>(input: {
+  viewingRecords: boolean;
+  detailOpen: boolean;
+  detailPoints?: readonly T[] | null;
+  liveLines?: readonly (readonly T[])[] | null;
+}): T[][];
+
 export function memberLiveLines(
   member: {
     id?: string;
