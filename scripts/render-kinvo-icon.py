@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """Rasterize the KINVO launcher from resources/kinvo-app-icon.png.
 
-Legacy and web icons use the full artwork. Adaptive foreground keeps that
-artwork inside the 66dp safe circle (a square inscribed in the circle, with
-a little inset) on a transparent canvas. The adaptive background is a flat
-deep blue sampled from the tile, so circle and squircle masks do not clip
-the family or the KINVO word. Notification and monochrome icons stay white
-silhouettes; Android tints those.
+Legacy and web icons use the full artwork. The adaptive foreground is the
+same artwork, larger inside the 108dp layer: big enough to fill the 66dp
+safe circle, still clear of the mask at the KINVO letters and the pin tip.
+The adaptive background is flat deep blue. Notification and monochrome
+icons stay white silhouettes; Android tints those.
 """
 
 from __future__ import annotations
@@ -20,8 +19,10 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "resources" / "kinvo-app-icon.png"
 # Android adaptive safe circle is 66dp inside the 108dp layer.
 SAFE_DIAMETER = 66 / 108
-# Keep the square a hair inside that circle so mask antialiasing does not eat the wordmark.
-SAFE_INSET = 0.96
+# 1.66 used 0.96: a square inscribed in that circle, then shrunk again.
+# 1.18 keeps the KINVO letters and the pin tip about 2dp inside the circle.
+# The blue corners of the tile can meet the mask. The wordmark does not.
+SAFE_INSET = 1.18
 BACKGROUND = (0x01, 0x49, 0xD3)  # #0149D3, the tile's deep blue
 
 
@@ -246,7 +247,7 @@ def emit() -> None:
         data["background_color"] = "#0149D3"
         data["theme_color"] = "#0149D3"
         manifest.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    print("KINVO icons written. adaptive background #0149D3, foreground inside the 66dp circle")
+    print("KINVO icons written. adaptive background #0149D3, safe inset 1.18")
 
 
 if __name__ == "__main__":

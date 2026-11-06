@@ -72,7 +72,7 @@ function rgbaAt(png, x, y) {
   return png.pixels.subarray(index, index + 4);
 }
 
-test('KINVO artwork is the launcher source and stays inside the adaptive safe circle', () => {
+test('KINVO artwork fills more of the adaptive circle and the letters stay inside it', () => {
   const source = readFileSync(repo('../../resources/kinvo-app-icon.png'));
   assert.equal(source.readUInt32BE(16), 1080);
   assert.equal(source.readUInt32BE(20), 1080);
@@ -82,6 +82,8 @@ test('KINVO artwork is the launcher source and stays inside the adaptive safe ci
   const script = text('../../scripts/render-kinvo-icon.py');
   assert.match(script, /66 \/ 108/);
   assert.match(script, /sqrt\(2\)/);
+  assert.match(script, /SAFE_INSET = 1\.18/);
+  assert.equal(script.includes('SAFE_INSET = 0.96'), false);
 
   const foreground = decodeRgbaPng(readFileSync(repo('../../android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_foreground.png')));
   assert.deepEqual([foreground.width, foreground.height], [432, 432]);
@@ -89,35 +91,37 @@ test('KINVO artwork is the launcher source and stays inside the adaptive safe ci
   const center = rgbaAt(foreground, Math.floor(foreground.width / 2), Math.floor(foreground.height / 2));
   assert.equal(center[3], 255);
   assert.equal(center[0] > 240 && center[1] > 240 && center[2] > 240, false);
+  const cx = (foreground.width - 1) / 2;
+  const cy = (foreground.height - 1) / 2;
+  const radius = foreground.width * (66 / 108) / 2;
+  const oldRadius = radius * 0.96;
   let wordmark = 0;
-  for (let y = 0; y < foreground.height; y += 1) {
-    for (let x = 0; x < foreground.width; x += 1) {
-      const pixel = rgbaAt(foreground, x, y);
-      if (pixel[3] > 200 && pixel[0] >= 248 && pixel[1] >= 248 && pixel[2] >= 248) wordmark += 1;
-    }
-  }
-  assert.ok(wordmark > 400, `KINVO letters collapsed to ${wordmark} near-white pixels`);
+  let wordFar = 0;
   let minX = foreground.width;
   let minY = foreground.height;
   let maxX = 0;
   let maxY = 0;
   for (let y = 0; y < foreground.height; y += 1) {
     for (let x = 0; x < foreground.width; x += 1) {
-      if (rgbaAt(foreground, x, y)[3] === 0) continue;
+      const pixel = rgbaAt(foreground, x, y);
+      if (pixel[3] === 0) continue;
       if (x < minX) minX = x;
       if (y < minY) minY = y;
       if (x > maxX) maxX = x;
       if (y > maxY) maxY = y;
+      if (pixel[3] > 200 && pixel[0] >= 248 && pixel[1] >= 248 && pixel[2] >= 248) {
+        wordmark += 1;
+        wordFar = Math.max(wordFar, Math.hypot(x - cx, y - cy));
+      }
     }
   }
-  const cx = (foreground.width - 1) / 2;
-  const cy = (foreground.height - 1) / 2;
-  const radius = foreground.width * (66 / 108) / 2;
+  assert.ok(wordmark > 400, `KINVO letters collapsed to ${wordmark} near-white pixels`);
+  assert.ok(wordFar <= radius + 2, `KINVO pixel at ${wordFar} is outside safe radius ${radius}`);
   let far = 0;
   for (const [x, y] of [[minX, minY], [maxX, minY], [minX, maxY], [maxX, maxY]]) {
     far = Math.max(far, Math.hypot(x - cx, y - cy));
   }
-  assert.ok(far <= radius + 0.6, `artwork corner ${far} is outside safe radius ${radius}`);
+  assert.ok(far > oldRadius + 4, `artwork still sits in the old 0.96 inset (${far} vs ${oldRadius})`);
 });
 
 test('Android adaptive background is deep blue and the foreground is the KINVO bitmap', () => {
