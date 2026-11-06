@@ -153,15 +153,7 @@ export function calloutTransform(dx = 0, dy = 0) {
   return `translate(calc(-50% + ${cssNumber(shiftX)}px), ${cssNumber(shiftY)}px)`;
 }
 
-/** Move an existing chip. Replacing the marker HTML would skip the CSS transition. */
-export function syncCalloutGeometry(root, dx = 0, dy = 0) {
-  if (!root || typeof root.querySelector !== 'function') return;
-  const shiftX = Number(dx) || 0;
-  const shiftY = Number(dy) || 0;
-  const callout = root.querySelector('[data-callout]');
-  if (callout) callout.style.transform = calloutTransform(shiftX, shiftY);
-  const leader = root.querySelector('[data-pin-leader]');
-  if (!leader) return;
+function paintLeader(leader, shiftX, shiftY) {
   const spec = calloutLeader(shiftX, shiftY);
   if (!spec.needed) {
     leader.style.display = 'none';
@@ -170,10 +162,42 @@ export function syncCalloutGeometry(root, dx = 0, dy = 0) {
   const runX = spec.to.x - spec.from.x;
   const runY = spec.to.y - spec.from.y;
   leader.style.display = '';
+  leader.style.position = 'absolute';
+  leader.style.height = '2px';
+  leader.style.marginTop = '-1px';
+  leader.style.background = '#64748b';
+  leader.style.boxShadow = '0 0 0 1px #fff';
+  leader.style.transformOrigin = '0 50%';
+  leader.style.pointerEvents = 'none';
+  leader.style.zIndex = '0';
   leader.style.left = `calc(50% + ${cssNumber(spec.from.x)}px)`;
   leader.style.top = `calc(50% + ${cssNumber(spec.from.y)}px)`;
   leader.style.width = `${cssNumber(Math.hypot(runX, runY))}px`;
   leader.style.transform = `rotate(${cssNumber(Math.atan2(runY, runX) * 180 / Math.PI)}deg)`;
+}
+
+/** Move an existing chip. A seated chip has no leader until the slot leaves the pin. */
+export function syncCalloutGeometry(root, dx = 0, dy = 0) {
+  if (!root || typeof root.querySelector !== 'function') return;
+  const shiftX = Number(dx) || 0;
+  const shiftY = Number(dy) || 0;
+  const callout = root.querySelector('[data-callout]');
+  if (callout) callout.style.transform = calloutTransform(shiftX, shiftY);
+  const spec = calloutLeader(shiftX, shiftY);
+  let leader = root.querySelector('[data-pin-leader]');
+  if (!spec.needed) {
+    if (leader) leader.style.display = 'none';
+    return;
+  }
+  if (!leader && root.ownerDocument && typeof root.ownerDocument.createElement === 'function') {
+    leader = root.ownerDocument.createElement('span');
+    leader.setAttribute('data-pin-leader', '');
+    leader.setAttribute('aria-hidden', 'true');
+    const anchor = root.querySelector('[data-pin-anchor]');
+    if (anchor && anchor.parentNode === root) root.insertBefore(leader, anchor);
+    else root.appendChild(leader);
+  }
+  if (leader) paintLeader(leader, shiftX, shiftY);
 }
 
 /**

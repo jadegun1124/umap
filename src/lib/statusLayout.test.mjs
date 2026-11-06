@@ -12,6 +12,7 @@ import {
   holdAnchor,
   holdSpread,
   stablePlaceGroups,
+  stickyStatusHost,
 } from './statusLayout.mjs';
 
 function pointAt(origin, meters) {
@@ -74,6 +75,16 @@ test('fresh groups match the 50m rule and a pair already together stays until 62
   const apart = { id: 'mom', name: '엄마', ...pointAt(self, 70) };
   assert.ok(distanceMeters(self, apart) > GROUP_LEAVE_M);
   assert.equal(stablePlaceGroups([self, apart], [{ key: 'mom|self', members: [self, { id: 'mom' }] }]).length, 2);
+});
+
+test('a new member does not move the merged chip off the pin that already carries it', () => {
+  const previous = new Map([
+    ['self', 'self'],
+    ['mom', 'self'],
+  ]);
+  assert.equal(stickyStatusHost(['self', 'mom', 'dad'], previous, 'dad'), 'self');
+  assert.equal(stickyStatusHost(['mom', 'khoon'], new Map([['mom', 'uncle'], ['khoon', 'uncle']]), 'mom'), 'mom');
+  assert.equal(stickyStatusHost(['self', 'mom'], new Map(), 'mom'), 'mom');
 });
 
 test('a chip keeps its slot until it covers a button, then returns only when the preferred slot is clear', () => {

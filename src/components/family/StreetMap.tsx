@@ -8,7 +8,7 @@ import { MEMBER_PIN_PX, markerZIndex, memberCalloutHtml, memberPinIcon, spreadPi
 import { savedPlaceLabel } from '../../lib/memberPlace.mjs';
 import { memberIsDimmed, memberPresence, pinAgeLabel } from '../../lib/memberPresence.mjs';
 import { firstPlaceLabel, groupPinShiftY, groupStatusLabelHtml, orderStatusMembers } from '../../lib/memberStatusGroup.mjs';
-import { assignChipOffsets, groupChipSize, holdSpread, inflateRect, soloChipSize, stablePlaceGroups } from '../../lib/statusLayout.mjs';
+import { assignChipOffsets, groupChipSize, holdSpread, inflateRect, soloChipSize, stablePlaceGroups, stickyStatusHost } from '../../lib/statusLayout.mjs';
 import { displaySolidTrail, DISPLAY_TRAIL_CAP, trailGeometryKey } from '../../lib/displayTrail.mjs';
 import { appendLiveTip, trailDrawParts } from '../../lib/tracking.mjs';
 import { VWORLD_ATTRIBUTION, vworldApiKey, vworldBaseTileUrl } from '../../services/vworld';
@@ -199,6 +199,8 @@ export const StreetMap = forwardRef<StreetMapHandle, {
   const trailRef = useRef<L.LayerGroup | null>(null);
   const pinMarkersRef = useRef(new Map<string, HeldMarker>());
   const statusAnchorRef = useRef(new Map<string, string>());
+  const statusHostRef = useRef(new Map<string, string>());
+  const hostShiftRef = useRef(new Map<string, { dx: number; dy: number }>());
   const groupsRef = useRef<Array<{ key: string; members: Member[]; anchor: { lat: number; lng: number }; anchorId: string }>>([]);
   const spreadRef = useRef(new Map<string, { lat: number; lng: number; dx: number; dy: number }>());
   const offsetsRef = useRef(new Map<string, { dx: number; dy: number }>());
@@ -573,11 +575,28 @@ export const StreetMap = forwardRef<StreetMapHandle, {
       const clusters = stablePlaceGroups(people, groupsRef.current);
       groupsRef.current = clusters;
       const anchorIds = new Map<string, string>();
+      const hosted = new Set<string>();
       for (const cluster of clusters) {
         if (cluster.members.length < 2) continue;
-        const previous = statusAnchorRef.current.get(cluster.key);
-        const still = !!previous && cluster.members.some((member) => member.id === previous);
-        anchorIds.set(cluster.key, still && previous ? previous : cluster.anchorId);
+        const host = stickyStatusHost(
+          cluster.members.map((member) => member.id),
+          statusHostRef.current,
+          cluster.anchorId,
+        );
+        anchorIds.set(cluster.key, host);
+        for (const member of cluster.members) {
+          const id = String(member.id);
+          statusHostRef.current.set(id, host);
+          hosted.add(id);
+        }
+        const shiftKey = `status:${cluster.key}`;
+        if (!offsetsRef.current.has(shiftKey)) {
+          const remembered = hostShiftRef.current.get(host);
+          if (remembered) offsetsRef.current.set(shiftKey, remembered);
+        }
+      }
+      for (const id of [...statusHostRef.current.keys()]) {
+        if (!hosted.has(id)) statusHostRef.current.delete(id);
       }
       statusAnchorRef.current = anchorIds;
       const clusterOf = new Map(clusters.flatMap((cluster) => cluster.members.map((member) => [member.id, cluster] as const)));
@@ -699,7 +718,13 @@ export const StreetMap = forwardRef<StreetMapHandle, {
         for (const key of offsetsRef.current.keys()) {
           if (!live.has(key)) offsetsRef.current.delete(key);
         }
-        for (const [id, offset] of assigned.offsets) offsetsRef.current.set(id, offset);
+        for (const [id, offset] of assigned.offsets) {
+          offsetsRef.current.set(id, offset);
+          if (String(id).startsWith('status:')) {
+            const host = statusAnchorRef.current.get(String(id).slice('status:'.length));
+            if (host) hostShiftRef.current.set(host, offset);
+          }
+        }
         if (assigned.changed) placeRef.current('obstacle');
       } catch {
         /* The map has no container point until it has a size. */

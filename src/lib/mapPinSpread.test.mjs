@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
 import test from 'node:test';
 import {
   CALLOUT_BLOCK_PX,
@@ -9,7 +10,10 @@ import {
   markerZIndex,
   memberCalloutHtml,
   spreadPinPositions,
+  syncCalloutGeometry,
 } from './mapPinSpread.mjs';
+
+const require = createRequire(import.meta.url);
 
 test('two members on the same spot keep the real coordinate and stack labels above it', () => {
   const members = [
@@ -88,4 +92,19 @@ test('a pin without a status chip does not draw an empty callout', () => {
   assert.equal(html.includes('data-pin-leader'), false);
   assert.equal(html.includes('data-label-tail'), false);
   assert.match(html, /data-pin-anchor/);
+});
+
+test('a seated chip grows a leader when the slot leaves the pin', () => {
+  const { JSDOM } = require('jsdom');
+  const dom = new JSDOM(`<div id="pin">${memberCalloutHtml({ dx: 0, dy: 0, labelHtml: '<span data-label>나</span>', faceHtml: '나' })}</div>`);
+  const root = dom.window.document.querySelector('[data-pin-root]');
+  assert.equal(root.querySelector('[data-pin-leader]'), null);
+  syncCalloutGeometry(root, 160, -16);
+  const leader = root.querySelector('[data-pin-leader]');
+  assert.ok(leader);
+  assert.match(leader.style.width, /px/);
+  assert.notEqual(leader.style.display, 'none');
+  assert.match(root.querySelector('[data-callout]').style.transform, /160px/);
+  syncCalloutGeometry(root, 0, 0);
+  assert.equal(root.querySelector('[data-pin-leader]').style.display, 'none');
 });
