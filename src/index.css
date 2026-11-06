@@ -42,6 +42,7 @@
 .leaflet-marker-icon.umap-home-label {
   background: transparent !important;
   border: none !important;
+  overflow: visible !important;
 }
 
 .umap-street-map .leaflet-top.leaflet-left {

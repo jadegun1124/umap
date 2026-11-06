@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { carryPlace } from './memberPlace.mjs';
 import { appendLiveTip, buildDayRecord, displayLivePoints, hasDirectedWalk, liveMotionLabel, mergeVisitStops, previewOpenJourney, settleTrailPoint, storedTrackAfterArchive, trailDrawParts, walkLeavesStay } from './tracking.mjs';
-import { spreadPinPositions } from './mapPinSpread.mjs';
+import { CALLOUT_STACK_PX, calloutBoxesOverlap, calloutScreenBox, spreadPinPositions } from './mapPinSpread.mjs';
 
 function eastOf(lat, lng, metersEast) {
   return { lat, lng: lng + metersEast / (111320 * Math.cos((lat * Math.PI) / 180)) };
@@ -249,9 +249,18 @@ test('three bubbles at one spot stay apart on screen', () => {
   const placed = spreadPinPositions(members);
   const slots = [...placed.values()];
   assert.equal(slots.length, 3);
-  const xs = slots.map((slot) => slot.dx || 0);
+  const boxes = [];
+  for (const member of members) {
+    const slot = placed.get(member.id);
+    assert.equal(slot.lat, member.lat);
+    assert.equal(slot.lng, member.lng);
+    assert.equal(slot.dx, 0);
+    boxes.push(calloutScreenBox({ lat: slot.lat, lng: slot.lng, dx: slot.dx, dy: slot.dy, zoom: 18 }));
+  }
   const ys = slots.map((slot) => slot.dy || 0);
-  assert.ok(Math.max(...xs) - Math.min(...xs) >= 180, `dx ${xs.join(',')}`);
-  assert.ok(new Set(ys).size >= 2 || Math.max(...xs) - Math.min(...xs) >= 240);
-  assert.equal(placed.get('mom').lat, members[0].lat);
+  assert.equal(new Set(ys).size, 3, `dy ${ys.join(',')}`);
+  assert.ok(Math.max(...ys) - Math.min(...ys) >= CALLOUT_STACK_PX * 2, `dy ${ys.join(',')}`);
+  assert.equal(calloutBoxesOverlap(boxes[0], boxes[1]), false);
+  assert.equal(calloutBoxesOverlap(boxes[0], boxes[2]), false);
+  assert.equal(calloutBoxesOverlap(boxes[1], boxes[2]), false);
 });
