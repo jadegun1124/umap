@@ -6,15 +6,23 @@ import android.net.Uri;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.SystemClock;
 import android.view.View;
 import android.view.WindowManager;
 import android.webkit.JavascriptInterface;
+import android.webkit.RenderProcessGoneDetail;
 import android.webkit.WebView;
 import androidx.activity.OnBackPressedCallback;
 import com.getcapacitor.BridgeActivity;
+import com.getcapacitor.WebViewListener;
 
 public class MainActivity extends BridgeActivity {
     private static volatile boolean resumed;
+    private static long lastRendererRecoverAt;
+    private final Handler rendererHandler = new Handler(Looper.getMainLooper());
+    private boolean rendererRecoverQueued;
 
     public static boolean isResumed() {
         return resumed;
@@ -36,6 +44,7 @@ public class MainActivity extends BridgeActivity {
             webView.setHorizontalScrollBarEnabled(false);
             webView.addJavascriptInterface(new UmapAndroidExit(this), "UmapAndroid");
         }
+        watchRenderer();
         captureChatIntent(getIntent());
         captureInviteIntent(getIntent());
         getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
@@ -94,6 +103,40 @@ public class MainActivity extends BridgeActivity {
         keepScreenOn(false);
         resumed = false;
         super.onPause();
+    }
+
+    /**
+     * A dead renderer used to take the whole process down because nothing
+     * returned true from onRenderProcessGone. Recreate the activity so the
+     * WebView is new. A second death inside 8 seconds waits out that gap
+     * and then recreates once, instead of leaving the dead view on screen.
+     */
+    private void watchRenderer() {
+        if (bridge == null) return;
+        bridge.addWebViewListener(new WebViewListener() {
+            @Override
+            public boolean onRenderProcessGone(WebView webView, RenderProcessGoneDetail detail) {
+                scheduleRendererRecover();
+                return true;
+            }
+        });
+    }
+
+    private void scheduleRendererRecover() {
+        if (rendererRecoverQueued || isFinishing() || isDestroyed()) return;
+        long now = SystemClock.uptimeMillis();
+        long wait = Math.max(0L, 8_000L - (now - lastRendererRecoverAt));
+        rendererRecoverQueued = true;
+        rendererHandler.postDelayed(() -> {
+            rendererRecoverQueued = false;
+            if (isFinishing() || isDestroyed()) return;
+            lastRendererRecoverAt = SystemClock.uptimeMillis();
+            try {
+                recreate();
+            } catch (RuntimeException ignored) {
+                /* true from onRenderProcessGone already kept the process alive */
+            }
+        }, wait);
     }
 
     /** The open activity stays lit. Leaving the app lets the screen sleep again. */
