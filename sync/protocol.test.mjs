@@ -1063,6 +1063,51 @@ test('a member trail replaces the room copy and a stop removes it', async () => 
   assert.equal(after.body.trails.length, 0);
 });
 
+test('a newer trail with no journeys keeps the stored vehicle trip', async () => {
+  const store = createMemoryStore();
+  const code = '40306';
+  const writeKey = randomKey();
+  const readKey = randomKey();
+  const token = await syncTokenFor(writeKey, readKey);
+  const profileKey = randomKey();
+  const memberId = 'local-khoon01';
+  const at = Date.now();
+  const drive = {
+    id: 'khoon-drive',
+    startedAt: at - 20 * 60_000,
+    endedAt: at - 5 * 60_000,
+    distanceM: 6400,
+    points: [
+      { lat: 37.50, lng: 127.02, at: at - 20 * 60_000 },
+      { lat: 37.55, lng: 127.08, at: at - 5 * 60_000 },
+    ],
+    start: { lat: 37.50, lng: 127.02, label: '집' },
+    end: { lat: 37.55, lng: 127.08, label: '학교' },
+  };
+  const first = await call(store, 'PUT', `/v1/rooms/${code}/trail`, {
+    token,
+    profileKey,
+    body: { memberId, at, moving: false, points: drive.points, journeys: [drive] },
+  });
+  assert.equal(first.status, 200);
+  const empty = await call(store, 'PUT', `/v1/rooms/${code}/trail`, {
+    token,
+    profileKey,
+    body: { memberId, at: at + 1000, moving: false, points: [], journeys: [] },
+  });
+  assert.equal(empty.status, 200);
+  const reader = await call(store, 'GET', `/v1/rooms/${code}`, { token, readKey, profileKey, member: memberId });
+  assert.equal(reader.body.trails[0].journeys.some((item) => item.id === 'khoon-drive'), true);
+  const stopped = await call(store, 'PUT', `/v1/rooms/${code}/place`, {
+    token,
+    profileKey,
+    body: { code, name: 'Khoon', memberId, lat: null, lng: null, accuracyM: 0, at: at + 2000, sharing: false },
+  });
+  assert.equal(stopped.status, 200);
+  const after = await call(store, 'GET', `/v1/rooms/${code}`, { token, readKey, profileKey, member: memberId });
+  assert.equal(after.body.trails[0].journeys.some((item) => item.id === 'khoon-drive'), true);
+});
+
 test('family view keeps the newest place when one memberId was stored twice', () => {
   const room = {
     ...emptyRoom(),

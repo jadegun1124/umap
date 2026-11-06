@@ -1379,6 +1379,41 @@ test('a short stop at the destination does not replace the commute', () => {
   assert.ok(kept.some((item) => item.distanceM === 9500));
 });
 
+test('a vehicle trip earlier the same day is not pushed out by later walks', () => {
+  const day = Date.UTC(2026, 10, 6, 1, 0, 0);
+  const drive = {
+    id: 'khoon-drive',
+    startedAt: day,
+    endedAt: day + 20 * 60_000,
+    distanceM: 8400,
+    points: [
+      { lat: 37.5, lng: 127.02, at: day, speedMps: 12 },
+      { lat: 37.55, lng: 127.08, at: day + 20 * 60_000, speedMps: 11 },
+    ],
+    start: { lat: 37.5, lng: 127.02, label: '집' },
+    end: { lat: 37.55, lng: 127.08, label: '학교' },
+  };
+  const walks = [];
+  for (let index = 0; index < 6; index += 1) {
+    const startedAt = day + (index + 1) * 40 * 60_000;
+    walks.push({
+      id: `walk-${index}`,
+      startedAt,
+      endedAt: startedAt + 10 * 60_000,
+      distanceM: 400,
+      points: [
+        { lat: 37.55, lng: 127.08, at: startedAt, speedMps: 1.2 },
+        { lat: 37.552, lng: 127.082, at: startedAt + 10 * 60_000, speedMps: 1.2 },
+      ],
+      start: { lat: 37.55, lng: 127.08, label: null },
+      end: { lat: 37.552, lng: 127.082, label: null },
+    });
+  }
+  const kept = trimJourneyList([drive, ...walks], day + 6 * 60 * 60_000);
+  assert.equal(kept.length, 7);
+  assert.equal(kept.some((item) => item.id === 'khoon-drive'), true);
+});
+
 test('playback interpolates a segment midpoint and stays on an L-shaped corner', () => {
   const t = Date.UTC(2026, 9, 28, 3, 0, 0);
   const origin = { lat: 37.55, lng: 127.07, at: t, accuracyM: 8, speedMps: 8, staying: false };

@@ -244,7 +244,8 @@ test('a stale backup after recover updates the same account and does not mint a 
   assert.equal(stale.status, 200);
   assert.equal(stale.body.account.memberId, 'local-restore1');
   assert.equal(stale.body.account.recoveryCode, recovery);
-  assert.equal(stale.body.account.journeys[0].id, 'j-2');
+  assert.ok(stale.body.account.journeys.some((item) => item.id === 'j-1'));
+  assert.ok(stale.body.account.journeys.some((item) => item.id === 'j-2'));
   assert.notEqual(stale.body.account.accountKey, oldKey);
 
   const replay = await accountCall(accounts, 'POST', '/v1/account', { body: snapshot() });
@@ -918,4 +919,45 @@ test('a sealed backup deletes plaintext history and the stored recovery code', a
   assert.equal(again.body.account.recoveryCode, '');
   assert.equal(again.body.account.journeys.length, 0);
   assert.ok(again.body.account.vault);
+});
+
+test('an empty snapshot without keepHistory does not erase stored journeys', async () => {
+  const accounts = createMemoryAccountStore();
+  const created = await accountCall(accounts, 'POST', '/v1/account', { body: snapshot() });
+  const wiped = await accountCall(accounts, 'PUT', '/v1/account', {
+    accountKey: created.body.account.accountKey,
+    body: snapshot({ journeys: [], visits: [] }),
+  });
+  assert.equal(wiped.status, 200);
+  assert.equal(wiped.body.account.journeys.some((item) => item.id === 'j-1'), true);
+});
+
+test('the journey cap keeps the newest vehicle trip instead of the oldest rows', async () => {
+  const accounts = createMemoryAccountStore();
+  const created = await accountCall(accounts, 'POST', '/v1/account', { body: snapshot() });
+  const now = Date.now();
+  const journeys = [];
+  for (let index = 0; index < 45; index += 1) {
+    const endedAt = now - (45 - index) * 60_000;
+    const startedAt = endedAt - 30_000;
+    journeys.push({
+      id: index === 44 ? 'khoon-drive' : `walk-${index}`,
+      startedAt,
+      endedAt,
+      distanceM: index === 44 ? 8400 : 200,
+      points: [
+        { lat: 37.5, lng: 127.0, at: startedAt },
+        { lat: 37.51, lng: 127.02, at: endedAt },
+      ],
+      start: { lat: 37.5, lng: 127.0, label: '출발' },
+      end: { lat: 37.51, lng: 127.02, label: index === 44 ? '차량' : '도보' },
+    });
+  }
+  const saved = await accountCall(accounts, 'PUT', '/v1/account', {
+    accountKey: created.body.account.accountKey,
+    body: snapshot({ journeys }),
+  });
+  assert.equal(saved.status, 200);
+  assert.equal(saved.body.account.journeys.length, 40);
+  assert.equal(saved.body.account.journeys.some((item) => item.id === 'khoon-drive'), true);
 });

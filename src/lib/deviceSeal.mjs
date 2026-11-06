@@ -27,3 +27,25 @@ export async function openDeviceText(sealed) {
     return '';
   }
 }
+
+/** App-private file. Survives an APK update. A failed read must not look like an empty file. */
+export async function readDurableSession() {
+  if (!deviceSealAvailable()) return { ok: false, raw: '' };
+  try {
+    const result = await DeviceSeal.readSession();
+    if (!result || typeof result.raw !== 'string') return { ok: false, raw: '' };
+    return { ok: true, raw: result.raw };
+  } catch {
+    return { ok: false, raw: '' };
+  }
+}
+
+export async function writeDurableSession(raw) {
+  if (!deviceSealAvailable() || typeof raw !== 'string') return false;
+  try {
+    await DeviceSeal.writeSession({ raw });
+    return true;
+  } catch {
+    return false;
+  }
+}

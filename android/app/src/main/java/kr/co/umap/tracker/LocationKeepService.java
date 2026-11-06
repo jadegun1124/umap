@@ -148,13 +148,16 @@ public class LocationKeepService {
     private static final JSONArray pendingPoints = new JSONArray();
     private static final JSONArray journal = new JSONArray();
     private static long lastEmittedAt = 0L;
+    private static boolean journalLoaded = false;
 
     public static void attach(Context context) {
         appContext = context.getApplicationContext();
+        loadJournal(appContext);
     }
 
     public static void setSink(Sink next) {
         sink = next;
+        if (appContext != null) loadJournal(appContext);
         if (next != null) replayJournal();
     }
 
@@ -670,10 +673,44 @@ public class LocationKeepService {
         while (pendingPoints.length() > 0) pendingPoints.remove(0);
         while (journal.length() > 0) journal.remove(0);
         filterLoaded = true;
+        journalLoaded = true;
         prefs(context).edit()
             .remove("stable").remove("last").remove("lastAt").remove("heartbeatAt").remove("lastFixAt")
             .remove("beatLatE6").remove("beatLngE6").remove("beatAcc")
+            .remove("journal")
             .apply();
+    }
+
+    /** The in-memory journal dies when an update kills the process. The sealed file does not. */
+    private static void loadJournal(Context context) {
+        if (journalLoaded || context == null) return;
+        journalLoaded = true;
+        String raw = prefs(context).getString("journal", "");
+        if (raw == null || raw.isEmpty()) return;
+        if (raw.startsWith("umap-device-seal:")) raw = DeviceCipher.open(raw);
+        if (raw == null || raw.isEmpty()) return;
+        try {
+            JSONArray stored = new JSONArray(raw);
+            for (int index = 0; index < stored.length(); index += 1) {
+                JSONObject point = stored.optJSONObject(index);
+                if (point == null) continue;
+                journal.put(point);
+                pendingPoints.put(new JSONObject(point.toString()));
+            }
+        } catch (Exception ignored) {
+            /* The next fix starts a new journal. */
+        }
+    }
+
+    private static void saveJournal(Context context) {
+        if (context == null) return;
+        try {
+            String sealed = DeviceCipher.seal(journal.toString());
+            if (sealed == null || sealed.isEmpty()) return;
+            prefs(context).edit().putString("journal", sealed).apply();
+        } catch (Exception ignored) {
+            /* Keep the previous file if this seal fails. */
+        }
     }
 
     private static Location readStoredFix(SharedPreferences stored, String key) {
@@ -818,6 +855,7 @@ public class LocationKeepService {
             journal.put(new JSONObject(point.toString()));
             while (pendingPoints.length() > JOURNAL_CAP) pendingPoints.remove(0);
             while (journal.length() > JOURNAL_CAP) journal.remove(0);
+            saveJournal(appContext);
             if (sink != null) {
                 emit(location, fixAt);
                 lastEmittedAt = fixAt;

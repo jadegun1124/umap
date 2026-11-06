@@ -6,6 +6,7 @@ import {
   PLAIN_SESSION_KEY,
   collectJsonSnapshots,
   commitDurableSession,
+  mergedSessionRaw,
   fillFromAccount,
   historyScore,
   parseStoredSession,
@@ -248,6 +249,23 @@ test('an empty backup keeps server history instead of sealing an empty list', as
   }, storage, 'ABCD2345EFGH');
   assert.equal(cleared.clearHome, true);
   assert.equal(cleared.keepHistory, true);
+});
+
+test('an update that clears web storage still restores the durable session', () => {
+  const now = Date.now();
+  const local = memoryStorage();
+  const tab = memoryStorage();
+  const rich = releaseSession('1.74.0', now);
+  const durable = JSON.stringify(rich);
+  tab.removeItem('umap_family_v1');
+  assert.equal(collectJsonSnapshots(local, tab).length, 0);
+  const merged = mergedSessionRaw(durable, JSON.stringify(emptySession()));
+  const kept = JSON.parse(merged);
+  assert.equal(kept.journeys.self[0].id, 'journey-1.74.0');
+  assert.equal(kept.tracks.self.length, 2);
+  assert.equal(kept.inviteCode, rich.inviteCode);
+  const again = mergedSessionRaw(merged, JSON.stringify(emptySession()));
+  assert.equal(JSON.parse(again).journeys.self[0].id, 'journey-1.74.0');
 });
 
 test('server history can fill an empty phone without a profile wipe', () => {

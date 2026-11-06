@@ -7,6 +7,8 @@
 // unread seal is never replaced by an empty session. A plain copy whose
 // journeys are already outside the 30-day window does not block a newer save.
 
+import { mergeJourneys, mergeRecordsById } from './historyMerge.mjs';
+import { mergeTrailPoints } from './trailParts.mjs';
 import { journeysWithinHistory, tracksWithinHistory, visitsWithinHistory } from './tracking.mjs';
 
 export const FAMILY_STORAGE_KEY = 'umap_family_v1';
@@ -151,6 +153,49 @@ export function commitDurableSession(localStorage, nextSession, nextRaw, options
   }
   localStorage.setItem(`${FAMILY_STORAGE_KEY}:at`, String(Date.now()));
   return { wrote: true, reason: 'written' };
+}
+
+function unionBags(previous, next, mergeList) {
+  const bags = new Set([
+    ...Object.keys(previous && typeof previous === 'object' ? previous : {}),
+    ...Object.keys(next && typeof next === 'object' ? next : {}),
+  ]);
+  const out = {};
+  for (const id of bags) {
+    const merged = mergeList(previous && previous[id], next && next[id]);
+    if (Array.isArray(merged) && merged.length) out[id] = merged;
+  }
+  return out;
+}
+
+/**
+ * Keep every journey, visit, and track point from both copies.
+ * An empty session after an update must not replace the copy that still has the ride.
+ * The caller does not delete the previous copy if this returns the previous raw.
+ */
+export function mergedSessionRaw(previousRaw, nextRaw) {
+  const previous = parseStoredSession(previousRaw);
+  const next = parseStoredSession(nextRaw);
+  if (!next) return previous ? previousRaw : '';
+  if (!previous) return nextRaw;
+  const nextLive = liveHistoryScore(next);
+  const nextIdentity = !!next.profile || (Array.isArray(next.members) && next.members.length > 0 && nextLive > 0);
+  const base = nextIdentity ? next : previous;
+  const merged = {
+    ...previous,
+    ...base,
+    profile: base.profile || previous.profile || next.profile || null,
+    members: Array.isArray(base.members) && base.members.length ? base.members : (previous.members || []),
+    inviteCode: base.inviteCode || previous.inviteCode,
+    permissions: base.permissions || previous.permissions,
+    journeys: unionBags(previous.journeys, next.journeys, mergeJourneys),
+    visits: unionBags(previous.visits, next.visits, mergeRecordsById),
+    tracks: unionBags(previous.tracks, next.tracks, (left, right) => {
+      const points = mergeTrailPoints(left, right);
+      return points.length > 4000 ? points.slice(-4000) : points;
+    }),
+  };
+  return JSON.stringify(merged);
 }
 
 /** Server history is a self list. Fill only the bags that are empty on this phone. */

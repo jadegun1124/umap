@@ -3,6 +3,7 @@ import { fixChannelSource, noteDiag } from '../../lib/diagLog.mjs';
 import { hasLocation, haversineMeters } from '../../lib/geo';
 import { isSelfEchoPlace } from '../../lib/peerFamily.mjs';
 import { placePriorName } from '../../lib/placeAlias.mjs';
+import { journeysToPublish } from '../../lib/historyMerge.mjs';
 import { buildDayRecord, liveMotionLabel } from '../../lib/tracking.mjs';
 import type { AcceptedFix } from '../../lib/tracking.mjs';
 import { readSharedPlaces, publishSharedPlace, subscribeSharedPlaces, type SharedPlace } from '../../services/familyShare';
@@ -482,7 +483,7 @@ export function useFamilyTracking(onFirstFix: (lat: number, lng: number) => void
       ...(point.staying === true ? { staying: true } : {}),
       ...(point.stayEnd === true ? { stayEnd: true } : {}),
     }));
-    const journeys = (current.journeys?.self || []).slice(0, 16).map((journey) => ({
+    const journeys = journeysToPublish(current.journeys?.self).map((journey) => ({
       id: journey.id,
       startedAt: journey.startedAt,
       endedAt: journey.endedAt,

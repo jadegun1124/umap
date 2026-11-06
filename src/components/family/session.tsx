@@ -2,15 +2,18 @@ import React, { createContext, useContext, useEffect, useReducer, useRef, useSta
 import { hasLocation, haversineMeters } from '../../lib/geo';
 import { applyAccountSnapshot, clearDeviceAccount, logoutLocalAccount, readStoredAccountKey } from '../../lib/accountRestore.mjs';
 import { resumeRoom } from '../../lib/keySyncPace.mjs';
-import { deviceSealAvailable, openDeviceText, sealDeviceText } from '../../lib/deviceSeal.mjs';
+import { deviceSealAvailable, openDeviceText, readDurableSession, sealDeviceText, writeDurableSession } from '../../lib/deviceSeal.mjs';
 import { openAccountSecrets } from '../../lib/familyVault.mjs';
+import { applyMemberTrail, mergeJourneys, mergeRecordsById } from '../../lib/historyMerge.mjs';
 import {
   FAMILY_STORAGE_KEY,
   clearPlainSession,
   collectJsonSnapshots,
   commitDurableSession,
   fillFromAccount,
-  needsHistoryRestore,
+  liveHistoryScore,
+  mergedSessionRaw,
+  parseStoredSession,
   readSeal,
 } from '../../lib/sessionDurable.mjs';
 import { cancelAccountBackup, loadFamilyAccount, scheduleAccountBackup } from '../../services/familyAccount';
@@ -66,6 +69,9 @@ let restoringDeviceSeal = false;
 let sealOpened = true;
 let appliedPlain = '';
 let sealEpoch = 0;
+let durableChecked = !deviceSealAvailable();
+let durableWritable = false;
+let durableHold = '';
 
 function cancelDeviceSealRestore() {
   sealEpoch += 1;
@@ -1385,17 +1391,20 @@ function reduceSession(state: Session, action: Action): Session {
       let changed = false;
       for (const trail of action.trails) {
         if (!isMemberId(trail.memberId) || trail.memberId === selfId) continue;
-        if ((revisions[trail.memberId] || 0) > trail.at) continue;
         const member = members.find((item) => item.id !== 'self' && item.publisherId === trail.memberId);
         if (!member) continue;
-        const sameAt = revisions[trail.memberId] === trail.at;
-        const sameLine = (tracks[member.id] || []).length === trail.points.length;
-        if (sameAt && sameLine && (journeys[member.id] || []).length === trail.journeys.length && member.moving === trail.moving) continue;
+        const applied = applyMemberTrail({
+          at: revisions[trail.memberId] || 0,
+          points: tracks[member.id] || [],
+          journeys: journeys[member.id] || [],
+          moving: member.moving === true,
+        }, trail);
+        if (!applied.changed) continue;
         changed = true;
-        revisions = { ...revisions, [trail.memberId]: trail.at };
-        tracks = { ...tracks, [member.id]: trail.points };
-        journeys = { ...journeys, [member.id]: trail.journeys };
-        members = members.map((item) => (item.id === member.id ? { ...item, moving: trail.moving } : item));
+        revisions = { ...revisions, [trail.memberId]: applied.at };
+        tracks = { ...tracks, [member.id]: applied.points };
+        journeys = { ...journeys, [member.id]: applied.journeys };
+        members = members.map((item) => (item.id === member.id ? { ...item, moving: applied.moving } : item));
       }
       if (!changed) return state;
       return { ...state, tracks, journeys, members, trailRevisions: revisions };
@@ -1555,21 +1564,19 @@ function reduceSession(state: Session, action: Action): Session {
     case 'logout':
       return fresh('login');
     case 'fill-history': {
-      const journeysEmpty = !Object.values(state.journeys || {}).some((list) => Array.isArray(list) && list.length > 0);
-      const visitsEmpty = !Object.values(state.visits || {}).some((list) => Array.isArray(list) && list.length > 0);
-      const nextJourneys = journeysEmpty && action.journeys.length
-        ? { ...state.journeys, ...(cleanJourneys({ self: action.journeys })) }
-        : state.journeys;
-      const nextVisits = visitsEmpty && action.visits.length
-        ? { ...state.visits, ...(cleanVisits({ self: action.visits })) }
-        : state.visits;
+      const currentJ = state.journeys?.self || [];
+      const currentV = state.visits?.self || [];
+      const nextJ = mergeJourneys(currentJ, cleanJourneys({ self: action.journeys }).self || []);
+      const nextV = mergeRecordsById(currentV, cleanVisits({ self: action.visits }).self || []);
+      const sameJ = nextJ.length === currentJ.length && nextJ.every((item, index) => item.id === currentJ[index]?.id && item.endedAt === currentJ[index]?.endedAt);
+      const sameV = nextV.length === currentV.length && nextV.every((item, index) => item.id === currentV[index]?.id);
       const nextHome = state.homeCleared ? state.home : (state.home || cleanHome(action.home));
-      if (nextJourneys === state.journeys && nextVisits === state.visits && nextHome === state.home) return state;
+      if (sameJ && sameV && nextHome === state.home) return state;
       return {
         ...state,
         historyLocked: false,
-        journeys: nextJourneys,
-        visits: nextVisits,
+        journeys: nextJ.length ? { ...state.journeys, self: nextJ } : state.journeys,
+        visits: nextV.length ? { ...state.visits, self: nextV } : state.visits,
         home: nextHome,
       };
     }
@@ -1689,6 +1696,7 @@ const FamilyContext = createContext<FamilyApi | null>(null);
 export function FamilyProvider({ children }: { children: React.ReactNode }) {
   const [state, dispatch] = useReducer(reducer, undefined, load);
   const [deviceReady, setDeviceReady] = useState(() => !pendingDeviceSeal);
+  const [durableNonce, setDurableNonce] = useState(0);
   const restoreOnce = useRef(false);
   const [historyPulse, setHistoryPulse] = useState(0);
   useEffect(() => {
@@ -1735,13 +1743,50 @@ export function FamilyProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
+    let cancel = false;
+    void readDurableSession().then((loaded) => {
+      if (cancel) return;
+      durableChecked = true;
+      durableWritable = !!(loaded && loaded.ok);
+      durableHold = loaded && typeof loaded.raw === 'string' ? loaded.raw : durableHold;
+      const parsed = parseStoredSession(durableHold);
+      if (parsed && liveHistoryScore(parsed) > liveHistoryScore(state)) {
+        try {
+          sessionStorage.setItem(STORAGE_KEY, durableHold);
+        } catch {
+          /* 탭 저장이 막혀도 파일 복사본은 다음 저장에서 다시 합친다 */
+        }
+        dispatch({ type: 'rehydrate' });
+      }
+      setDurableNonce(1);
+    });
+    return () => {
+      cancel = true;
+    };
+  }, []);
+
+  useEffect(() => {
     if (restoringDeviceSeal) return;
+    if (deviceSealAvailable() && !durableChecked) return;
     const epoch = sealEpoch;
     const raw = JSON.stringify({ ...state, mode: null });
+    const merged = mergedSessionRaw(durableHold, raw) || raw;
+    const mergedSession = parseStoredSession(merged);
+    if (mergedSession && liveHistoryScore(mergedSession) > liveHistoryScore(state)) {
+      durableHold = merged;
+      try {
+        sessionStorage.setItem(STORAGE_KEY, merged);
+      } catch {
+        /* 화면은 다음 rehydrate에서 파일을 다시 읽는다 */
+      }
+      if (durableWritable) void writeDurableSession(merged);
+      dispatch({ type: 'rehydrate' });
+      return;
+    }
     if (!state.profile && sealedSession()) return;
     let wrote = false;
     try {
-      const decision = commitDurableSession(typeof localStorage === 'undefined' ? null : localStorage, state, raw, {
+      const decision = commitDurableSession(typeof localStorage === 'undefined' ? null : localStorage, mergedSession || state, merged, {
         sealText: deviceSealAvailable() ? undefined : null,
         unreadSeal: !sealOpened,
       });
@@ -1754,9 +1799,11 @@ export function FamilyProvider({ children }: { children: React.ReactNode }) {
         return;
       }
       wrote = true;
-      sessionStorage.setItem(STORAGE_KEY, raw);
+      durableHold = merged;
+      if (durableWritable) void writeDurableSession(merged);
+      sessionStorage.setItem(STORAGE_KEY, merged);
       if (deviceSealAvailable()) {
-        void sealDeviceText(raw).then((sealed) => {
+        void sealDeviceText(merged).then((sealed) => {
           if (epoch !== sealEpoch) return;
           if (typeof sealed === 'string' && sealed.startsWith(DEVICE_SEAL_PREFIX)) {
             localStorage.setItem(STORAGE_KEY, sealed);
@@ -1772,10 +1819,10 @@ export function FamilyProvider({ children }: { children: React.ReactNode }) {
       /* 용량이 가득 차도 화면의 상태는 유지한다 */
     }
     if (wrote) scheduleAccountBackup(state);
-  }, [state]);
+  }, [state, durableNonce]);
 
   useEffect(() => {
-    if (!deviceReady || restoringDeviceSeal || !needsHistoryRestore(state)) return;
+    if (!deviceReady || restoringDeviceSeal) return;
     if (restoreOnce.current) return;
     const storage = typeof localStorage === 'undefined' ? null : localStorage;
     const beforeJ = Object.values(state.journeys || {}).reduce((sum, list) => sum + (Array.isArray(list) ? list.length : 0), 0);
