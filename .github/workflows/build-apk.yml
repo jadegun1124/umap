@@ -97,7 +97,7 @@ jobs:
       - name: Prepare APK Output
         run: |
           mkdir -p output
-          cp android/app/build/outputs/apk/release/app-release.apk output/kinnex-v1.75.0.apk
+          cp android/app/build/outputs/apk/release/app-release.apk output/kinnex-v1.81.0.apk
           echo "Output directory contents:"
           ls -lh output/
 
@@ -106,7 +106,7 @@ jobs:
           set -euo pipefail
           BUILD_TOOLS="$(ls -1 "$ANDROID_HOME/build-tools" | sort -V | tail -n 1)"
           APKSIGNER="$ANDROID_HOME/build-tools/${BUILD_TOOLS}/apksigner"
-          "$APKSIGNER" verify --print-certs output/kinnex-v1.75.0.apk | tee output/apk-certs.txt
+          "$APKSIGNER" verify --print-certs output/kinnex-v1.81.0.apk | tee output/apk-certs.txt
           python3 - <<'PY'
           import pathlib, re, subprocess
           certs = pathlib.Path("output/apk-certs.txt").read_text()
@@ -143,18 +143,19 @@ jobs:
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: kinnex-v1.75.0-apk
-          path: output/kinnex-v1.75.0.apk
+          name: kinnex-v1.81.0-apk
+          path: output/kinnex-v1.81.0.apk
           retention-days: 30
 
       - name: Create or Update GitHub Release with APK
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.75.0
-          name: 'Kinnex Android APK v1.75.0'
+          tag_name: v1.81.0
+          name: 'Kinnex Android APK v1.81.0'
           make_latest: true
           body: |
-            ### Kinnex 안드로이드 앱 1.75.0
+            ### Kinnex 안드로이드 앱 1.81.0
+            - 이 빌드는 1.75.0 코드로 롤백한 것입니다. 1.76.0부터 1.80.0까지의 지도 변경은 들어 있지 않습니다.
             - 앱을 업데이트해도 이동 궤적과 기록은 이 폰의 파일에 남습니다. 기록은 id로 합치고, 빈 목록이나 더 짧은 목록은 기존 여정을 지우지 않습니다. 서버에 남은 암호문은 다시 받아 합칩니다.
             - 이름·배터리·장소 창은 그 사람의 원 바로 위에 붙습니다. 여러 명이 가까우면 창을 위로 쌓고, 원까지 선으로 이어 창이 원과 떨어져 보이지 않습니다. 지도를 옮기거나 확대해도 창이 원을 따라가고, 원 중심은 위도·경도에 그대로입니다.
             - 런처 아이콘은 KINVO 그림이 가장자리까지 채워집니다. 삼성 홈 화면의 스쿼클 안에 작은 사각형이 남지 않습니다.
@@ -175,14 +176,14 @@ jobs:
             - 초대 링크의 첫 버튼은 카카오톡으로 보내기입니다. 카카오톡이 없으면 다른 앱 공유로 넘어가고, 링크 복사는 그대로 있습니다.
             - 지도를 보고 있는 동안 고른 사람을 따라갑니다. 지도를 옮기면 멈추고, 내 위치로를 누르면 다시 따라갑니다.
             - 위치 서버가 503이면 재시도는 5초, 15초, 45초, 2분, 그다음 10분까지 늘어납니다. 성공하면 다시 이동 30초, 머무름 60초입니다.
-            - 설정에 앱 업데이트 버튼이 있습니다. 예: 앱 버전 1.75.0 (81).
+            - 설정에 앱 업데이트 버튼이 있습니다. 예: 앱 버전 1.81.0 (87).
             - 회사 홈 (GitHub Pages): https://jadegun1124.github.io/kinnex/
             - 이 파일: GitHub Releases APK. Google Play에는 없습니다.
-            - 다운로드: https://github.com/jadegun1124/umap/releases/download/v1.75.0/kinnex-v1.75.0.apk
+            - 다운로드: https://github.com/jadegun1124/umap/releases/download/v1.81.0/kinnex-v1.81.0.apk
             - 표시 이름: Kinnex
             - 패키지: `kr.co.umap.tracker`
-            - versionName: 1.75.0
-            - versionCode: 81
-          files: output/kinnex-v1.75.0.apk
+            - versionName: 1.81.0
+            - versionCode: 87
+          files: output/kinnex-v1.81.0.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
