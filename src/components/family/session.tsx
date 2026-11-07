@@ -15,6 +15,7 @@ import {
   mergedSessionRaw,
   parseStoredSession,
   readSeal,
+  shouldRehydrateMerged,
 } from '../../lib/sessionDurable.mjs';
 import { cancelAccountBackup, loadFamilyAccount, scheduleAccountBackup } from '../../services/familyAccount';
 import { deviceProfileKey, localProfile } from '../../lib/localProfile.mjs';
@@ -73,6 +74,11 @@ let durableChecked = !deviceSealAvailable();
 let durableWritable = false;
 let durableHold = '';
 let durableEpoch = 0;
+/** liveHistoryScore of the merged copy last applied by rehydrate. Stops a rehydrate loop. */
+let rehydratedMergedScore = -1;
+/** Persist is a full JSON merge, file write, and Keystore seal. Coalesce bursts of fixes and polls. */
+const PERSIST_DEBOUNCE_MS = 1200;
+const PERSIST_MAX_WAIT_MS = 5000;
 
 function cancelDeviceSealRestore() {
   sealEpoch += 1;
@@ -84,6 +90,7 @@ function cancelDeviceSealRestore() {
 function forgetDurableSession() {
   durableEpoch += 1;
   durableHold = '';
+  rehydratedMergedScore = -1;
   void writeDurableSession('');
 }
 const SESSION_KEYS = [STORAGE_KEY, `${STORAGE_KEY}:admin`, `${STORAGE_KEY}:managed`] as const;
@@ -342,7 +349,7 @@ function cleanVisits(value: unknown): Record<string, Visit[]> {
         source: visit.source === 'geocode' ? 'geocode' : 'coords',
       });
     }
-    if (clean.length > 0) visits[id] = clean.slice(-40);
+    if (clean.length > 0) visits[id] = clean;
   }
   return visits;
 }
@@ -373,7 +380,7 @@ function cleanJourneys(value: unknown): Record<string, Journey[]> {
       if (journey.cloud === true || journey.cloud === false) stored.cloud = journey.cloud;
       clean.push(stored);
     }
-    if (clean.length > 0) journeys[id] = clean.slice(-80);
+    if (clean.length > 0) journeys[id] = clean;
   }
   return journeys;
 }
@@ -1778,61 +1785,91 @@ export function FamilyProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
+  const persistRef = useRef<(() => void) | null>(null);
+  const persistSince = useRef(0);
   useEffect(() => {
-    if (restoringDeviceSeal) return;
-    if (deviceSealAvailable() && !durableChecked) return;
-    const epoch = sealEpoch;
-    const raw = JSON.stringify({ ...state, mode: null });
-    const merged = mergedSessionRaw(durableHold, raw) || raw;
-    const mergedSession = parseStoredSession(merged);
-    if (mergedSession && liveHistoryScore(mergedSession) > liveHistoryScore(state)) {
-      durableHold = merged;
-      try {
-        sessionStorage.setItem(STORAGE_KEY, merged);
-      } catch {
-        /* 화면은 다음 rehydrate에서 파일을 다시 읽는다 */
-      }
-      if (durableWritable) void writeDurableSession(merged);
-      dispatch({ type: 'rehydrate' });
-      return;
-    }
-    if (!state.profile && sealedSession()) return;
-    let wrote = false;
-    try {
-      const decision = commitDurableSession(typeof localStorage === 'undefined' ? null : localStorage, mergedSession || state, merged, {
-        sealText: deviceSealAvailable() ? undefined : null,
-        unreadSeal: !sealOpened,
-      });
-      if (!decision.wrote) {
-        if (decision.plain && decision.plain !== appliedPlain) {
-          appliedPlain = decision.plain;
-          sessionStorage.setItem(STORAGE_KEY, decision.plain);
-          dispatch({ type: 'rehydrate' });
+    const persist = () => {
+      persistRef.current = null;
+      persistSince.current = 0;
+      if (restoringDeviceSeal) return;
+      if (deviceSealAvailable() && !durableChecked) return;
+      const epoch = sealEpoch;
+      const raw = JSON.stringify({ ...state, mode: null });
+      const merged = mergedSessionRaw(durableHold, raw) || raw;
+      const mergedSession = parseStoredSession(merged);
+      const mergedScore = mergedSession ? liveHistoryScore(mergedSession) : 0;
+      if (mergedSession && shouldRehydrateMerged(mergedScore, liveHistoryScore(state), rehydratedMergedScore)) {
+        rehydratedMergedScore = mergedScore;
+        durableHold = merged;
+        try {
+          sessionStorage.setItem(STORAGE_KEY, merged);
+        } catch {
+          /* 화면은 다음 rehydrate에서 파일을 다시 읽는다 */
         }
+        if (durableWritable) void writeDurableSession(merged);
+        dispatch({ type: 'rehydrate' });
         return;
       }
-      wrote = true;
-      durableHold = merged;
-      if (durableWritable) void writeDurableSession(merged);
-      sessionStorage.setItem(STORAGE_KEY, merged);
-      if (deviceSealAvailable()) {
-        void sealDeviceText(merged).then((sealed) => {
-          if (epoch !== sealEpoch) return;
-          if (typeof sealed === 'string' && sealed.startsWith(DEVICE_SEAL_PREFIX)) {
-            localStorage.setItem(STORAGE_KEY, sealed);
-            localStorage.setItem(`${STORAGE_KEY}:at`, String(Date.now()));
-          }
+      if (!state.profile && sealedSession()) return;
+      let wrote = false;
+      try {
+        const decision = commitDurableSession(typeof localStorage === 'undefined' ? null : localStorage, mergedSession || state, merged, {
+          sealText: deviceSealAvailable() ? undefined : null,
+          unreadSeal: !sealOpened,
         });
+        if (!decision.wrote) {
+          if (decision.plain && decision.plain !== appliedPlain) {
+            appliedPlain = decision.plain;
+            sessionStorage.setItem(STORAGE_KEY, decision.plain);
+            dispatch({ type: 'rehydrate' });
+          }
+          return;
+        }
+        wrote = true;
+        durableHold = merged;
+        if (durableWritable) void writeDurableSession(merged);
+        sessionStorage.setItem(STORAGE_KEY, merged);
+        if (deviceSealAvailable()) {
+          void sealDeviceText(merged).then((sealed) => {
+            if (epoch !== sealEpoch) return;
+            if (typeof sealed === 'string' && sealed.startsWith(DEVICE_SEAL_PREFIX)) {
+              localStorage.setItem(STORAGE_KEY, sealed);
+              localStorage.setItem(`${STORAGE_KEY}:at`, String(Date.now()));
+            }
+          });
+        }
+        localStorage.removeItem(`${STORAGE_KEY}:admin`);
+        localStorage.removeItem(`${STORAGE_KEY}:managed`);
+        localStorage.removeItem(`${STORAGE_KEY}:admin:at`);
+        localStorage.removeItem(`${STORAGE_KEY}:managed:at`);
+      } catch {
+        /* 용량이 가득 차도 화면의 상태는 유지한다 */
       }
-      localStorage.removeItem(`${STORAGE_KEY}:admin`);
-      localStorage.removeItem(`${STORAGE_KEY}:managed`);
-      localStorage.removeItem(`${STORAGE_KEY}:admin:at`);
-      localStorage.removeItem(`${STORAGE_KEY}:managed:at`);
-    } catch {
-      /* 용량이 가득 차도 화면의 상태는 유지한다 */
-    }
-    if (wrote) scheduleAccountBackup(state);
+      if (wrote) scheduleAccountBackup(state);
+    };
+    persistRef.current = persist;
+    const now = Date.now();
+    if (!persistSince.current) persistSince.current = now;
+    const wait = Math.max(0, Math.min(PERSIST_DEBOUNCE_MS, persistSince.current + PERSIST_MAX_WAIT_MS - now));
+    const timer = window.setTimeout(persist, wait);
+    return () => window.clearTimeout(timer);
   }, [state, durableNonce]);
+
+  useEffect(() => {
+    // Leaving the app must not lose the last debounced save.
+    const flush = () => {
+      const pending = persistRef.current;
+      if (pending) pending();
+    };
+    const onVisibility = () => { if (document.visibilityState === 'hidden') flush(); };
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('pagehide', flush);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('pagehide', flush);
+      flush();
+    };
+  }, []);
 
   useEffect(() => {
     if (!deviceReady || restoringDeviceSeal) return;

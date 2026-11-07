@@ -6,6 +6,7 @@ export function parseStoredSession(raw: string): Record<string, unknown> | null;
 export function recordBags(session: unknown): { journeys: number; visits: number; tracks: number };
 export function historyScore(session: unknown): number;
 export function liveHistoryScore(session: unknown, now?: number): number;
+export function shouldRehydrateMerged(mergedScore: number, stateScore: number, lastRehydratedScore: number): boolean;
 export function needsHistoryRestore(session: unknown): boolean;
 export function mergedSessionRaw(previousRaw: string, nextRaw: string): string;
 export function readSeal(storage: { getItem(key: string): string | null } | null): string;

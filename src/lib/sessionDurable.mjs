@@ -63,6 +63,18 @@ export function liveHistoryScore(session, now = Date.now()) {
   }
 }
 
+/**
+ * A merged copy that is richer than the screen is applied by one rehydrate.
+ * load() may still trim it (its cleaners are stricter than the merge), so the
+ * screen can stay poorer after the rehydrate. Rehydrating again for the same
+ * merged score would loop forever and freeze the app (1.75 ANR). The caller
+ * then writes the merged copy instead, so no record is dropped from storage.
+ */
+export function shouldRehydrateMerged(mergedScore, stateScore, lastRehydratedScore) {
+  if (!(mergedScore > stateScore)) return false;
+  return mergedScore !== lastRehydratedScore;
+}
+
 /** Journeys and visits are the 기록 tab. Tracks alone still count as stored history. */
 export function needsHistoryRestore(session) {
   const bags = recordBags(session);
