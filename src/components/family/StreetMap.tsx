@@ -464,6 +464,11 @@ export const StreetMap = forwardRef<StreetMapHandle, {
       if (moveFrame) window.cancelAnimationFrame(moveFrame);
       if (endFrame) window.cancelAnimationFrame(endFrame);
       window.clearTimeout(moveSafety);
+      if (movingRef.current || userGesture) {
+        userGesture = false;
+        movingRef.current = false;
+        onGestureEndRef.current?.();
+      }
       if (layoutFrameRef.current) window.cancelAnimationFrame(layoutFrameRef.current);
       observer.disconnect();
       setReady(false);

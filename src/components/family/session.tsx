@@ -697,7 +697,7 @@ type Action =
   | { type: 'leave-guardian'; id: string }
   | { type: 'dismiss-invite' }
   | { type: 'mark-alerts-read' }
-  | { type: 'update-self'; lat: number; lng: number; accuracyM: number; speedMps: number | null }
+  | { type: 'update-self'; lat: number; lng: number; accuracyM: number; speedMps: number | null; at: number }
   | { type: 'set-battery'; battery: number | null; charging: boolean | null }
   | { type: 'roll-day'; now: number }
   | { type: 'set-share-self'; share: boolean }
@@ -1024,7 +1024,7 @@ function reduceSession(state: Session, action: Action): Session {
     case 'mark-alerts-read':
       return { ...state, notices: state.notices.map((item) => ({ ...item, read: true })) };
     case 'update-self': {
-      const at = Date.now();
+      const at = Number.isFinite(action.at) ? action.at : Date.now();
       const speed = typeof action.speedMps === 'number' && Number.isFinite(action.speedMps) ? action.speedMps : null;
       const self = state.members.find((member) => member.id === 'self');
       const sample = {
@@ -1963,7 +1963,7 @@ export function FamilyProvider({ children }: { children: React.ReactNode }) {
     mergeRooms: () => dispatchMap({ type: 'merge-family-rooms' }),
     dismissInvite: () => dispatchMap({ type: 'dismiss-invite' }),
     markAlertsRead: () => dispatchMap({ type: 'mark-alerts-read' }),
-    updateSelf: (lat, lng, accuracyM, speedMps) => dispatchMap({ type: 'update-self', lat, lng, accuracyM, speedMps: speedMps ?? null }),
+    updateSelf: (lat, lng, accuracyM, speedMps) => dispatchMap({ type: 'update-self', lat, lng, accuracyM, speedMps: speedMps ?? null, at: Date.now() }),
     setBattery: (battery, charging) => dispatchMap({ type: 'set-battery', battery, charging }),
     rollDay: (now) => dispatchMap({ type: 'roll-day', now }),
     setShareSelf: (share) => dispatchMap({ type: 'set-share-self', share }),
