@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { familyMapShowsTrail, memberLiveLines, mainOverviewTrails, recordsDayTrails, screenMapTrails } from './mapTrail.mjs';
+import { familyMapShowsTrail, memberLiveLines, mainOverviewTrails, recordsDayTrails } from './mapTrail.mjs';
 import { liveTrailDrawable, liveTrailPoints, settleTrailPoint, trailDrawParts, trailSegmentDashed, WALK_STAY_LABEL_MS } from './tracking.mjs';
 import { settleTrailPoint as settle112, trailDrawParts as draw112 } from './tracking112.fixture.mjs';
 
@@ -28,17 +28,6 @@ test('family overview draws a live trail only while that segment is still open',
 test('closing records keeps a trail that is still live and hides one that was archived', () => {
   assert.equal(familyMapShowsTrail({ viewingRecords: false, detailOpen: true, showTrail: true, member: self, liveDrawable: true }), true);
   assert.equal(familyMapShowsTrail({ viewingRecords: false, detailOpen: true, showTrail: true, member: self, liveDrawable: false }), false);
-});
-
-test('the records list does not build a map line for every journey', () => {
-  const saved = Array.from({ length: 40 }, (_, index) => ({ lat: 37.5, lng: 127 + index * 0.01 }));
-  const detail = [{ lat: 37.1, lng: 127.1 }, { lat: 37.2, lng: 127.2 }];
-  const live = [[{ lat: 37.4, lng: 127.4 }, { lat: 37.41, lng: 127.41 }]];
-  assert.deepEqual(screenMapTrails({ viewingRecords: true, detailOpen: false, detailPoints: saved, liveLines: live }), []);
-  assert.deepEqual(screenMapTrails({ viewingRecords: true, detailOpen: true, detailPoints: detail, liveLines: live }), [detail]);
-  assert.equal(screenMapTrails({ viewingRecords: true, detailOpen: true, detailPoints: [detail[0]], liveLines: live }).length, 0);
-  assert.equal(screenMapTrails({ viewingRecords: false, detailOpen: false, detailPoints: detail, liveLines: live }), live);
-  assert.equal(saved.length, 40);
 });
 
 test('records view still draws that person trail', () => {

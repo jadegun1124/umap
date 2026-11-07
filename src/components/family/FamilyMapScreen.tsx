@@ -9,7 +9,7 @@ import { backupFamilyAccount, cancelAccountBackup, deleteFamilyAccount, linkKaka
 import { buildInviteLink, formatClock, hasLocation, haversineMeters, shouldAlertLeave } from '../../lib/geo';
 import { buildGroupInviteLink, parseInviteUrl, syncTokenFromInviteFragment } from '../../lib/inviteLink.mjs';
 import { ALWAYS_GUIDE_DISMISSED_KEY, CHAT_NOTIFY_ASKED_KEY, KEEP_PERMISSION_ASKED_KEY, KEEP_START_ASKED_KEY, keepEntryPrompt, markSessionFlag, readSessionFlag } from '../../lib/systemSettings.mjs';
-import { familyMapShowsTrail, memberLiveLines, recordsDayTrails, screenMapTrails } from '../../lib/mapTrail.mjs';
+import { familyMapShowsTrail, memberLiveLines, recordsDayTrails } from '../../lib/mapTrail.mjs';
 import { noteDiag } from '../../lib/diagLog.mjs';
 import { shouldAutoFitRecord } from '../../lib/recordMapFit.mjs';
 import { createMapFollow, followTargetId, noteFollowTarget, noteRecenter, noteUserDrag, planFollowPan, recenterLabel } from '../../lib/mapFollow.mjs';
@@ -24,9 +24,9 @@ import { isMemberId } from '../../lib/sharedIdentity.mjs';
 import { Capacitor } from '@capacitor/core';
 import { CHAT_LIST_POLL_MS } from '../../lib/keySyncPace.mjs';
 import { abandonFamilySync, currentSyncPhase, deleteFamilyRoomRemote, familySyncConfigured, familySyncUrl, fetchMyDirectThreads, registerRoomPush, revokeFamilyPlace, rotateRemovedMember, splitSyncToken, startAdminRemoteSync, startSyncMonitor, subscribeSyncPhase, syncRetryDelay, syncTokenFor, type SyncPhase } from '../../services/familySync';
-import { KEEP_RESTART_HOLD_MS, isSamsungMaker, keepBanner, keepBannerVisible, keepRestartStatus, nextKeepPhase, serviceAlive } from '../../lib/keepBanner.mjs';
+import { KEEP_RESTART_HOLD_MS, keepBanner, keepBannerVisible, keepRestartStatus, nextKeepPhase, serviceAlive } from '../../lib/keepBanner.mjs';
 import { OLD_APP_PLACE_LABEL, syncBannerText } from '../../lib/syncBanner.mjs';
-import { consumePendingChat, listenChatOpen, openAppSettings, openSamsungPowerSettings, overlayPermissionGranted, umapLocation, umapLocationNative } from '../../services/umapLocation';
+import { consumePendingChat, listenChatOpen, openAppSettings, overlayPermissionGranted, umapLocation, umapLocationNative } from '../../services/umapLocation';
 import { sounds } from '../../utils/audio';
 import { DEFAULT_CENTER, type GuardianLink, type HomeZone, type Member, type Session } from '../../types/family';
 import { AlwaysAllowGuide, AlwaysAllowMapHint } from './AlwaysAllowGuide';
@@ -39,7 +39,6 @@ import { AlwaysAllowNotice } from './AlwaysAllowNotice';
 import { InviteQrImage, InviteQrScan } from './InviteQr';
 import { StreetMap, type StreetMapHandle } from './StreetMap';
 import { JourneyCards, JourneyScrubber } from './JourneyCards';
-import { RecordsBoundary } from './RecordsBoundary';
 import { FamilyChatSheet, type DirectChatTarget } from './FamilyChatSheet';
 import { MemberAvatar } from './MemberAvatar';
 import { PhotoPicker } from './ProfilePhoto';
@@ -78,9 +77,6 @@ export function FamilyMapScreen() {
   useEffect(() => {
     familyRef.current = family;
   });
-  useEffect(() => () => {
-    familyRef.current.endMapGesture();
-  }, []);
   const notifyOk = state.permissions.notifications === 'granted';
   const fittedShare = useRef(false);
   const [syncPhase, setSyncPhase] = useState<SyncPhase>(() => currentSyncPhase());
@@ -116,7 +112,7 @@ export function FamilyMapScreen() {
   const [keepPhase, setKeepPhase] = useState<'idle' | 'starting' | 'on' | 'blocked'>('idle');
   const keepDismissRef = useRef<{ kind: string; at: number } | null>(null);
   const keepPhaseRef = useRef<{ phase: 'idle' | 'starting' | 'on' | 'blocked'; until: number }>({ phase: 'idle', until: 0 });
-  const [keepLive, setKeepLive] = useState<{ battery: boolean | null; running: boolean; location: string; samsung: boolean }>({ battery: null, running: false, location: '', samsung: false });
+  const [keepLive, setKeepLive] = useState<{ battery: boolean | null; running: boolean; location: string }>({ battery: null, running: false, location: '' });
   const [profileOpen, setProfileOpen] = useState(false);
   const [recordId, setRecordId] = useState<string | null>(null);
   const [managedSettings, setManagedSettings] = useState(false);
@@ -177,12 +173,10 @@ export function FamilyMapScreen() {
           lastFixAt: status.lastFixAt,
           now: Date.now(),
         });
-        const samsung = status.samsung === true || isSamsungMaker(status.manufacturer);
         setKeepLive({
           battery: status.batteryUnrestricted === false ? false : status.batteryUnrestricted === true ? true : null,
           running: alive,
           location,
-          samsung,
         });
         const banner = keepBannerVisible(keepBanner({
           native: true,
@@ -195,7 +189,6 @@ export function FamilyMapScreen() {
           locationMode: location,
           batteryUnrestricted: status.batteryUnrestricted,
           reason: status.reason || '',
-          manufacturer: status.manufacturer || (samsung ? 'samsung' : ''),
         }), keepDismissRef.current, Date.now());
         setKeepHint(banner);
         const nextPhase = nextKeepPhase(keepPhaseRef.current, { alive, banner, now: Date.now() });
@@ -750,8 +743,7 @@ export function FamilyMapScreen() {
     () => collapseIndoorStayDisplay(detailId === 'open' ? openMapLine : detailJourney?.points ?? []),
     [detailId, detailJourney, openMapLine],
   );
-  // Opening records does not paint the live line, so that simplify stays off this path.
-  const liveDrawable = viewingRecords ? false : liveTrailDrawable(liveLine, dayNow);
+  const liveDrawable = liveTrailDrawable(liveLine, dayNow);
   const showPath = familyMapShowsTrail({
     viewingRecords,
     detailOpen,
@@ -759,31 +751,24 @@ export function FamilyMapScreen() {
     member: selected,
     liveDrawable,
   });
-  const liveLines = useMemo(() => {
-    if (viewingRecords) return [];
+  const mapTrails = useMemo(() => {
+    if (detailOpen) return detailPoints.length >= 2 ? [detailPoints] : [];
+    if (viewingRecords) {
+      if (!showPath || !selected) return [];
+      const saved = recordsDayTrails({ journeys: dayJourneys, livePoints: [], liveDrawable: false });
+      if (pathDay !== liveDay) return saved;
+      return saved.concat(overviewLinesFor(selected, state.tracks, now, liveDay, false));
+    }
     const lines = [];
     for (const member of state.members) {
       for (const line of overviewLinesFor(member, state.tracks, now, liveDay)) lines.push(line);
     }
     return lines;
-  }, [liveDay, now, state.members, state.tracks, viewingRecords]);
-  const mapTrails = useMemo(
-    () => screenMapTrails({ viewingRecords, detailOpen, detailPoints, liveLines }),
-    [detailOpen, detailPoints, liveLines, viewingRecords],
-  );
-  const trailDiagKey = useRef('');
+  }, [dayJourneys, detailOpen, detailPoints, liveDay, now, pathDay, selected, showPath, state.members, state.tracks, viewingRecords]);
   useEffect(() => {
     if (viewingRecords) return;
-    const reports = state.members.map((member) => ({
-      member,
-      report: memberLiveLines(member, state.tracks, now, liveDay),
-    }));
-    const signature = reports.map(({ member, report }) => (
-      `${member.id}:${report.reason}:${report.stored}:${report.live}:${report.lines.length}`
-    )).join('|');
-    if (signature === trailDiagKey.current) return;
-    trailDiagKey.current = signature;
-    for (const { member, report } of reports) {
+    for (const member of state.members) {
+      const report = memberLiveLines(member, state.tracks, now, liveDay);
       noteDiag({
         kind: 'trail',
         member: member.id === 'self' ? 'self' : 'family',
@@ -844,10 +829,6 @@ export function FamilyMapScreen() {
     followRef.current = planned.state;
     if (planned.pan) mapRef.current?.followTo(planned.pan.lat, planned.pan.lng);
   }, [awaitingFamilyFit, familyFitPending, followId, followLat, followLng, mapShown]);
-  const overlayKey = `${followOn ? 1 : 0}|${placingHome ? 1 : 0}|${keepHint ? keepHint.kind : ''}`;
-  useEffect(() => {
-    mapRef.current?.nudgeLayout();
-  }, [overlayKey]);
   const recenterFollow = () => {
     followRef.current = noteRecenter(followRef.current);
     setFollowOn(true);
@@ -954,11 +935,6 @@ export function FamilyMapScreen() {
   const openBatterySettings = () => {
     void askBattery().then((result) => setSettingsNote(result.note));
   };
-  const openSamsungPower = () => {
-    void openSamsungPowerSettings().then((result) => {
-      if (result.note) setSettingsNote(result.note);
-    });
-  };
   useEffect(() => consumeAndroidBack(() => {
     if (shareAsk) {
       setShareAsk(false);
@@ -1047,7 +1023,6 @@ export function FamilyMapScreen() {
             home={detailOpen ? null : (draftHome ?? (showZone ? state.home : null))}
             trails={mapTrails}
             trailColor="#0084FF"
-            solidTrails={detailOpen}
             selectedId={selected?.id}
             onSelect={(id) => {
               const member = state.members.find((item) => item.id === id);
@@ -1060,11 +1035,7 @@ export function FamilyMapScreen() {
             }}
             onGesture={() => {
               followRef.current = noteUserDrag(followRef.current);
-              familyRef.current.beginMapGesture();
-            }}
-            onGestureEnd={() => {
-              familyRef.current.endMapGesture();
-              setFollowOn(followRef.current.following);
+              setFollowOn(false);
             }}
             onMove={(next) => {
               if (!placingRef.current) return;
@@ -1080,7 +1051,6 @@ export function FamilyMapScreen() {
           <>
             <button
               type="button"
-              data-map-obstacle=""
               aria-label="메뉴"
               onClick={() => setMenuOpen(true)}
               className="absolute left-3 top-3 z-30 flex h-11 w-11 items-center justify-center rounded-full bg-white shadow-md"
@@ -1089,7 +1059,6 @@ export function FamilyMapScreen() {
             </button>
           <button
             type="button"
-            data-map-obstacle=""
             aria-label="알림"
             onClick={() => setAlertsOpen(true)}
             className="absolute left-16 top-3 z-30 flex h-11 w-11 items-center justify-center rounded-full bg-white shadow-md"
@@ -1104,7 +1073,7 @@ export function FamilyMapScreen() {
           )}
 
           {(keepHint || keepPhase !== 'idle') && !placingHome && (
-            <div data-map-obstacle="" className="absolute inset-x-4 top-16 z-30 rounded-2xl bg-white px-4 py-3 text-left shadow">
+            <div className="absolute inset-x-4 top-16 z-30 rounded-2xl bg-white px-4 py-3 text-left shadow">
               <div className="flex items-start justify-between gap-2">
                 <p className="text-sm font-black text-slate-900">{keepHint ? keepHint.title : '위치 유지'}</p>
                 <button
@@ -1151,15 +1120,6 @@ export function FamilyMapScreen() {
                       {keepHint.settingsLabel}
                     </button>
                   )}
-                  {keepHint.samsungLabel && (
-                    <button
-                      type="button"
-                      onClick={openSamsungPower}
-                      className="rounded-full bg-slate-100 px-3 py-2 text-xs font-bold text-slate-800"
-                    >
-                      {keepHint.samsungLabel}
-                    </button>
-                  )}
                 </div>
               )}
             </div>
@@ -1173,7 +1133,7 @@ export function FamilyMapScreen() {
               }}
             />
           )}
-          <div data-map-obstacle="" className="absolute right-3 top-3 z-30 flex flex-col gap-2">
+          <div className="absolute right-3 top-3 z-30 flex flex-col gap-2">
             <RoundButton label="안심존 표시" onClick={() => setShowZone((value) => !value)}>
               <Home className={`h-5 w-5 ${showZone ? 'text-[#0084FF]' : 'text-slate-400'}`} />
             </RoundButton>
@@ -1214,7 +1174,7 @@ export function FamilyMapScreen() {
           </div>
 
           {(syncBanner || tracking.waiting) && (
-            <p data-map-obstacle="" className="absolute inset-x-3 bottom-16 z-30 rounded-2xl bg-amber-50 px-3 py-2 text-[11px] font-semibold leading-4 text-amber-950 shadow">
+            <p className="absolute inset-x-3 bottom-16 z-30 rounded-2xl bg-amber-50 px-3 py-2 text-[11px] font-semibold leading-4 text-amber-950 shadow">
               {tracking.waiting}
               {tracking.waiting && syncBanner ? ' ' : ''}
               {syncBanner}
@@ -1222,7 +1182,6 @@ export function FamilyMapScreen() {
           )}
           <button
             type="button"
-            data-map-obstacle=""
             onClick={sirenOn ? stopIncoming : triggerSos}
             className={`absolute bottom-3 left-3 z-30 rounded-full px-5 py-4 text-base font-black text-white shadow-lg ${sirenOn ? 'bg-slate-900' : 'bg-red-600'}`}
           >
@@ -1250,16 +1209,14 @@ export function FamilyMapScreen() {
           {!followOn && !detailOpen && !placingHome && (
             <button
               type="button"
-              data-map-obstacle=""
               onClick={recenterFollow}
-              className="absolute bottom-36 left-1/2 z-30 -translate-x-1/2 rounded-full bg-white px-4 py-2 text-sm font-black text-[#0084FF] shadow-md"
+              className="absolute left-1/2 top-[38%] z-30 -translate-x-1/2 rounded-full bg-white px-4 py-2 text-sm font-black text-[#0084FF] shadow-md"
             >
               {recenterLabel(followId, followMember?.name)}
             </button>
           )}
           <button
             type="button"
-            data-map-obstacle=""
             aria-label="가족 추가"
             onClick={() => setSheet('add')}
             className="absolute bottom-3 right-3 z-30 flex h-12 w-12 items-center justify-center rounded-full bg-[#0084FF] text-white shadow-lg"
@@ -1278,7 +1235,7 @@ export function FamilyMapScreen() {
                 <ChevronLeft className="h-5 w-5" />
                 기록
               </button>
-              <div data-map-obstacle="" className="absolute right-3 top-3 z-30 flex flex-col gap-2">
+              <div className="absolute right-3 top-3 z-30 flex flex-col gap-2">
                 <RoundButton label="확대" onClick={() => mapRef.current?.zoomBy(1)}>
                   <Plus className="h-5 w-5" />
                 </RoundButton>
@@ -1348,16 +1305,14 @@ export function FamilyMapScreen() {
               </button>
             )}
             <div className="mt-3 space-y-3">
-              <RecordsBoundary key={`${recordId}:${activeHistoryDay}`}>
-                <JourneyCards
-                  journeys={dayJourneys}
-                  open={openJourney}
-                  selectedId={detailId}
-                  onSelect={(id) => openDetail(id, false)}
-                  onPlay={(id) => openDetail(id, true)}
-                />
-                <TodayRecord visits={dayVisits} />
-              </RecordsBoundary>
+              <JourneyCards
+                journeys={dayJourneys}
+                open={openJourney}
+                selectedId={detailId}
+                onSelect={(id) => openDetail(id, false)}
+                onPlay={(id) => openDetail(id, true)}
+              />
+              <TodayRecord visits={dayVisits} />
             </div>
           </section>
         )}
@@ -1701,11 +1656,6 @@ export function FamilyMapScreen() {
                 배터리 제한 없음
               </button>
             )}
-            {tracking.native && keepLive.samsung && (
-              <button type="button" onClick={openSamsungPower} className="mt-2 w-full rounded-full bg-slate-100 py-3 text-sm font-bold">
-                삼성 절전 앱에서 제외
-              </button>
-            )}
             {!(state.permissions.locationMode === 'always' && state.backgroundKeepAlive) && (
               <button
                 type="button"
@@ -1777,11 +1727,6 @@ export function FamilyMapScreen() {
                 }}
               />
             </div>
-            {tracking.native && keepLive.samsung && (
-              <button type="button" onClick={openSamsungPower} className="mt-2 w-full rounded-full bg-slate-100 py-3 text-sm font-bold">
-                삼성 절전 앱에서 제외
-              </button>
-            )}
             {state.backgroundKeepAlive && state.permissions.locationMode === 'always' && (
               <p className="text-xs font-semibold leading-5 text-slate-500">위치 유지가 켜져 있습니다. 끄는 버튼은 없습니다.</p>
             )}

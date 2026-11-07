@@ -29,20 +29,6 @@ export function recordsDayTrails({ journeys, livePoints, liveDrawable }) {
   return lines;
 }
 
-/**
- * The records list covers the map, so that screen does not build a polyline
- * for every saved journey. Opening one journey draws that line. The live map
- * is the caller's live lines.
- */
-export function screenMapTrails({ viewingRecords, detailOpen, detailPoints, liveLines }) {
-  if (detailOpen) {
-    const line = Array.isArray(detailPoints) ? detailPoints : [];
-    return line.length >= 2 ? [line] : [];
-  }
-  if (viewingRecords) return [];
-  return Array.isArray(liveLines) ? liveLines : [];
-}
-
 function meters(a, b) {
   if (!a || !b || !Number.isFinite(a.lat) || !Number.isFinite(a.lng) || !Number.isFinite(b.lat) || !Number.isFinite(b.lng)) return Infinity;
   const radius = 6_371_000;

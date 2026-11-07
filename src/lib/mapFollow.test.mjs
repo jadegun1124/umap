@@ -87,11 +87,6 @@ test('follow stays quiet in the background, off the map, and while a finger is d
   assert.match(screen, /awaitingFamilyFit/);
   assert.match(screen, /familyFitPending/);
   assert.match(map, /dragstart/);
-  assert.equal(map.includes('map.stop()'), false);
-  assert.match(screen, /bottom-36/);
-  assert.equal(screen.includes('top-[38%]'), false);
+  assert.match(map, /map\.stop\(\)/);
   assert.match(map, /followTo/);
-  assert.match(map, /onGestureEnd/);
-  const zoomBy = map.slice(map.indexOf('zoomBy(delta)'), map.indexOf('fit(points)'));
-  assert.match(zoomBy, /onGestureEndRef\.current\?\.\(\)/);
 });

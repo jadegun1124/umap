@@ -62,7 +62,6 @@ interface UmapLocationPlugin {
   requestCamera(): Promise<NativePromptResult>;
   requestMotion(): Promise<NativePromptResult>;
   openBattery(): Promise<BatteryOptimizationResult>;
-  openSamsungPower(): Promise<{ opened: boolean; samsung?: boolean }>;
   battery(): Promise<{ pct?: number | null; charging?: boolean | null }>;
   start(options: { config: string }): Promise<{ started: boolean; reason?: string }>;
   stop(): Promise<{ stopped: boolean }>;
@@ -72,8 +71,6 @@ interface UmapLocationPlugin {
     native: boolean;
     reason?: string;
     batteryUnrestricted?: boolean;
-    manufacturer?: string;
-    samsung?: boolean;
     location?: 'always' | 'while-using' | 'denied';
     precise?: boolean;
     versionName?: string;
@@ -125,9 +122,6 @@ const web: UmapLocationPlugin = {
   },
   async openBattery() {
     return { opened: false, unrestricted: false };
-  },
-  async openSamsungPower() {
-    return { opened: false, samsung: false };
   },
   async battery() {
     return { pct: null, charging: null };
@@ -306,23 +300,6 @@ export async function requestMotionPermission(): Promise<NativePromptResult> {
     return { state, openedSettings: result.openedSettings === true };
   } catch {
     return { state: 'unavailable', openedSettings: false };
-  }
-}
-
-export async function openSamsungPowerSettings(): Promise<{ opened: boolean; samsung: boolean; note: string | null }> {
-  if (!umapLocationNative()) {
-    return { opened: false, samsung: false, note: '삼성 절전 앱 설정은 안드로이드 앱에서 열립니다.' };
-  }
-  try {
-    const result = await plugin.openSamsungPower();
-    if (result.opened) return { opened: true, samsung: result.samsung === true, note: null };
-    return {
-      opened: false,
-      samsung: result.samsung === true,
-      note: '삼성 절전 앱 화면을 열지 못했습니다. 설정 > 배터리 > 절전 앱에서 Kinnex를 제외해 주세요.',
-    };
-  } catch {
-    return { opened: false, samsung: false, note: '삼성 절전 앱 화면을 열지 못했습니다. 설정 > 배터리 > 절전 앱에서 Kinnex를 제외해 주세요.' };
   }
 }
 

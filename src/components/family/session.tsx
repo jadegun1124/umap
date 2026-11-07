@@ -29,7 +29,6 @@ import { familyPinId, isMemberId, moveKeyed } from '../../lib/sharedIdentity.mjs
 import { applyMergeIdentity, extraRoomDecision, mergePointTrails, mergeRecordLists, planFamilyRoomMerge } from '../../lib/roomMerge.mjs';
 import { absorbPlaceholderMembers } from '../../lib/memberRoster.mjs';
 import { clearDiag, noteDiag } from '../../lib/diagLog.mjs';
-import { heldMapActions, queueMapAction } from '../../lib/mapGestureHold.mjs';
 import { HISTORY_DAYS, JOURNEY_POINT_CAP, TRAIL_POINT_CAP, fixShowsRide, isWithinHistory, journeysWithinHistory, labelJourneyPlace, lastTravelAt, mergeJourneyLists, seoulDayKey, mergeVisitStops, settleTrailPoint, stayLabelDwellMs, storedTrackAfterArchive, tracksWithinHistory, trimJourneyList, visitsWithinHistory, walkLeavesStay, type JourneyRecord } from '../../lib/tracking.mjs';
 import type { DayStop } from '../../lib/tracking.mjs';
 import type { SharedPlace, SharedProfile } from '../../services/familyShare';
@@ -697,7 +696,7 @@ type Action =
   | { type: 'leave-guardian'; id: string }
   | { type: 'dismiss-invite' }
   | { type: 'mark-alerts-read' }
-  | { type: 'update-self'; lat: number; lng: number; accuracyM: number; speedMps: number | null; at: number }
+  | { type: 'update-self'; lat: number; lng: number; accuracyM: number; speedMps: number | null }
   | { type: 'set-battery'; battery: number | null; charging: boolean | null }
   | { type: 'roll-day'; now: number }
   | { type: 'set-share-self'; share: boolean }
@@ -723,8 +722,7 @@ type Action =
   | { type: 'unlock-history'; journeys: Journey[]; visits: Visit[]; home: Session['home'] }
   | { type: 'restore-account'; account: Parameters<typeof applyAccountSnapshot>[1] }
   | { type: 'clear-family-room'; serverNote: string | null }
-  | { type: 'revisit-permissions' }
-  | { type: 'batch'; actions: Action[] };
+  | { type: 'revisit-permissions' };
 
 function notice(title: string, body: string): FamilyNotice {
   return { id: `n-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, title, body, at: Date.now(), read: false };
@@ -771,14 +769,6 @@ function placePatch(member: Member | undefined, lat: number, lng: number, points
 }
 
 function reducer(state: Session, action: Action): Session {
-  if (action.type === 'batch') {
-    let next = state;
-    for (const child of action.actions) {
-      if (!child || child.type === 'batch') continue;
-      next = reducer(next, child);
-    }
-    return next;
-  }
   return collapseRoster(reduceSession(state, action));
 }
 
@@ -1024,7 +1014,7 @@ function reduceSession(state: Session, action: Action): Session {
     case 'mark-alerts-read':
       return { ...state, notices: state.notices.map((item) => ({ ...item, read: true })) };
     case 'update-self': {
-      const at = Number.isFinite(action.at) ? action.at : Date.now();
+      const at = Date.now();
       const speed = typeof action.speedMps === 'number' && Number.isFinite(action.speedMps) ? action.speedMps : null;
       const self = state.members.find((member) => member.id === 'self');
       const sample = {
@@ -1707,8 +1697,6 @@ interface FamilyApi {
   withdraw: () => void;
   clearFamilyRoom: (serverNote?: string | null) => void;
   revisitPermissions: () => void;
-  beginMapGesture: () => void;
-  endMapGesture: () => void;
 }
 
 const FamilyContext = createContext<FamilyApi | null>(null);
@@ -1909,94 +1897,74 @@ export function FamilyProvider({ children }: { children: React.ReactNode }) {
     };
   }, [deviceReady, historyPulse, state.journeys, state.visits]);
 
-  const holdingMap = useRef(false);
-  const heldMap = useRef<Action[]>([]);
-  const dispatchMap = (action: Action) => {
-    if (queueMapAction(holdingMap.current, heldMap.current, action)) return;
-    dispatch(action);
-  };
-  const beginMapGesture = () => {
-    holdingMap.current = true;
-  };
-  const endMapGesture = () => {
-    holdingMap.current = false;
-    const actions = heldMapActions(heldMap.current);
-    if (actions.length === 0) return;
-    dispatch({ type: 'batch', actions });
-  };
-
   const api: FamilyApi = {
     state,
-    splashDone: () => dispatchMap({ type: 'splash-done' }),
+    splashDone: () => dispatch({ type: 'splash-done' }),
     login: (profile) => {
       resumeRoom();
-      dispatchMap({ type: 'login', profile });
+      dispatch({ type: 'login', profile });
     },
     restoreAccount: (account) => {
       resumeRoom();
-      dispatchMap({ type: 'restore-account', account });
+      dispatch({ type: 'restore-account', account });
     },
-    unlockHistory: (journeys, visits, home) => dispatchMap({ type: 'unlock-history', journeys, visits, home }),
-    closeMode: () => dispatchMap({ type: 'close-mode' }),
-    skipSurvey: () => dispatchMap({ type: 'skip-survey' }),
-    pickSurvey: (id) => dispatchMap({ type: 'pick-survey', id }),
-    back: () => dispatchMap({ type: 'back' }),
-    toggleTerm: (id, value) => dispatchMap({ type: 'toggle-term', id, value }),
-    toggleAllTerms: (on) => dispatchMap({ type: 'toggle-all-terms', on }),
-    continueTerms: () => dispatchMap({ type: 'continue-terms' }),
-    withdrawLocationConsent: () => dispatchMap({ type: 'withdraw-location-consent' }),
-    savePhone: (phone) => dispatchMap({ type: 'save-phone', phone }),
-    skipPhone: () => dispatchMap({ type: 'skip-phone' }),
-    finishPermissions: (permissions) => dispatchMap({ type: 'finish-permissions', permissions }),
-    noteLocation: (locationMode, accuracy) => dispatchMap({ type: 'note-location', locationMode, accuracy }),
-    setTab: (tab) => dispatchMap({ type: 'set-tab', tab }),
-    saveHome: (home) => dispatchMap({ type: 'save-home', home }),
-    clearHome: () => dispatchMap({ type: 'clear-home' }),
-    addMember: (name, code) => dispatchMap({ type: 'add-member', name, code }),
-    removeMember: (id) => dispatchMap({ type: 'remove-member', id }),
+    unlockHistory: (journeys, visits, home) => dispatch({ type: 'unlock-history', journeys, visits, home }),
+    closeMode: () => dispatch({ type: 'close-mode' }),
+    skipSurvey: () => dispatch({ type: 'skip-survey' }),
+    pickSurvey: (id) => dispatch({ type: 'pick-survey', id }),
+    back: () => dispatch({ type: 'back' }),
+    toggleTerm: (id, value) => dispatch({ type: 'toggle-term', id, value }),
+    toggleAllTerms: (on) => dispatch({ type: 'toggle-all-terms', on }),
+    continueTerms: () => dispatch({ type: 'continue-terms' }),
+    withdrawLocationConsent: () => dispatch({ type: 'withdraw-location-consent' }),
+    savePhone: (phone) => dispatch({ type: 'save-phone', phone }),
+    skipPhone: () => dispatch({ type: 'skip-phone' }),
+    finishPermissions: (permissions) => dispatch({ type: 'finish-permissions', permissions }),
+    noteLocation: (locationMode, accuracy) => dispatch({ type: 'note-location', locationMode, accuracy }),
+    setTab: (tab) => dispatch({ type: 'set-tab', tab }),
+    saveHome: (home) => dispatch({ type: 'save-home', home }),
+    clearHome: () => dispatch({ type: 'clear-home' }),
+    addMember: (name, code) => dispatch({ type: 'add-member', name, code }),
+    removeMember: (id) => dispatch({ type: 'remove-member', id }),
     acceptInvite: (label, code, syncToken, rosterName, adminName, ownerMemberId) => {
       resumeRoom(code);
-      dispatchMap({ type: 'accept-invite', label, code, syncToken: syncToken ?? null, rosterName: rosterName ?? null, adminName: adminName ?? null, ownerMemberId: ownerMemberId ?? null });
+      dispatch({ type: 'accept-invite', label, code, syncToken: syncToken ?? null, rosterName: rosterName ?? null, adminName: adminName ?? null, ownerMemberId: ownerMemberId ?? null });
     },
-    setGuardianShare: (code, share) => dispatchMap({ type: 'set-guardian-share', code, share }),
-    leaveGuardian: (id) => dispatchMap({ type: 'leave-guardian', id }),
-    mergeRooms: () => dispatchMap({ type: 'merge-family-rooms' }),
-    dismissInvite: () => dispatchMap({ type: 'dismiss-invite' }),
-    markAlertsRead: () => dispatchMap({ type: 'mark-alerts-read' }),
-    updateSelf: (lat, lng, accuracyM, speedMps) => dispatchMap({ type: 'update-self', lat, lng, accuracyM, speedMps: speedMps ?? null, at: Date.now() }),
-    setBattery: (battery, charging) => dispatchMap({ type: 'set-battery', battery, charging }),
-    rollDay: (now) => dispatchMap({ type: 'roll-day', now }),
-    setShareSelf: (share) => dispatchMap({ type: 'set-share-self', share }),
-    setKeepAlive: (on) => dispatchMap({ type: 'set-keep-alive', on }),
-    applySharedPlace: (place) => dispatchMap({ type: 'apply-shared-place', place }),
-    applySharedProfiles: (code, profiles) => dispatchMap({ type: 'apply-shared-profiles', code, profiles }),
-    setRoomFamilyPlaces: (code, places, profiles, departed) => dispatchMap({ type: 'set-room-family-places', code, places, profiles: profiles ?? [], departed }),
-    applyCanonicalTrails: (trails) => dispatchMap({ type: 'apply-canonical-trails', trails }),
-    mergeVisits: (memberId, stops) => dispatchMap({ type: 'merge-visits', memberId, stops }),
-    setVisitLabel: (memberId, id, label) => dispatchMap({ type: 'set-visit-label', memberId, id, label }),
-    closeJourneys: (now) => dispatchMap({ type: 'close-journeys', now }),
-    setJourneyLabel: (memberId, id, which, label, lat, lng) => dispatchMap({ type: 'set-journey-label', memberId, id, which, label, lat, lng }),
-    setPhoto: (photo) => dispatchMap({ type: 'set-photo', photo }),
-    setDisplayName: (name) => dispatchMap({ type: 'set-display-name', name }),
-    setSelfPlace: (place) => dispatchMap({ type: 'set-self-place', place }),
-    setMemberPlace: (id, place) => dispatchMap({ type: 'set-member-place', id, place }),
-    setMotion: (moving) => dispatchMap({ type: 'set-motion', moving }),
-    setMotionNotify: (ids) => dispatchMap({ type: 'set-motion-notify', ids }),
-    setMotionAlertPhase: (phase) => dispatchMap({ type: 'set-motion-alert-phase', phase }),
-    pushNotice: (title, body) => dispatchMap({ type: 'notice', notice: notice(title, body) }),
+    setGuardianShare: (code, share) => dispatch({ type: 'set-guardian-share', code, share }),
+    leaveGuardian: (id) => dispatch({ type: 'leave-guardian', id }),
+    mergeRooms: () => dispatch({ type: 'merge-family-rooms' }),
+    dismissInvite: () => dispatch({ type: 'dismiss-invite' }),
+    markAlertsRead: () => dispatch({ type: 'mark-alerts-read' }),
+    updateSelf: (lat, lng, accuracyM, speedMps) => dispatch({ type: 'update-self', lat, lng, accuracyM, speedMps: speedMps ?? null }),
+    setBattery: (battery, charging) => dispatch({ type: 'set-battery', battery, charging }),
+    rollDay: (now) => dispatch({ type: 'roll-day', now }),
+    setShareSelf: (share) => dispatch({ type: 'set-share-self', share }),
+    setKeepAlive: (on) => dispatch({ type: 'set-keep-alive', on }),
+    applySharedPlace: (place) => dispatch({ type: 'apply-shared-place', place }),
+    applySharedProfiles: (code, profiles) => dispatch({ type: 'apply-shared-profiles', code, profiles }),
+    setRoomFamilyPlaces: (code, places, profiles, departed) => dispatch({ type: 'set-room-family-places', code, places, profiles: profiles ?? [], departed }),
+    applyCanonicalTrails: (trails) => dispatch({ type: 'apply-canonical-trails', trails }),
+    mergeVisits: (memberId, stops) => dispatch({ type: 'merge-visits', memberId, stops }),
+    setVisitLabel: (memberId, id, label) => dispatch({ type: 'set-visit-label', memberId, id, label }),
+    closeJourneys: (now) => dispatch({ type: 'close-journeys', now }),
+    setJourneyLabel: (memberId, id, which, label, lat, lng) => dispatch({ type: 'set-journey-label', memberId, id, which, label, lat, lng }),
+    setPhoto: (photo) => dispatch({ type: 'set-photo', photo }),
+    setDisplayName: (name) => dispatch({ type: 'set-display-name', name }),
+    setSelfPlace: (place) => dispatch({ type: 'set-self-place', place }),
+    setMemberPlace: (id, place) => dispatch({ type: 'set-member-place', id, place }),
+    setMotion: (moving) => dispatch({ type: 'set-motion', moving }),
+    setMotionNotify: (ids) => dispatch({ type: 'set-motion-notify', ids }),
+    setMotionAlertPhase: (phase) => dispatch({ type: 'set-motion-alert-phase', phase }),
+    pushNotice: (title, body) => dispatch({ type: 'notice', notice: notice(title, body) }),
     logout: () => {
-      holdingMap.current = false;
-      heldMap.current = [];
       cancelAccountBackup();
       cancelDeviceSealRestore();
       clearStoredSessions();
       clearDiag();
       logoutLocalAccount(typeof localStorage === 'undefined' ? null : localStorage);
-      dispatchMap({ type: 'logout' });
+      dispatch({ type: 'logout' });
     },
     withdraw: () => {
-      holdingMap.current = false;
-      heldMap.current = [];
       cancelAccountBackup();
       cancelDeviceSealRestore();
       forgetDurableSession();
@@ -2005,12 +1973,10 @@ export function FamilyProvider({ children }: { children: React.ReactNode }) {
         typeof localStorage === 'undefined' ? null : localStorage,
         typeof sessionStorage === 'undefined' ? null : sessionStorage,
       );
-      dispatchMap({ type: 'logout' });
+      dispatch({ type: 'logout' });
     },
-    clearFamilyRoom: (serverNote) => dispatchMap({ type: 'clear-family-room', serverNote: serverNote ?? null }),
-    revisitPermissions: () => dispatchMap({ type: 'revisit-permissions' }),
-    beginMapGesture,
-    endMapGesture,
+    clearFamilyRoom: (serverNote) => dispatch({ type: 'clear-family-room', serverNote: serverNote ?? null }),
+    revisitPermissions: () => dispatch({ type: 'revisit-permissions' }),
   };
 
   return <FamilyContext.Provider value={api}>{children}</FamilyContext.Provider>;

@@ -38,10 +38,6 @@ export function serviceAlive({
  * The banner appears only after the user has asked for keep, and the button
  * starts it again or opens the setting that is blocking it.
  */
-export function isSamsungMaker(value) {
-  return String(value ?? '').trim().toLowerCase() === 'samsung';
-}
-
 export function keepBanner({
   native = false,
   onMap = false,
@@ -53,7 +49,6 @@ export function keepBanner({
   reason = '',
   heartbeatAt = 0,
   now = Date.now(),
-  manufacturer = '',
 } = {}) {
   if (!native || !onMap || userStopped) return null;
   if (keepAlive !== true) return null;
@@ -67,10 +62,10 @@ export function keepBanner({
       : reason === 'permission'
         ? `위치 권한이 항상 허용이 아닙니다. ${FAMILY_STOPS} 눌러서 설정으로 이동합니다.${batteryNote}`
         : `위치를 항상 허용으로 바꾸면 앱을 닫아도 위치가 갑니다. ${FAMILY_STOPS} 눌러서 설정으로 이동합니다.${batteryNote}`;
-    return finish(guide('always', 'permission', '위치 권한을 확인해 주세요', text, '', '권한 확인', 'always'), manufacturer);
+    return guide('always', 'permission', '위치 권한을 확인해 주세요', text, '', '권한 확인', 'always');
   }
   if (!alive && batteryUnrestricted === false) {
-    return finish(guide(
+    return guide(
       'battery',
       'battery',
       '배터리 제한을 풀어 주세요',
@@ -78,10 +73,10 @@ export function keepBanner({
       '다시 켜기',
       '배터리 설정',
       'battery',
-    ), manufacturer);
+    );
   }
   if (!alive) {
-    return finish(guide(
+    return guide(
       'start',
       'dead',
       '위치 유지가 꺼져 있습니다',
@@ -89,10 +84,10 @@ export function keepBanner({
       '다시 켜기',
       '',
       'app',
-    ), manufacturer);
+    );
   }
   if (batteryUnrestricted === false) {
-    return finish(guide(
+    return guide(
       'battery',
       'battery',
       '배터리 제한을 풀어 주세요',
@@ -100,29 +95,13 @@ export function keepBanner({
       '',
       '배터리 설정',
       'battery',
-    ), manufacturer);
+    );
   }
   return null;
 }
 
 function guide(action, kind, title, text, primary, settingsLabel, settingsAction) {
-  return {
-    action,
-    kind,
-    title,
-    text,
-    primary,
-    settingsLabel,
-    settingsAction,
-    samsungLabel: '',
-    samsungAction: '',
-  };
-}
-
-function finish(banner, manufacturer = '') {
-  if (!banner) return null;
-  if (!isSamsungMaker(manufacturer)) return banner;
-  return { ...banner, samsungLabel: '절전 앱 제외', samsungAction: 'samsung-sleep' };
+  return { action, kind, title, text, primary, settingsLabel, settingsAction };
 }
 
 /** Same blocker stays hidden until the cooldown ends. A new blocker, or a later death, comes back. */

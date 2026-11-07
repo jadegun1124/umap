@@ -147,62 +147,6 @@ function leaderMarkup(dx, dy) {
   return `<span data-pin-leader aria-hidden="true" style="position:absolute;left:calc(50% + ${x}px);top:calc(50% + ${y}px);width:${length}px;height:2px;margin-top:-1px;background:#64748b;box-shadow:0 0 0 1px #fff;transform-origin:0 50%;transform:rotate(${angle}deg);pointer-events:none;z-index:0"></span>`;
 }
 
-export function calloutTransform(dx = 0, dy = 0) {
-  const shiftX = Number(dx) || 0;
-  const shiftY = Number(dy) || 0;
-  return `translate(calc(-50% + ${cssNumber(shiftX)}px), ${cssNumber(shiftY)}px)`;
-}
-
-function paintLeader(leader, shiftX, shiftY) {
-  const spec = calloutLeader(shiftX, shiftY);
-  if (!spec.needed) {
-    leader.style.display = 'none';
-    return;
-  }
-  const runX = spec.to.x - spec.from.x;
-  const runY = spec.to.y - spec.from.y;
-  leader.style.display = '';
-  leader.style.position = 'absolute';
-  leader.style.height = '2px';
-  leader.style.marginTop = '-1px';
-  leader.style.background = '#64748b';
-  leader.style.boxShadow = '0 0 0 1px #fff';
-  leader.style.transformOrigin = '0 50%';
-  leader.style.pointerEvents = 'none';
-  leader.style.zIndex = '0';
-  leader.style.left = `calc(50% + ${cssNumber(spec.from.x)}px)`;
-  leader.style.top = `calc(50% + ${cssNumber(spec.from.y)}px)`;
-  leader.style.width = `${cssNumber(Math.hypot(runX, runY))}px`;
-  leader.style.transform = `rotate(${cssNumber(Math.atan2(runY, runX) * 180 / Math.PI)}deg)`;
-}
-
-/** Move an existing chip. A seated chip has no leader until the slot leaves the pin. */
-export function syncCalloutGeometry(root, dx = 0, dy = 0) {
-  if (!root || typeof root.querySelector !== 'function') return;
-  const pin = typeof root.matches === 'function' && root.matches('[data-pin-root]')
-    ? root
-    : root.querySelector('[data-pin-root]') || root;
-  const shiftX = Number(dx) || 0;
-  const shiftY = Number(dy) || 0;
-  const callout = pin.querySelector('[data-callout]');
-  if (callout) callout.style.transform = calloutTransform(shiftX, shiftY);
-  const spec = calloutLeader(shiftX, shiftY);
-  let leader = pin.querySelector('[data-pin-leader]');
-  if (!spec.needed) {
-    if (leader) leader.style.display = 'none';
-    return;
-  }
-  if (!leader && pin.ownerDocument && typeof pin.ownerDocument.createElement === 'function') {
-    leader = pin.ownerDocument.createElement('span');
-    leader.setAttribute('data-pin-leader', '');
-    leader.setAttribute('aria-hidden', 'true');
-    const anchor = pin.querySelector('[data-pin-anchor]');
-    if (anchor && anchor.parentNode === pin) pin.insertBefore(leader, anchor);
-    else pin.appendChild(leader);
-  }
-  if (leader) paintLeader(leader, shiftX, shiftY);
-}
-
 /**
  * The 42px circle fills the marker. iconAnchor is its center, so Leaflet moves
  * the circle, the chip, and the leader together. A zero offset puts the chip
@@ -213,16 +157,12 @@ export function memberCalloutHtml({ dx = 0, dy = 0, dimmed = false, tailColor = 
   const shiftY = Number(dy) || 0;
   const tail = tailColor === '#0084FF' ? '#0084FF' : '#fff';
   const pin = MEMBER_PIN_PX;
-  const labeled = String(labelHtml || '').trim().length > 0;
-  const callout = labeled
-    ? `<div data-callout style="position:absolute;z-index:2;left:50%;bottom:100%;width:max-content;transform:${calloutTransform(shiftX, shiftY)}">
+  return `<div data-pin-root style="position:relative;width:${pin}px;height:${pin}px;overflow:visible;opacity:${dimmed ? '0.55' : '1'}">
+    ${leaderMarkup(shiftX, shiftY)}
+    <div data-pin-anchor style="position:relative;z-index:1;width:${pin}px;height:${pin}px;display:flex;align-items:center;justify-content:center">${faceHtml}</div>
+    <div data-callout style="position:absolute;z-index:2;left:50%;bottom:100%;width:max-content;transform:translate(calc(-50% + ${shiftX}px), ${shiftY}px)">
       ${labelHtml}
       <span data-label-tail style="display:block;width:0;height:0;margin:0 auto;border-left:6px solid transparent;border-right:6px solid transparent;border-top:7px solid ${tail}"></span>
-    </div>`
-    : '';
-  return `<div data-pin-root style="position:relative;width:${pin}px;height:${pin}px;overflow:visible;opacity:${dimmed ? '0.55' : '1'}">
-    ${labeled ? leaderMarkup(shiftX, shiftY) : ''}
-    <div data-pin-anchor style="position:relative;z-index:1;width:${pin}px;height:${pin}px;display:flex;align-items:center;justify-content:center">${faceHtml}</div>
-    ${callout}
+    </div>
   </div>`;
 }

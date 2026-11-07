@@ -29,7 +29,6 @@ export function keepBanner(input?: {
   heartbeatAt?: number;
   lastFixAt?: number;
   now?: number;
-  manufacturer?: string;
 }): {
   action: 'start' | 'always' | 'battery';
   kind: 'permission' | 'battery' | 'dead';
@@ -38,11 +37,7 @@ export function keepBanner(input?: {
   primary: string;
   settingsLabel: string;
   settingsAction: 'always' | 'battery' | 'app';
-  samsungLabel: string;
-  samsungAction: '' | 'samsung-sleep';
 } | null;
-
-export function isSamsungMaker(value?: string): boolean;
 
 export function keepBannerVisible<T extends { kind?: string }>(
   banner: T | null | undefined,

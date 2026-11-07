@@ -5,8 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <title>Kinnex — 동의한 가족과 위치를 나눕니다</title>
     <meta name="description" content="Kinnex는 초대한 가족의 위치, 우리 집 안심존, 초대 코드를 제공하는 가족 위치 공유 서비스입니다." />
-    <link rel="preconnect" href="https://api.vworld.kr" />
-    <link rel="dns-prefetch" href="https://api.vworld.kr" />
     <link rel="icon" type="image/png" href="./favicon.png" />
     <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
     <link rel="manifest" href="./manifest.json" />
@@ -23,7 +21,10 @@
     <script>
       if ('serviceWorker' in navigator) {
         window.addEventListener('load', () => {
-          navigator.serviceWorker.register('./sw.js').catch(() => {});
+          if ('caches' in window) {
+            caches.keys().then((keys) => Promise.all(keys.filter((key) => key === 'umap-tiles-v1').map((key) => caches.delete(key)))).catch(() => {});
+          }
+          navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' }).catch(() => {});
         });
       }
     </script>
