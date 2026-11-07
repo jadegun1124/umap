@@ -8,7 +8,6 @@ import { savedPlaceLabel } from '../../lib/memberPlace.mjs';
 import { memberIsDimmed, memberPresence, pinAgeLabel } from '../../lib/memberPresence.mjs';
 import { firstPlaceLabel, groupStatusLabelHtml, orderStatusMembers, STATUS_LIFT_PX, statusCalloutHtml } from '../../lib/memberStatusGroup.mjs';
 import { assignChipOffsets, groupChipSize, holdAnchor, holdSpread, inflateRect, soloChipSize, stablePlaceGroups } from '../../lib/statusLayout.mjs';
-import { displaySolidTrail, DISPLAY_TRAIL_CAP, trailGeometryKey } from '../../lib/displayTrail.mjs';
 import { appendLiveTip, trailDrawParts } from '../../lib/tracking.mjs';
 import { VWORLD_ATTRIBUTION, vworldApiKey, vworldBaseTileUrl } from '../../services/vworld';
 import type { HomeZone, Member, TrackPoint } from '../../types/family';
@@ -170,8 +169,6 @@ export const StreetMap = forwardRef<StreetMapHandle, {
   home: HomeZone | null;
   trails: TrackPoint[][];
   trailColor: string;
-  /** Records detail. One solid line, display vertices only. The live map keeps its own painter. */
-  solidTrails?: boolean;
   selectedId?: string;
   onSelect: (id: string) => void;
   onClear?: () => void;
@@ -182,7 +179,7 @@ export const StreetMap = forwardRef<StreetMapHandle, {
   onGesture?: () => void;
   /** After the finger lifts. The follow chip updates here, not on the drag frame. */
   onGestureEnd?: () => void;
-}>(function StreetMap({ center, zoom, members, home, trails, trailColor, solidTrails = false, selectedId, onSelect, onClear, onMove, onUserView, onGesture, onGestureEnd }, ref) {
+}>(function StreetMap({ center, zoom, members, home, trails, trailColor, selectedId, onSelect, onClear, onMove, onUserView, onGesture, onGestureEnd }, ref) {
   const nodeRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<L.Map | null>(null);
   const layersRef = useRef<L.LayerGroup | null>(null);
@@ -205,9 +202,6 @@ export const StreetMap = forwardRef<StreetMapHandle, {
   selectedIdRef.current = selectedId;
   const playbackRef = useRef<L.Marker | null>(null);
   const playbackPanRef = useRef(0);
-  const homeLayersRef = useRef<{ circle: L.Circle; label: L.Marker } | null>(null);
-  const drawnTrailKeyRef = useRef('');
-  const renderNotedAt = useRef(0);
   const [ready, setReady] = useState(false);
   const [tileNote, setTileNote] = useState('');
   const key = vworldApiKey();
@@ -363,32 +357,19 @@ export const StreetMap = forwardRef<StreetMapHandle, {
     map.on('click', () => onClearRef.current?.());
     let moveSafety = 0;
     let endFrame = 0;
-    const gestureActive = () => {
-      const handlers = [map.dragging, map.touchZoom, map.boxZoom];
-      for (const handler of handlers) {
-        if (!handler) continue;
-        const active = handler as { moving?: () => boolean; _zooming?: boolean; _moving?: boolean };
-        if (typeof active.moving === 'function' && active.moving()) return true;
-        if (active._zooming === true || active._moving === true) return true;
-      }
-      return false;
-    };
-    const armSafety = () => {
-      window.clearTimeout(moveSafety);
-      // A stuck animation still lays out once. A finger or pinch that is still down waits.
-      moveSafety = window.setTimeout(() => {
-        if (!movingRef.current) return;
-        if (gestureActive()) {
-          armSafety();
-          return;
-        }
-        movingRef.current = false;
-        placeRef.current('moveend');
-      }, 1200);
+    const fingerDown = () => {
+      const dragging = map.dragging as { moving?: () => boolean } | undefined;
+      return typeof dragging?.moving === 'function' && dragging.moving();
     };
     const onMoveStart = () => {
       movingRef.current = true;
-      armSafety();
+      window.clearTimeout(moveSafety);
+      // A stuck animation still lays out once. A finger that is still down does not.
+      moveSafety = window.setTimeout(() => {
+        if (fingerDown() || !movingRef.current) return;
+        movingRef.current = false;
+        placeRef.current('moveend');
+      }, 1200);
     };
     const onMoveEnd = () => {
       window.clearTimeout(moveSafety);
@@ -446,8 +427,6 @@ export const StreetMap = forwardRef<StreetMapHandle, {
       map.off('zoomstart', noteUserView);
       map.off('dragstart');
       playbackRef.current = null;
-      homeLayersRef.current = null;
-      drawnTrailKeyRef.current = '';
       pinMarkersRef.current.forEach((held) => held.marker.remove());
       pinMarkersRef.current.clear();
       statusMarkersRef.current.forEach((held) => held.marker.remove());
@@ -502,47 +481,26 @@ export const StreetMap = forwardRef<StreetMapHandle, {
       if (nodeRef.current) {
         nodeRef.current.dataset.layoutRuns = String(Number(nodeRef.current.dataset.layoutRuns || 0) + 1);
       }
-      const paintHome = () => {
-        const held = homeLayersRef.current;
-        if (!zone) {
-          if (held) {
-            held.circle.remove();
-            held.label.remove();
-            homeLayersRef.current = null;
-          }
-          return;
-        }
-        if (held) {
-          held.circle.setLatLng([zone.lat, zone.lng]);
-          held.circle.setRadius(zone.radiusM);
-          held.label.setLatLng([zone.lat, zone.lng]);
-          return;
-        }
-        const circle = L.circle([zone.lat, zone.lng], {
-          radius: zone.radiusM,
-          color: '#0084FF',
-          weight: 2,
-          fillColor: '#0084FF',
-          fillOpacity: 0.14,
-        }).addTo(group);
-        const label = L.marker([zone.lat, zone.lng], {
-          interactive: false,
-          icon: L.divIcon({
-            className: 'umap-home-label',
-            html: '<span style="display:inline-block;padding:2px 8px;border-radius:999px;background:#fff;color:#0f172a;font-size:11px;font-weight:700;box-shadow:0 1px 4px rgba(15,23,42,.16)">우리 집</span>',
-            iconSize: [64, 22],
-            iconAnchor: [32, 28],
-          }),
-        }).addTo(group);
-        homeLayersRef.current = { circle, label };
-      };
       if (reason === 'data') {
         group.clearLayers();
-        homeLayersRef.current = null;
-        paintHome();
-      } else {
-        // Finger-up still moves the ring, and still removes it when the pick was cancelled.
-        paintHome();
+        if (zone) {
+          L.circle([zone.lat, zone.lng], {
+            radius: zone.radiusM,
+            color: '#0084FF',
+            weight: 2,
+            fillColor: '#0084FF',
+            fillOpacity: 0.14,
+          }).addTo(group);
+          L.marker([zone.lat, zone.lng], {
+            interactive: false,
+            icon: L.divIcon({
+              className: 'umap-home-label',
+              html: '<span style="display:inline-block;padding:2px 8px;border-radius:999px;background:#fff;color:#0f172a;font-size:11px;font-weight:700;box-shadow:0 1px 4px rgba(15,23,42,.16)">우리 집</span>',
+              iconSize: [64, 22],
+              iconAnchor: [32, 28],
+            }),
+          }).addTo(group);
+        }
       }
 
       const now = Date.now();
@@ -709,19 +667,33 @@ export const StreetMap = forwardRef<StreetMapHandle, {
   useEffect(() => {
     const trailGroup = trailRef.current;
     if (!ready || !trailGroup) return;
-    const geometryKey = `${solidTrails ? 's' : 'l'}|${trailColor}|${trailGeometryKey(trails)}`;
-    if (geometryKey === drawnTrailKeyRef.current) return;
-    drawnTrailKeyRef.current = geometryKey;
     trailGroup.clearLayers();
     const stroke = { smoothFactor: 0, lineCap: 'round' as const, lineJoin: 'round' as const };
     const drawn: string[] = [];
     let pointCount = 0;
-    const paintLine = (latlngs: [number, number][], weight: number) => {
-      L.polyline(latlngs, { ...stroke, color: '#ffffff', weight: weight + 3, opacity: 0.9 }).addTo(trailGroup);
-      L.polyline(latlngs, { ...stroke, color: trailColor, weight, opacity: 1 }).addTo(trailGroup);
-    };
-    const paintEnds = (start: { lat: number; lng: number } | undefined, end: { lat: number; lng: number } | undefined) => {
-      if (!start) return;
+    for (const trail of trails) {
+      if (!trail || trail.length < 2) continue;
+      const parts = appendLiveTip(trailDrawParts(trail), trail[trail.length - 1]);
+      if (parts.length === 0) continue;
+      for (const part of parts) {
+        pointCount += part.points.length;
+        drawn.push(part.points.map((point) => `${point.lat.toFixed(5)},${point.lng.toFixed(5)}`).join(' '));
+        const latlngs = part.points.map((point) => [point.lat, point.lng] as [number, number]);
+        L.polyline(latlngs, {
+          ...stroke,
+          color: '#ffffff',
+          weight: 9,
+          opacity: 0.9,
+        }).addTo(trailGroup);
+        L.polyline(latlngs, {
+          ...stroke,
+          color: trailColor,
+          weight: 6,
+          opacity: 1,
+        }).addTo(trailGroup);
+      }
+      const start = parts[0]?.points[0] ?? trail[0];
+      if (!start) continue;
       L.circleMarker([start.lat, start.lng], {
         radius: 5,
         color: trailColor,
@@ -729,6 +701,7 @@ export const StreetMap = forwardRef<StreetMapHandle, {
         fillColor: trailColor,
         fillOpacity: 1,
       }).addTo(trailGroup);
+      const end = parts[parts.length - 1]?.points.at(-1) ?? trail[trail.length - 1];
       if (end && (end.lat !== start.lat || end.lng !== start.lng)) {
         L.circleMarker([end.lat, end.lng], {
           radius: 6,
@@ -738,37 +711,10 @@ export const StreetMap = forwardRef<StreetMapHandle, {
           fillOpacity: 1,
         }).addTo(trailGroup);
       }
-    };
-    for (const trail of trails) {
-      if (!trail || trail.length < 2) continue;
-      if (solidTrails) {
-        const line = displaySolidTrail(trail, DISPLAY_TRAIL_CAP);
-        if (line.length < 2) continue;
-        pointCount += line.length;
-        drawn.push(line.map((point) => `${point.lat.toFixed(5)},${point.lng.toFixed(5)}`).join(' '));
-        paintLine(line.map((point) => [point.lat, point.lng] as [number, number]), 6);
-        paintEnds(line[0], line[line.length - 1]);
-        continue;
-      }
-      const parts = appendLiveTip(trailDrawParts(trail), trail[trail.length - 1]);
-      if (parts.length === 0) continue;
-      for (const part of parts) {
-        pointCount += part.points.length;
-        drawn.push(part.points.map((point) => `${point.lat.toFixed(5)},${point.lng.toFixed(5)}`).join(' '));
-        const latlngs = part.points.map((point) => [point.lat, point.lng] as [number, number]);
-        paintLine(latlngs, 6);
-      }
-      const start = parts[0]?.points[0] ?? trail[0];
-      const end = parts[parts.length - 1]?.points.at(-1) ?? trail[trail.length - 1];
-      paintEnds(start, end);
     }
     if (nodeRef.current) nodeRef.current.dataset.trail = drawn.join(';');
-    const notedAt = Date.now();
-    if (notedAt - renderNotedAt.current >= 30_000) {
-      renderNotedAt.current = notedAt;
-      noteDiag({ kind: 'render', points: pointCount, segments: drawn.length });
-    }
-  }, [ready, solidTrails, trails, trailColor]);
+    noteDiag({ kind: 'render', points: pointCount, segments: drawn.length });
+  }, [ready, trails, trailColor]);
 
   const missingKey = !key;
 

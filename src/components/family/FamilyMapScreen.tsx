@@ -9,7 +9,7 @@ import { backupFamilyAccount, cancelAccountBackup, deleteFamilyAccount, linkKaka
 import { buildInviteLink, formatClock, hasLocation, haversineMeters, shouldAlertLeave } from '../../lib/geo';
 import { buildGroupInviteLink, parseInviteUrl, syncTokenFromInviteFragment } from '../../lib/inviteLink.mjs';
 import { ALWAYS_GUIDE_DISMISSED_KEY, CHAT_NOTIFY_ASKED_KEY, KEEP_PERMISSION_ASKED_KEY, KEEP_START_ASKED_KEY, keepEntryPrompt, markSessionFlag, readSessionFlag } from '../../lib/systemSettings.mjs';
-import { familyMapShowsTrail, memberLiveLines, recordsDayTrails, screenMapTrails } from '../../lib/mapTrail.mjs';
+import { familyMapShowsTrail, memberLiveLines, recordsDayTrails } from '../../lib/mapTrail.mjs';
 import { noteDiag } from '../../lib/diagLog.mjs';
 import { shouldAutoFitRecord } from '../../lib/recordMapFit.mjs';
 import { createMapFollow, followTargetId, noteFollowTarget, noteRecenter, noteUserDrag, planFollowPan, recenterLabel } from '../../lib/mapFollow.mjs';
@@ -39,7 +39,6 @@ import { AlwaysAllowNotice } from './AlwaysAllowNotice';
 import { InviteQrImage, InviteQrScan } from './InviteQr';
 import { StreetMap, type StreetMapHandle } from './StreetMap';
 import { JourneyCards, JourneyScrubber } from './JourneyCards';
-import { RecordsBoundary } from './RecordsBoundary';
 import { FamilyChatSheet, type DirectChatTarget } from './FamilyChatSheet';
 import { MemberAvatar } from './MemberAvatar';
 import { PhotoPicker } from './ProfilePhoto';
@@ -747,8 +746,7 @@ export function FamilyMapScreen() {
     () => collapseIndoorStayDisplay(detailId === 'open' ? openMapLine : detailJourney?.points ?? []),
     [detailId, detailJourney, openMapLine],
   );
-  // Opening records does not paint the live line, so that simplify stays off this path.
-  const liveDrawable = viewingRecords ? false : liveTrailDrawable(liveLine, dayNow);
+  const liveDrawable = liveTrailDrawable(liveLine, dayNow);
   const showPath = familyMapShowsTrail({
     viewingRecords,
     detailOpen,
@@ -756,31 +754,24 @@ export function FamilyMapScreen() {
     member: selected,
     liveDrawable,
   });
-  const liveLines = useMemo(() => {
-    if (viewingRecords) return [];
+  const mapTrails = useMemo(() => {
+    if (detailOpen) return detailPoints.length >= 2 ? [detailPoints] : [];
+    if (viewingRecords) {
+      if (!showPath || !selected) return [];
+      const saved = recordsDayTrails({ journeys: dayJourneys, livePoints: [], liveDrawable: false });
+      if (pathDay !== liveDay) return saved;
+      return saved.concat(overviewLinesFor(selected, state.tracks, now, liveDay, false));
+    }
     const lines = [];
     for (const member of state.members) {
       for (const line of overviewLinesFor(member, state.tracks, now, liveDay)) lines.push(line);
     }
     return lines;
-  }, [liveDay, now, state.members, state.tracks, viewingRecords]);
-  const mapTrails = useMemo(
-    () => screenMapTrails({ viewingRecords, detailOpen, detailPoints, liveLines }),
-    [detailOpen, detailPoints, liveLines, viewingRecords],
-  );
-  const trailDiagKey = useRef('');
+  }, [dayJourneys, detailOpen, detailPoints, liveDay, now, pathDay, selected, showPath, state.members, state.tracks, viewingRecords]);
   useEffect(() => {
     if (viewingRecords) return;
-    const reports = state.members.map((member) => ({
-      member,
-      report: memberLiveLines(member, state.tracks, now, liveDay),
-    }));
-    const signature = reports.map(({ member, report }) => (
-      `${member.id}:${report.reason}:${report.stored}:${report.live}:${report.lines.length}`
-    )).join('|');
-    if (signature === trailDiagKey.current) return;
-    trailDiagKey.current = signature;
-    for (const { member, report } of reports) {
+    for (const member of state.members) {
+      const report = memberLiveLines(member, state.tracks, now, liveDay);
       noteDiag({
         kind: 'trail',
         member: member.id === 'self' ? 'self' : 'family',
@@ -1044,7 +1035,6 @@ export function FamilyMapScreen() {
             home={detailOpen ? null : (draftHome ?? (showZone ? state.home : null))}
             trails={mapTrails}
             trailColor="#0084FF"
-            solidTrails={detailOpen}
             selectedId={selected?.id}
             onSelect={(id) => {
               const member = state.members.find((item) => item.id === id);
@@ -1343,16 +1333,14 @@ export function FamilyMapScreen() {
               </button>
             )}
             <div className="mt-3 space-y-3">
-              <RecordsBoundary key={`${recordId}:${activeHistoryDay}`}>
-                <JourneyCards
-                  journeys={dayJourneys}
-                  open={openJourney}
-                  selectedId={detailId}
-                  onSelect={(id) => openDetail(id, false)}
-                  onPlay={(id) => openDetail(id, true)}
-                />
-                <TodayRecord visits={dayVisits} />
-              </RecordsBoundary>
+              <JourneyCards
+                journeys={dayJourneys}
+                open={openJourney}
+                selectedId={detailId}
+                onSelect={(id) => openDetail(id, false)}
+                onPlay={(id) => openDetail(id, true)}
+              />
+              <TodayRecord visits={dayVisits} />
             </div>
           </section>
         )}

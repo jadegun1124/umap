@@ -7,8 +7,8 @@ android {
         applicationId "kr.co.umap.tracker"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 84
-        versionName "1.78.0"
+        versionCode 83
+        versionName "1.77.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         def kakaoKey = (System.getenv("KAKAO_NATIVE_APP_KEY") ?: System.getenv("VITE_KAKAO_NATIVE_APP_KEY") ?: "b42233e0170711205fa75bbca06e98e9").trim()
         buildConfigField "String", "KAKAO_NATIVE_APP_KEY", "\"${kakaoKey.replace('"', '')}\""

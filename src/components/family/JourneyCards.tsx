@@ -1,9 +1,8 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, type RefObject } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { Bike, Car, ChevronRight, Footprints, Pause, Plane, Play } from 'lucide-react';
-import { displaySolidTrail, PREVIEW_TRAIL_CAP } from '../../lib/displayTrail.mjs';
-import { classifyJourneyMode, formatJourneyDistance, formatJourneyWhen, journeyPathDistance, modeLabel, playbackAnchor, type TravelMode } from '../../lib/tracking.mjs';
+import { classifyJourneyMode, formatJourneyDistance, formatJourneyWhen, journeyPathDistance, modeLabel, playbackAnchor, trailDrawParts, visibleTrail, type TravelMode } from '../../lib/tracking.mjs';
 import { VWORLD_ATTRIBUTION, vworldApiKey, vworldBaseTileUrl } from '../../services/vworld';
 import type { Journey } from '../../types/family';
 
@@ -129,105 +128,6 @@ function PlaceLine({ text }: { text: string }) {
   );
 }
 
-/** Leaflet maps on the records list. The rest of the cards stay SVG sketches. */
-export const RECORD_PREVIEW_MAP_CAP = 4;
-let livePreviewMaps = 0;
-const previewWaiters = new Set<() => void>();
-
-export function resetRecordPreviewMaps() {
-  livePreviewMaps = 0;
-  previewWaiters.clear();
-}
-
-function wakePreviewWaiter() {
-  const next = previewWaiters.values().next().value;
-  if (!next) return;
-  previewWaiters.delete(next);
-  next();
-}
-
-function usePreviewMap(wanted: boolean) {
-  const [granted, setGranted] = useState(false);
-  useEffect(() => {
-    if (!wanted) {
-      setGranted(false);
-      return;
-    }
-    let alive = true;
-    let holding = false;
-    const tryGrant = () => {
-      previewWaiters.delete(tryGrant);
-      if (!alive) {
-        wakePreviewWaiter();
-        return;
-      }
-      if (livePreviewMaps >= RECORD_PREVIEW_MAP_CAP) {
-        previewWaiters.add(tryGrant);
-        return;
-      }
-      livePreviewMaps += 1;
-      holding = true;
-      setGranted(true);
-    };
-    tryGrant();
-    return () => {
-      alive = false;
-      previewWaiters.delete(tryGrant);
-      if (!holding) return;
-      holding = false;
-      livePreviewMaps = Math.max(0, livePreviewMaps - 1);
-      wakePreviewWaiter();
-    };
-  }, [wanted]);
-  return granted;
-}
-
-function useNearViewport<T extends HTMLElement>(nodeRef: RefObject<T | null>) {
-  const [near, setNear] = useState(false);
-  useEffect(() => {
-    const node = nodeRef.current;
-    if (!node || typeof IntersectionObserver !== 'function') {
-      setNear(true);
-      return;
-    }
-    const observer = new IntersectionObserver((entries) => {
-      setNear(entries.some((entry) => entry.isIntersecting));
-    }, { rootMargin: '240px 0px' });
-    observer.observe(node);
-    return () => observer.disconnect();
-  }, [nodeRef]);
-  return near;
-}
-
-function TrailSketch({ points }: { points: Sample[] }) {
-  const line = useMemo(() => displaySolidTrail(points, PREVIEW_TRAIL_CAP), [points]);
-  if (line.length < 2) return <div className="h-full w-full bg-slate-100" />;
-  let minLat = Infinity;
-  let maxLat = -Infinity;
-  let minLng = Infinity;
-  let maxLng = -Infinity;
-  for (const point of line) {
-    minLat = Math.min(minLat, point.lat);
-    maxLat = Math.max(maxLat, point.lat);
-    minLng = Math.min(minLng, point.lng);
-    maxLng = Math.max(maxLng, point.lng);
-  }
-  const width = Math.max(maxLng - minLng, 0.0002);
-  const height = Math.max(maxLat - minLat, 0.0002);
-  const pad = 0.08;
-  const coords = line.map((point) => {
-    const x = ((point.lng - minLng) / width) * (1 - pad * 2) + pad;
-    const y = (1 - (point.lat - minLat) / height) * (1 - pad * 2) + pad;
-    return `${(x * 100).toFixed(2)},${(y * 100).toFixed(2)}`;
-  }).join(' ');
-  return (
-    <svg viewBox="0 0 100 100" className="h-full w-full bg-[#e8f1fb]" preserveAspectRatio="none" aria-hidden="true">
-      <polyline points={coords} fill="none" stroke="#ffffff" strokeWidth="5" strokeLinejoin="round" strokeLinecap="round" />
-      <polyline points={coords} fill="none" stroke="#0084FF" strokeWidth="2.4" strokeLinejoin="round" strokeLinecap="round" />
-    </svg>
-  );
-}
-
 function fitPreview(map: L.Map, points: { lat: number; lng: number }[]) {
   if (points.length < 1) return;
   map.invalidateSize();
@@ -246,9 +146,11 @@ function RoutePreview({ points }: { points: Sample[] }) {
   const nodeRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<L.Map | null>(null);
   const trailRef = useRef<L.LayerGroup | null>(null);
-  const drawnRef = useRef<Sample[]>([]);
   const pointsRef = useRef(points);
   pointsRef.current = points;
+  const signature = useMemo(() => {
+    return visibleTrail(points).map((point) => `${point.lat.toFixed(5)},${point.lng.toFixed(5)}`).join(' ');
+  }, [points]);
 
   useEffect(() => {
     const node = nodeRef.current;
@@ -281,8 +183,19 @@ function RoutePreview({ points }: { points: Sample[] }) {
     mapRef.current = map;
     const observer = new ResizeObserver(() => {
       const current = mapRef.current;
-      if (!current || drawnRef.current.length === 0) return;
-      fitPreview(current, drawnRef.current);
+      const group = trailRef.current;
+      if (!current || !group) return;
+      const drawn = group.getLayers().flatMap((layer) => {
+        if (layer instanceof L.Polyline && !(layer instanceof L.CircleMarker)) {
+          return (layer.getLatLngs() as L.LatLng[]).map((latlng) => ({ lat: latlng.lat, lng: latlng.lng }));
+        }
+        if (layer instanceof L.CircleMarker) {
+          const latlng = layer.getLatLng();
+          return [{ lat: latlng.lat, lng: latlng.lng }];
+        }
+        return [];
+      });
+      if (drawn.length > 0) fitPreview(current, drawn);
     });
     observer.observe(node);
     return () => {
@@ -296,18 +209,18 @@ function RoutePreview({ points }: { points: Sample[] }) {
   useEffect(() => {
     const map = mapRef.current;
     const group = trailRef.current;
-    const node = nodeRef.current;
     if (!map || !group) return;
     group.clearLayers();
-    const line = displaySolidTrail(pointsRef.current, PREVIEW_TRAIL_CAP);
-    drawnRef.current = line;
+    const segments = trailDrawParts(pointsRef.current).filter((part) => !part.dashed && part.points.length >= 2);
+    const drawn = segments.flatMap((part) => part.points).filter((point) => Number.isFinite(point.lat) && Number.isFinite(point.lng));
     const stroke = { smoothFactor: 0, interactive: false, lineCap: 'round' as const, lineJoin: 'round' as const };
-    if (line.length >= 2) {
-      const latlngs = line.map((point) => [point.lat, point.lng] as [number, number]);
+    for (const part of segments) {
+      const latlngs = part.points.map((point) => [point.lat, point.lng] as [number, number]);
       L.polyline(latlngs, { ...stroke, color: '#ffffff', weight: 8, opacity: 0.95 }).addTo(group);
       L.polyline(latlngs, { ...stroke, color: '#0084FF', weight: 4.5, opacity: 1 }).addTo(group);
-    } else if (line.length === 1) {
-      L.circleMarker([line[0].lat, line[0].lng], {
+    }
+    if (drawn.length === 1) {
+      L.circleMarker([drawn[0].lat, drawn[0].lng], {
         radius: 6,
         color: '#0084FF',
         weight: 3,
@@ -316,12 +229,11 @@ function RoutePreview({ points }: { points: Sample[] }) {
         interactive: false,
       }).addTo(group);
     }
-    if (node) node.dataset.preview = line.map((point) => `${point.lat.toFixed(5)},${point.lng.toFixed(5)}`).join(' ');
-    const fit = () => fitPreview(map, line);
+    const fit = () => fitPreview(map, drawn);
     fit();
     const timer = window.setTimeout(fit, 80);
     return () => window.clearTimeout(timer);
-  }, [points]);
+  }, [signature]);
 
   return <div ref={nodeRef} className="umap-route-preview h-full w-full" aria-hidden="true" />;
 }
@@ -343,9 +255,6 @@ function TripCard({
   const distanceM = journeyDistance(journey);
   const start = realPlace(journey.start);
   const end = realPlace(journey.end);
-  const previewHost = useRef<HTMLSpanElement>(null);
-  const near = useNearViewport(previewHost);
-  const showMap = usePreviewMap(near);
   return (
     <div
       role="button"
@@ -376,8 +285,8 @@ function TripCard({
           {end && <PlaceLine text={end} />}
         </span>
       )}
-      <span ref={previewHost} className="relative mt-3 block h-36 overflow-hidden rounded-2xl">
-        {showMap ? <RoutePreview points={journey.points} /> : <TrailSketch points={journey.points} />}
+      <span className="relative mt-3 block h-36 overflow-hidden rounded-2xl">
+        <RoutePreview points={journey.points} />
         <button
           type="button"
           aria-label="전체 기록 보기"
