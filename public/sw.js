@@ -2,7 +2,9 @@
 // a service worker that forwards PUT bodies can drop the live location publish.
 const CACHE_NAME = 'umap-pwa-v2';
 const TILE_CACHE = 'umap-tiles-v1';
-const TILE_LIMIT = 480;
+const TILE_LIMIT = 960;
+const MEMORY_LIMIT = 192;
+const memoryTiles = new Map();
 
 function vworldTile(url) {
   return url.protocol === 'https:'
@@ -15,6 +17,27 @@ async function trimTiles(cache) {
   const keys = await cache.keys();
   if (keys.length <= TILE_LIMIT) return;
   await Promise.all(keys.slice(0, keys.length - TILE_LIMIT).map((key) => cache.delete(key)));
+}
+
+function tileMemoryKey(url) {
+  const parts = url.pathname.split('/');
+  if (parts.length < 4) return '';
+  const file = parts[parts.length - 1];
+  const x = parts[parts.length - 2];
+  const y = parts[parts.length - 3];
+  const z = parts[parts.length - 4];
+  if (!z || !x || !y || !file.endsWith('.png')) return '';
+  return `${z}/${x}/${y}/${file}`;
+}
+
+function rememberTile(key, response) {
+  if (!key || !response) return;
+  if (memoryTiles.has(key)) memoryTiles.delete(key);
+  memoryTiles.set(key, response.clone());
+  while (memoryTiles.size > MEMORY_LIMIT) {
+    const oldest = memoryTiles.keys().next().value;
+    memoryTiles.delete(oldest);
+  }
 }
 
 self.addEventListener('install', () => {
@@ -33,13 +56,26 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
   // Tile paths contain the key. Keep them in the Cache API only. Never log them.
   if (event.request.method === 'GET' && vworldTile(url)) {
+    const tileKey = tileMemoryKey(url);
+    const hot = tileKey ? memoryTiles.get(tileKey) : undefined;
+    if (hot) {
+      if (tileKey) memoryTiles.delete(tileKey);
+      if (tileKey) memoryTiles.set(tileKey, hot);
+      event.respondWith(Promise.resolve(hot.clone()));
+      return;
+    }
     event.respondWith((async () => {
       const cache = await caches.open(TILE_CACHE);
       const hit = await cache.match(event.request);
-      if (hit) return hit;
+      if (hit) {
+        rememberTile(tileKey, hit);
+        return hit;
+      }
       const response = await fetch(event.request);
       if (response && (response.ok || response.type === 'opaque')) {
+        const copy = response.clone();
         cache.put(event.request, response.clone()).then(() => trimTiles(cache)).catch(() => {});
+        rememberTile(tileKey, copy);
       }
       return response;
     })());

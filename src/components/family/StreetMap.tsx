@@ -218,6 +218,8 @@ export const StreetMap = forwardRef<StreetMapHandle, {
   const playbackPanRef = useRef(0);
   const homeLayersRef = useRef<{ circle: L.Circle; label: L.Marker } | null>(null);
   const drawnTrailKeyRef = useRef('');
+  const trailsDirtyRef = useRef(false);
+  const paintTrailsRef = useRef<() => void>(() => {});
   const renderNotedAt = useRef(0);
   const [ready, setReady] = useState(false);
   const [tileNote, setTileNote] = useState('');
@@ -345,7 +347,9 @@ export const StreetMap = forwardRef<StreetMapHandle, {
       inertia: true,
       inertiaDeceleration: 3000,
       zoomAnimation: true,
-      markerZoomAnimation: true,
+      // Markers stay in the scaled pane. Per-frame setLatLng during a pinch
+      // restyled the status chip on the gesture frames.
+      markerZoomAnimation: false,
       fadeAnimation: true,
       bounceAtZoomLimits: false,
     });
@@ -394,6 +398,14 @@ export const StreetMap = forwardRef<StreetMapHandle, {
           return;
         }
         movingRef.current = false;
+        map.getContainer().classList.remove('umap-gesturing');
+        const gesture = userGesture;
+        userGesture = false;
+        if (trailsDirtyRef.current) {
+          trailsDirtyRef.current = false;
+          paintTrailsRef.current();
+        }
+        if (gesture) onGestureEndRef.current?.();
         placeRef.current('moveend');
       }, 1200);
     };
@@ -408,6 +420,10 @@ export const StreetMap = forwardRef<StreetMapHandle, {
       userGesture = false;
       movingRef.current = false;
       map.getContainer().classList.remove('umap-gesturing');
+      if (trailsDirtyRef.current) {
+        trailsDirtyRef.current = false;
+        paintTrailsRef.current();
+      }
       if (gesture) onGestureEndRef.current?.();
       // zoomend and moveend both fire for a pinch. One layout after the frame.
       if (endFrame) return;
@@ -437,17 +453,6 @@ export const StreetMap = forwardRef<StreetMapHandle, {
       onUserViewRef.current?.();
       onGestureRef.current?.();
     });
-    // Pinch scales the tile pane every frame and only then animates markers.
-    // Re-seat each pin on the zoom event so the chip, which lives in that pin,
-    // stays on the same ground point instead of sliding at the end.
-    const onPinchZoom = (event: L.LeafletEvent & { pinch?: boolean }) => {
-      if (!event.pinch) return;
-      pinMarkersRef.current.forEach((held) => {
-        const at = held.marker.getLatLng();
-        if (at) held.marker.setLatLng(at);
-      });
-    };
-    map.on('zoom', onPinchZoom);
     setReady(true);
     const resize = () => map.invalidateSize();
     resize();
@@ -459,6 +464,11 @@ export const StreetMap = forwardRef<StreetMapHandle, {
       if (moveFrame) window.cancelAnimationFrame(moveFrame);
       if (endFrame) window.cancelAnimationFrame(endFrame);
       window.clearTimeout(moveSafety);
+      if (movingRef.current || userGesture) {
+        userGesture = false;
+        movingRef.current = false;
+        onGestureEndRef.current?.();
+      }
       if (layoutFrameRef.current) window.cancelAnimationFrame(layoutFrameRef.current);
       observer.disconnect();
       setReady(false);
@@ -470,7 +480,6 @@ export const StreetMap = forwardRef<StreetMapHandle, {
       map.off('click');
       map.off('zoomstart', noteUserView);
       map.off('dragstart');
-      map.off('zoom', onPinchZoom);
       playbackRef.current = null;
       homeLayersRef.current = null;
       drawnTrailKeyRef.current = '';
@@ -749,8 +758,13 @@ export const StreetMap = forwardRef<StreetMapHandle, {
   }, [home, members, ready, selectedId]);
 
   useEffect(() => {
+    const paint = () => {
     const trailGroup = trailRef.current;
     if (!ready || !trailGroup) return;
+    if (movingRef.current) {
+      trailsDirtyRef.current = true;
+      return;
+    }
     const geometryKey = `${solidTrails ? 's' : 'l'}|${trailColor}|${trailGeometryKey(trails)}`;
     if (geometryKey === drawnTrailKeyRef.current) return;
     drawnTrailKeyRef.current = geometryKey;
@@ -810,6 +824,9 @@ export const StreetMap = forwardRef<StreetMapHandle, {
       renderNotedAt.current = notedAt;
       noteDiag({ kind: 'render', points: pointCount, segments: drawn.length });
     }
+    };
+    paintTrailsRef.current = paint;
+    paint();
   }, [ready, solidTrails, trails, trailColor]);
 
   const missingKey = !key;

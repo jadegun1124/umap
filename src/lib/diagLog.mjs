@@ -35,7 +35,38 @@ function writeRaw(events) {
   }
 }
 
+let memory = null;
+let writeTimer = 0;
+
+function fresh(events, now) {
+  return events.filter((event) => event && Number.isFinite(event.t) && now - event.t <= WINDOW_MS).slice(-MAX_EVENTS);
+}
+
+function loadMemory(now = Date.now()) {
+  if (!memory) memory = fresh(readRaw(), now);
+  return memory;
+}
+
+export function flushDiag() {
+  if (writeTimer) {
+    clearTimeout(writeTimer);
+    writeTimer = 0;
+  }
+  if (!memory) return;
+  writeRaw(memory);
+}
+
+function scheduleDiagWrite() {
+  if (writeTimer) return;
+  writeTimer = setTimeout(flushDiag, 400);
+}
+
 export function clearDiag() {
+  if (writeTimer) {
+    clearTimeout(writeTimer);
+    writeTimer = 0;
+  }
+  memory = [];
   const box = storage();
   if (!box) return;
   try {
@@ -47,7 +78,7 @@ export function clearDiag() {
 }
 
 export function readDiagEvents(now = Date.now()) {
-  return readRaw().filter((event) => event && Number.isFinite(event.t) && now - event.t <= WINDOW_MS).slice(-MAX_EVENTS);
+  return fresh(loadMemory(now), now);
 }
 
 export function noteDiag(event) {
@@ -61,7 +92,10 @@ export function noteDiag(event) {
     else if (typeof value === 'number' && Number.isFinite(value)) row[key] = value;
   }
   if (!row.kind) return;
-  writeRaw(readDiagEvents(now).concat([row]).slice(-MAX_EVENTS));
+  const rows = fresh(loadMemory(now), now);
+  rows.push(row);
+  memory = rows.length > MAX_EVENTS ? rows.slice(-MAX_EVENTS) : rows;
+  scheduleDiagWrite();
 }
 
 export function fixChannelSource(channel, provider, precise) {

@@ -7,20 +7,20 @@ export const MAP_LAND_COLOR = '#efe6d6';
 export const VWORLD_TILE_ORIGIN = 'https://api.vworld.kr';
 
 /**
- * Leaflet's mobile default loads tiles only after the finger lifts
- * (`updateWhenIdle`), so a pan shows the pane color until moveend.
- * keepBuffer holds rows outside the screen so the next pan is already painted.
- * updateInterval throttles in-flight work. maxNativeZoom matches the base
- * matrix through 19; higher zooms scale that level instead of requesting holes.
+ * Tile grid work waits until the finger lifts (`updateWhenIdle`).
+ * Updating the grid during a pan was the 1.79 jank: the main thread rebuilt
+ * tiles on the same frames as the gesture. keepBuffer retains the ring that
+ * is already on screen so a short pan back does not go blank. maxNativeZoom
+ * matches the base matrix through 19; higher zooms scale that level.
  */
 export function baseTileLayerOptions() {
   return {
     minZoom: 6,
     maxZoom: 19,
     maxNativeZoom: 19,
-    keepBuffer: 4,
-    updateWhenIdle: false,
+    keepBuffer: 2,
+    updateWhenIdle: true,
     updateWhenZooming: true,
-    updateInterval: 80,
+    updateInterval: 200,
   };
 }

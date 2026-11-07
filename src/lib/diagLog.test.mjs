@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { clearDiag, fixChannelSource, noteDiag, readDiagEvents } from './diagLog.mjs';
+import { clearDiag, fixChannelSource, flushDiag, noteDiag, readDiagEvents } from './diagLog.mjs';
 
 test('the diagnostic ring keeps two hours and the newest 5000 notes', () => {
   const box = new Map();
@@ -13,12 +13,13 @@ test('the diagnostic ring keeps two hours and the newest 5000 notes', () => {
   assert.equal(fresh.length, 1);
   assert.equal(fresh[0].kind, 'fix');
   assert.equal(fresh[0].source, 'gps');
+  assert.equal(readDiagEvents(fresh[0].t + 3 * 60 * 60 * 1000).length, 0);
+  flushDiag();
   const stored = JSON.parse(box.get('umap_diag_ring_v1'));
-  stored[0].t = Date.now() - 3 * 60 * 60 * 1000;
-  box.set('umap_diag_ring_v1', JSON.stringify(stored));
-  assert.equal(readDiagEvents().length, 0);
+  assert.equal(stored[0].kind, 'fix');
+  assert.equal(stored[0].source, 'gps');
   noteDiag({ kind: 'fix', lat: 37.2, lng: 127.3 });
-  assert.equal(readDiagEvents().length, 1);
+  assert.equal(readDiagEvents().length, 2);
   clearDiag();
   assert.equal(readDiagEvents().length, 0);
   delete globalThis.localStorage;
