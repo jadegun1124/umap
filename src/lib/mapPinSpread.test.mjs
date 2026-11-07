@@ -7,7 +7,6 @@ import {
   calloutBoxesOverlap,
   calloutScreenBox,
   markerZIndex,
-  memberCalloutHtml,
   spreadPinPositions,
 } from './mapPinSpread.mjs';
 
@@ -80,12 +79,4 @@ test('the southern chip stays on its circle and northern chips climb', () => {
   assert.equal(placed.get('north').dy, -2 * CALLOUT_STACK_PX);
   assert.ok(markerZIndex(placed.get('south').dy, false) > markerZIndex(placed.get('north').dy, false));
   assert.ok(markerZIndex(-CALLOUT_STACK_PX * 8, true) > markerZIndex(0, false));
-});
-
-test('a pin without a status chip does not draw an empty callout', () => {
-  const html = memberCalloutHtml({ dx: 0, dy: -80, labelHtml: '', faceHtml: '엄' });
-  assert.equal(html.includes('data-callout'), false);
-  assert.equal(html.includes('data-pin-leader'), false);
-  assert.equal(html.includes('data-label-tail'), false);
-  assert.match(html, /data-pin-anchor/);
 });

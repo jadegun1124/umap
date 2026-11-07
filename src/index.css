@@ -37,10 +37,8 @@
 }
 
 .umap-member-pin,
-.umap-member-status,
 .umap-home-label,
 .leaflet-marker-icon.umap-member-pin,
-.leaflet-marker-icon.umap-member-status,
 .leaflet-marker-icon.umap-home-label {
   background: transparent !important;
   border: none !important;
