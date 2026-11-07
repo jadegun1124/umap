@@ -78,9 +78,6 @@ export function FamilyMapScreen() {
   useEffect(() => {
     familyRef.current = family;
   });
-  useEffect(() => () => {
-    familyRef.current.endMapGesture();
-  }, []);
   const notifyOk = state.permissions.notifications === 'granted';
   const fittedShare = useRef(false);
   const [syncPhase, setSyncPhase] = useState<SyncPhase>(() => currentSyncPhase());
@@ -1060,10 +1057,8 @@ export function FamilyMapScreen() {
             }}
             onGesture={() => {
               followRef.current = noteUserDrag(followRef.current);
-              familyRef.current.beginMapGesture();
             }}
             onGestureEnd={() => {
-              familyRef.current.endMapGesture();
               setFollowOn(followRef.current.following);
             }}
             onMove={(next) => {

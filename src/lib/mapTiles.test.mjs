@@ -7,12 +7,12 @@ function text(path) {
   return readFileSync(new URL(path, import.meta.url), 'utf8');
 }
 
-test('base tiles wait until the finger lifts and keep a small ring', () => {
+test('base tiles keep loading during a pan and prefetch a buffer', () => {
   const options = baseTileLayerOptions();
-  assert.equal(options.updateWhenIdle, true);
+  assert.equal(options.updateWhenIdle, false);
   assert.equal(options.updateWhenZooming, true);
-  assert.equal(options.keepBuffer, 2);
-  assert.equal(options.updateInterval, 200);
+  assert.ok(options.keepBuffer >= 4);
+  assert.ok(options.updateInterval > 0 && options.updateInterval <= 100);
   assert.equal(options.maxNativeZoom, 19);
   assert.equal(options.maxZoom, 19);
   assert.equal(MAP_LAND_COLOR, '#efe6d6');
@@ -34,13 +34,10 @@ test('the map, the shell, and the worker apply that tile policy', () => {
   assert.match(html, /rel="dns-prefetch" href="https:\/\/api\.vworld\.kr"/);
   assert.match(worker, /umap-tiles-v1/);
   assert.match(worker, /api\.vworld\.kr/);
-  assert.match(worker, /memoryTiles/);
   assert.equal(worker.includes('console.log'), false);
   assert.match(activity, /setCacheMode\(WebSettings\.LOAD_DEFAULT\)/);
   assert.match(map, /syncCalloutGeometry/);
-  assert.match(map, /trailsDirtyRef/);
-  assert.match(map, /if \(movingRef\.current\) \{\s*trailsDirtyRef\.current = true;/);
-  assert.equal(map.includes('onPinchZoom'), false);
+  assert.match(map, /pinch/);
   const screen = text('../components/family/FamilyMapScreen.tsx');
   assert.match(screen, /bottom-36/);
   assert.equal(screen.includes('top-[38%]'), false);

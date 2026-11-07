@@ -15,7 +15,7 @@ test('logout clears the sealed session before the next persist', () => {
   const logout = sliceBetween('logout: () => {', 'withdraw: () => {');
   const cancelAt = logout.indexOf('cancelDeviceSealRestore()');
   const clearAt = logout.indexOf('clearStoredSessions()');
-  const dispatchAt = logout.indexOf("dispatchMap({ type: 'logout' })");
+  const dispatchAt = logout.indexOf("dispatch({ type: 'logout' })");
   assert.ok(cancelAt >= 0 && clearAt > cancelAt && dispatchAt > clearAt);
   assert.match(logout, /logoutLocalAccount\(/);
   assert.match(logout, /clearDiag\(\)/);
@@ -37,7 +37,7 @@ test('a late seal restore cannot write after logout', () => {
 test('logout and reset drop the durable file before the next persist', () => {
   const logout = sliceBetween('logout: () => {', 'withdraw: () => {');
   const forgetAt = logout.indexOf('clearStoredSessions()');
-  const dispatchAt = logout.indexOf("dispatchMap({ type: 'logout' })");
+  const dispatchAt = logout.indexOf("dispatch({ type: 'logout' })");
   assert.ok(forgetAt >= 0 && forgetAt < dispatchAt);
   const forget = sliceBetween('function forgetDurableSession()', 'const SESSION_KEYS');
   assert.match(forget, /durableHold = ''/);
