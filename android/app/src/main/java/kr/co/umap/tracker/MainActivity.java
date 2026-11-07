@@ -6,8 +6,6 @@ import android.net.Uri;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
-import android.view.View;
-import android.view.WindowManager;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebView;
 import androidx.activity.OnBackPressedCallback;
@@ -29,11 +27,6 @@ public class MainActivity extends BridgeActivity {
         LocationKeepService.restartIfWanted(this);
         WebView webView = bridge != null ? bridge.getWebView() : null;
         if (webView != null) {
-            // The window is already hardware accelerated. An extra LAYER_TYPE_HARDWARE
-            // on the WebView fights its own compositor, so it is not set.
-            webView.setOverScrollMode(View.OVER_SCROLL_NEVER);
-            webView.setVerticalScrollBarEnabled(false);
-            webView.setHorizontalScrollBarEnabled(false);
             webView.addJavascriptInterface(new UmapAndroidExit(this), "UmapAndroid");
         }
         captureChatIntent(getIntent());
@@ -78,29 +71,18 @@ public class MainActivity extends BridgeActivity {
     public void onResume() {
         super.onResume();
         resumed = true;
-        keepScreenOn(true);
     }
 
     @Override
     public void onWindowFocusChanged(boolean hasFocus) {
         super.onWindowFocusChanged(hasFocus);
-        if (!hasFocus) return;
-        keepScreenOn(true);
-        UmapAuthPlugin.onMainWindowFocused();
+        if (hasFocus) UmapAuthPlugin.onMainWindowFocused();
     }
 
     @Override
     public void onPause() {
-        keepScreenOn(false);
         resumed = false;
         super.onPause();
-    }
-
-    /** The open activity stays lit. Leaving the app lets the screen sleep again. */
-    private void keepScreenOn(boolean on) {
-        if (getWindow() == null) return;
-        if (on) getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-        else getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
     }
 
     private void captureChatIntent(Intent intent) {

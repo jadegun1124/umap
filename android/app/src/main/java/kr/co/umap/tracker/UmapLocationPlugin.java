@@ -1,7 +1,6 @@
 package kr.co.umap.tracker;
 
 import android.annotation.SuppressLint;
-import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
@@ -420,48 +419,6 @@ public class UmapLocationPlugin extends Plugin {
         call.resolve(result);
     }
 
-    /**
-     * Samsung sleeping-apps is separate from REQUEST_IGNORE_BATTERY_OPTIMIZATIONS.
-     * The app cannot read that list, so this only opens the battery screen.
-     * A missing Samsung activity falls through to the system battery list, then app info.
-     */
-    @PluginMethod
-    public void openSamsungPower(PluginCall call) {
-        JSObject result = new JSObject();
-        boolean samsung = isSamsung();
-        result.put("samsung", samsung);
-        boolean opened = false;
-        if (samsung) {
-            String[][] screens = new String[][] {
-                {"com.samsung.android.lool", "com.samsung.android.sm.ui.battery.BatteryActivity"},
-                {"com.samsung.android.sm", "com.samsung.android.sm.ui.battery.BatteryActivity"},
-                {"com.samsung.android.sm", "com.samsung.android.sm.battery.ui.usage.CheckableAppListActivity"},
-                {"com.samsung.android.sm", "com.samsung.android.sm.ui.battery.AppSleepListActivity"},
-            };
-            for (String[] screen : screens) {
-                Intent intent = new Intent();
-                intent.setComponent(new ComponentName(screen[0], screen[1]));
-                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                if (startExternal(intent)) {
-                    opened = true;
-                    break;
-                }
-            }
-        }
-        if (!opened) {
-            Intent list = new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS);
-            opened = startExternal(list);
-        }
-        if (!opened) opened = openAppDetails();
-        result.put("opened", opened);
-        call.resolve(result);
-    }
-
-    private static boolean isSamsung() {
-        String maker = Build.MANUFACTURER == null ? "" : Build.MANUFACTURER;
-        return maker.equalsIgnoreCase("samsung");
-    }
-
     @PluginMethod
     public void battery(PluginCall call) {
         JSObject result = new JSObject();
@@ -556,8 +513,6 @@ public class UmapLocationPlugin extends Plugin {
         result.put("precise", hasFine());
         PowerManager power = (PowerManager) getContext().getSystemService(Context.POWER_SERVICE);
         result.put("batteryUnrestricted", power != null && power.isIgnoringBatteryOptimizations(getContext().getPackageName()));
-        result.put("manufacturer", Build.MANUFACTURER == null ? "" : Build.MANUFACTURER);
-        result.put("samsung", isSamsung());
         try {
             android.content.pm.PackageInfo info = getContext().getPackageManager().getPackageInfo(getContext().getPackageName(), 0);
             result.put("versionName", info.versionName == null ? "" : info.versionName);

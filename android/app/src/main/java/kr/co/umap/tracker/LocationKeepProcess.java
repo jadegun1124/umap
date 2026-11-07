@@ -38,17 +38,10 @@ public class LocationKeepProcess extends Service {
         @Override
         public void run() {
             LocationKeepService.pokeGps(LocationKeepProcess.this);
-            LocationKeepService.touchMovingWake(LocationKeepProcess.this);
             gpsWatch.postDelayed(this, FIX_WATCH_MS);
         }
     };
     private static final long FIX_WATCH_MS = 15_000L;
-    /**
-     * The timeout is what releases a stuck lock. It used to be 4 hours and was
-     * not refreshed, so a long move lost the CPU lock and Samsung could stop
-     * delivering GPS. The 15s poke and the 2 minute alarm take it again.
-     */
-    public static final long MOVING_WAKE_MS = 10L * 60L * 1000L;
 
     public static boolean isAlive() {
         return foreground;
@@ -76,7 +69,7 @@ public class LocationKeepProcess extends Service {
         }
     }
 
-    /** CPU stay-awake only for the moving GPS stream. Still probes do not hold it. */
+    /** CPU stay-awake only for the moving GPS stream. A 4 hour cap releases a stuck lock. */
     public static void setMovingWake(Context context, boolean moving) {
         if (context == null) return;
         Context app = context.getApplicationContext();
@@ -91,20 +84,8 @@ public class LocationKeepProcess extends Service {
                 movingLock = power.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "kinnex:location-moving");
                 movingLock.setReferenceCounted(false);
             }
-            // Refresh the timeout even when the lock is already held. A second
-            // acquire(timeout) can leave the first releaser in place.
-            if (movingLock.isHeld()) movingLock.release();
-            movingLock.acquire(MOVING_WAKE_MS);
+            if (!movingLock.isHeld()) movingLock.acquire(4L * 60L * 60L * 1000L);
         }
-    }
-
-    /** Keep a moving lock from expiring. A lock that is already down stays down. */
-    public static void renewMovingWake(Context context) {
-        if (context == null) return;
-        synchronized (LocationKeepProcess.class) {
-            if (movingLock == null || !movingLock.isHeld()) return;
-        }
-        setMovingWake(context, true);
     }
 
     @Override
@@ -128,7 +109,6 @@ public class LocationKeepProcess extends Service {
             LocationKeepService.restartIfWanted(this);
         }
         LocationKeepService.ensureRunning(this);
-        LocationKeepService.touchMovingWake(this);
         registerProviders();
         gpsWatch.removeCallbacks(pokeGps);
         gpsWatch.postDelayed(pokeGps, FIX_WATCH_MS);
