@@ -1,8 +1,6 @@
 export const SAME_PLACE_METERS: number;
 export const STATUS_LIFT_PX: number;
 
-export function groupPinShiftY(pinPx?: number): number;
-
 export function distanceMeters(
   a: { lat?: number | null; lng?: number | null },
   b: { lat?: number | null; lng?: number | null },

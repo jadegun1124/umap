@@ -1209,7 +1209,7 @@ export function FamilyMapScreen() {
           </div>
 
           {(syncBanner || tracking.waiting) && (
-            <p data-map-obstacle="" className="absolute inset-x-3 bottom-16 z-30 rounded-2xl bg-amber-50 px-3 py-2 text-[11px] font-semibold leading-4 text-amber-950 shadow">
+            <p className="absolute inset-x-3 bottom-16 z-30 rounded-2xl bg-amber-50 px-3 py-2 text-[11px] font-semibold leading-4 text-amber-950 shadow">
               {tracking.waiting}
               {tracking.waiting && syncBanner ? ' ' : ''}
               {syncBanner}
@@ -1247,7 +1247,7 @@ export function FamilyMapScreen() {
               type="button"
               data-map-obstacle=""
               onClick={recenterFollow}
-              className="absolute bottom-36 left-1/2 z-30 -translate-x-1/2 rounded-full bg-white px-4 py-2 text-sm font-black text-[#0084FF] shadow-md"
+              className="absolute left-1/2 top-[38%] z-30 -translate-x-1/2 rounded-full bg-white px-4 py-2 text-sm font-black text-[#0084FF] shadow-md"
             >
               {recenterLabel(followId, followMember?.name)}
             </button>

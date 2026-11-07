@@ -41,10 +41,6 @@ export function calloutBoxesOverlap(
   b: { left: number; right: number; top: number; bottom: number },
 ): boolean;
 
-export function calloutTransform(dx?: number, dy?: number): string;
-
-export function syncCalloutGeometry(root: ParentNode | null | undefined, dx?: number, dy?: number): void;
-
 export function memberCalloutHtml(input: {
   dx?: number;
   dy?: number;

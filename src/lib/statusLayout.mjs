@@ -117,32 +117,6 @@ export function stablePlaceGroups(members, previousGroups, joinMeters = SAME_PLA
   return groups;
 }
 
-/**
- * Keep the chip on a pin that is still in the group.
- * `previousHosts` maps each member id to the pin that carried the chip.
- * A new member does not steal the chip. The old host wins by votes.
- * A tie keeps `self` when that pin is one of the hosts, otherwise the
- * lexicographic id. If every old host has left, `fallbackId` is used.
- */
-export function stickyStatusHost(memberIds, previousHosts, fallbackId) {
-  const ids = (Array.isArray(memberIds) ? memberIds : []).map((id) => String(id ?? '')).filter(Boolean);
-  const present = new Set(ids);
-  const votes = new Map();
-  const history = previousHosts instanceof Map ? previousHosts : new Map();
-  for (const id of ids) {
-    const prior = history.get(id);
-    const host = prior == null ? '' : String(prior);
-    if (!host || !present.has(host)) continue;
-    votes.set(host, (votes.get(host) || 0) + 1);
-  }
-  if (votes.size === 0) return String(fallbackId ?? ids[0] ?? '');
-  const ranked = [...votes.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
-  const top = ranked[0][1];
-  const tied = ranked.filter((entry) => entry[1] === top).map((entry) => entry[0]);
-  if (tied.includes('self')) return 'self';
-  return tied[0];
-}
-
 export function soloChipSize() {
   return { width: CALLOUT_WIDTH_PX, height: CALLOUT_BLOCK_PX };
 }
@@ -249,16 +223,9 @@ export function chooseChipOffset({
     obstacles,
     occupied,
   ) === 0;
-  if (previous && Number.isFinite(Number(previous.dx)) && Number.isFinite(Number(previous.dy)) && onScreen(previous)) {
-    const stayed = chipBox(kind, anchor, previous, size);
-    // A button overlap of any size leaves the slot. Chip-to-chip overlap
-    // under OVERLAP_HOLD_PX does not, so two labels do not trade places.
-    const buttonHit = slotPressure(stayed, obstacles, []);
-    const chipHit = slotPressure(stayed, [], occupied);
-    if (buttonHit === 0 && chipHit <= OVERLAP_HOLD_PX) {
-      if (!sameOffset(previous, prefer) && clearlyFree(prefer)) return { dx: Number(prefer.dx) || 0, dy: Number(prefer.dy) || 0 };
-      return { dx: Number(previous.dx) || 0, dy: Number(previous.dy) || 0 };
-    }
+  if (previous && Number.isFinite(Number(previous.dx)) && Number.isFinite(Number(previous.dy)) && hit(previous) <= OVERLAP_HOLD_PX && onScreen(previous)) {
+    if (!sameOffset(previous, prefer) && clearlyFree(prefer)) return { dx: Number(prefer.dx) || 0, dy: Number(prefer.dy) || 0 };
+    return { dx: Number(previous.dx) || 0, dy: Number(previous.dy) || 0 };
   }
   let best = { dx: Number(prefer.dx) || 0, dy: Number(prefer.dy) || 0 };
   let bestHit = Infinity;

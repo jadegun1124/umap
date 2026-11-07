@@ -15,12 +15,6 @@ export function holdSpread(
   holdMeters?: number,
 ): Map<string, { lat: number; lng: number; dx: number; dy: number }>;
 
-export function stickyStatusHost(
-  memberIds: Array<string | number>,
-  previousHosts: Map<string, string> | null | undefined,
-  fallbackId?: string,
-): string;
-
 export function stablePlaceGroups<T extends { id?: string; role?: string; lat?: number | null; lng?: number | null }>(
   members: T[],
   previousGroups?: Array<{ key?: string; members?: T[] }> | null,

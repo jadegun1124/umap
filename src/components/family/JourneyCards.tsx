@@ -4,7 +4,6 @@ import 'leaflet/dist/leaflet.css';
 import { Bike, Car, ChevronRight, Footprints, Pause, Plane, Play } from 'lucide-react';
 import { displaySolidTrail, PREVIEW_TRAIL_CAP } from '../../lib/displayTrail.mjs';
 import { classifyJourneyMode, formatJourneyDistance, formatJourneyWhen, journeyPathDistance, modeLabel, playbackAnchor, type TravelMode } from '../../lib/tracking.mjs';
-import { baseTileLayerOptions } from '../../lib/mapTiles.mjs';
 import { VWORLD_ATTRIBUTION, vworldApiKey, vworldBaseTileUrl } from '../../services/vworld';
 import type { Journey } from '../../types/family';
 
@@ -272,8 +271,9 @@ function RoutePreview({ points }: { points: Sample[] }) {
       map.attributionControl.setPrefix('');
       map.attributionControl.setPosition('bottomleft');
       L.tileLayer(vworldBaseTileUrl(key), {
-        ...baseTileLayerOptions(),
         attribution: VWORLD_ATTRIBUTION,
+        minZoom: 6,
+        maxZoom: 19,
         bounds: L.latLngBounds([32.8, 124.0], [39.8, 132.1]),
       }).addTo(map);
     }
