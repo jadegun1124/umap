@@ -1057,8 +1057,10 @@ export function FamilyMapScreen() {
             }}
             onGesture={() => {
               followRef.current = noteUserDrag(followRef.current);
+              familyRef.current.beginMapGesture();
             }}
             onGestureEnd={() => {
+              familyRef.current.endMapGesture();
               setFollowOn(followRef.current.following);
             }}
             onMove={(next) => {
