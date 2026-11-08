@@ -311,7 +311,7 @@ export const StreetMap = forwardRef<StreetMapHandle, {
         return;
       }
       markerDirtyRef.current = false;
-      const paintKey = `${statusPaintKey(members, selectedId)}|home:${home ? `${home.lat.toFixed(5)},${home.lng.toFixed(5)},${home.radiusM}` : ''}`;
+      const paintKey = `${statusPaintKey(members, selectedId)}|home:${home ? `${home.lat.toFixed(5)},${home.lng.toFixed(5)},${home.radiusM},${home.label || ''}` : ''}`;
       if (paintKey === paintKeyRef.current && pinMarkersRef.current.size > 0) return;
       paintKeyRef.current = paintKey;
       if (nodeRef.current) nodeRef.current.dataset.groupRuns = String(Number(nodeRef.current.dataset.groupRuns || 0) + 1);

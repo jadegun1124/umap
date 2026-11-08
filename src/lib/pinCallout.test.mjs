@@ -78,6 +78,9 @@ test('the circle is the marker anchor and a shifted chip keeps a leader back to 
   assert.match(stacked, /rotate\(-90deg\)/);
   assert.match(stacked, /translate\(calc\(-50% \+ 0px\), -72px\)/);
   const seated = memberCalloutHtml({ dx: 0, dy: 0, labelHtml: '<span data-label>나</span>', faceHtml: '나' });
+  const faceOnly = memberCalloutHtml({ dx: 0, dy: 0, labelHtml: '', faceHtml: '엄' });
+  assert.equal(faceOnly.includes('data-callout'), false);
+  assert.equal(faceOnly.includes('data-label-tail'), false);
   assert.equal(calloutLeader(0, 0).needed, false);
   assert.equal(seated.includes('data-pin-leader'), false);
   assert.match(seated, /translate\(calc\(-50% \+ 0px\), 0px\)/);

@@ -613,6 +613,15 @@ test('a 50m group shares one chip and the same poll does not rewrite it', async 
     for (const person of people) {
       assert.ok(markerPoints.some((point) => Math.abs(point.lat - person.lat) < 1e-8 && Math.abs(point.lng - person.lng) < 1e-8));
     }
+    leaflet.eachLayer((layer) => {
+      const element = layer.getElement?.();
+      if (!element?.classList?.contains('umap-member-pin')) return;
+      const at = layer.getLatLng();
+      const person = people.find((item) => Math.abs(at.lat - item.lat) < 1e-8 && Math.abs(at.lng - item.lng) < 1e-8);
+      const tails = element.querySelectorAll('[data-label-tail]').length;
+      if (person && (person.id === 'mom' || person.id === 'khoon')) assert.equal(tails, 0, person.id);
+      else assert.equal(tails, 1, person?.id || 'pin');
+    });
     const before = chips[0].innerHTML;
     const writes = mapNode.dataset.domWrites;
     await draw(people.map((person) => ({ ...person })));

@@ -93,4 +93,10 @@ test('the same coordinates and battery skip a repaint', () => {
   assert.equal(statusPaintKey(members, 'self'), statusPaintKey(again, 'self'));
   again[1] = { ...again[1], battery: 53 };
   assert.notEqual(statusPaintKey(members, 'self'), statusPaintKey(again, 'self'));
+  const now = 1_700_000_000_000;
+  const stamped = members.map((member) => ({ ...member, updatedAt: now, charging: false }));
+  assert.equal(statusPaintKey(stamped, 'self', now), statusPaintKey(stamped.map((member) => ({ ...member })), 'self', now));
+  assert.notEqual(statusPaintKey(stamped, 'self', now), statusPaintKey(stamped.map((member, index) => (index === 0 ? { ...member, charging: true } : member)), 'self', now));
+  assert.notEqual(statusPaintKey(stamped, 'self', now), statusPaintKey(stamped.map((member, index) => (index === 0 ? { ...member, photo: 'data:image/png;base64,abc' } : member)), 'self', now));
+  assert.notEqual(statusPaintKey(stamped, 'self', now), statusPaintKey(stamped, 'self', now + 10 * 60_000));
 });

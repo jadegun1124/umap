@@ -1,5 +1,7 @@
 /** One status chip for people within 50m. Pins stay on their own coordinates. */
 
+import { memberPresence } from './memberPresence.mjs';
+
 export const SAME_PLACE_METERS = 50;
 
 function metersBetween(a, b) {
@@ -80,8 +82,13 @@ export function batteryText(member) {
   return `${Math.max(0, Math.min(100, Math.round(Number(member.battery))))}%`;
 }
 
+function photoStamp(photo) {
+  if (typeof photo !== 'string' || !photo.startsWith('data:image/') || photo.length >= 120_000) return '';
+  return `${photo.length}:${photo.slice(-24)}`;
+}
+
 /** Identity of the fields that change a chip. Same value skips grouping and DOM. */
-export function statusPaintKey(members, selectedId = '') {
+export function statusPaintKey(members, selectedId = '', now = Date.now()) {
   const people = located(members);
   let key = `sel:${selectedId || ''}`;
   for (const member of people) {
@@ -89,7 +96,9 @@ export function statusPaintKey(members, selectedId = '') {
     const lng = member.lng.toFixed(5);
     const battery = member.battery == null || !Number.isFinite(Number(member.battery)) ? '' : String(Math.round(Number(member.battery)));
     const place = cleanStatusPlace(typeof member.place === 'string' ? member.place : '');
-    key += `|${member.id}:${lat},${lng}:${battery}:${place}:${member.name || ''}:${member.role || ''}`;
+    const presence = memberPresence(member, now);
+    const charging = member.charging === true ? '1' : '0';
+    key += `|${member.id}:${lat},${lng}:${battery}:${place}:${member.name || ''}:${member.role || ''}:${charging}:${photoStamp(member.photo)}:${member.updatedAt || ''}:${presence.kind}:${presence.ago}:${presence.faded ? 1 : 0}`;
   }
   return key;
 }
