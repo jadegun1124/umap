@@ -98,7 +98,7 @@ export function statusPaintKey(members, selectedId = '', now = Date.now()) {
     const place = cleanStatusPlace(typeof member.place === 'string' ? member.place : '');
     const presence = memberPresence(member, now);
     const charging = member.charging === true ? '1' : '0';
-    key += `|${member.id}:${lat},${lng}:${battery}:${place}:${member.name || ''}:${member.role || ''}:${charging}:${photoStamp(member.photo)}:${member.updatedAt || ''}:${presence.kind}:${presence.ago}:${presence.faded ? 1 : 0}`;
+    key += `|${member.id}:${lat},${lng}:${battery}:${place}:${member.name || ''}:${member.role || ''}:${charging}:${photoStamp(member.photo)}:${presence.kind}:${presence.ago}:${presence.faded ? 1 : 0}`;
   }
   return key;
 }
