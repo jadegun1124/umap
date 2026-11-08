@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { carryPlace } from './memberPlace.mjs';
 import { appendLiveTip, buildDayRecord, displayLivePoints, hasDirectedWalk, liveMotionLabel, mergeVisitStops, previewOpenJourney, settleTrailPoint, storedTrackAfterArchive, trailDrawParts, walkLeavesStay } from './tracking.mjs';
-import { CALLOUT_STACK_PX, calloutBoxesOverlap, calloutScreenBox, spreadPinPositions } from './mapPinSpread.mjs';
+import { spreadPinPositions } from './mapPinSpread.mjs';
 
 function eastOf(lat, lng, metersEast) {
   return { lat, lng: lng + metersEast / (111320 * Math.cos((lat * Math.PI) / 180)) };
@@ -240,27 +240,19 @@ test('a sub-second spike does not erase a directed walk', () => {
   assert.equal(hasDirectedWalk(points), true);
 });
 
-test('three bubbles at one spot stay apart on screen', () => {
+test('three pins at one spot stay on that coordinate', () => {
   const members = [
     { id: 'mom', lat: 37.6372, lng: 127.07085 },
     { id: 'khoon', lat: 37.6372, lng: 127.07085 },
     { id: 'self', lat: 37.6372, lng: 127.0709 },
   ];
   const placed = spreadPinPositions(members);
-  const slots = [...placed.values()];
-  assert.equal(slots.length, 3);
-  const boxes = [];
+  assert.equal(placed.size, 3);
   for (const member of members) {
     const slot = placed.get(member.id);
     assert.equal(slot.lat, member.lat);
     assert.equal(slot.lng, member.lng);
     assert.equal(slot.dx, 0);
-    boxes.push(calloutScreenBox({ lat: slot.lat, lng: slot.lng, dx: slot.dx, dy: slot.dy, zoom: 18 }));
+    assert.equal(slot.dy, 0);
   }
-  const ys = slots.map((slot) => slot.dy || 0);
-  assert.equal(new Set(ys).size, 3, `dy ${ys.join(',')}`);
-  assert.ok(Math.max(...ys) - Math.min(...ys) >= CALLOUT_STACK_PX * 2, `dy ${ys.join(',')}`);
-  assert.equal(calloutBoxesOverlap(boxes[0], boxes[1]), false);
-  assert.equal(calloutBoxesOverlap(boxes[0], boxes[2]), false);
-  assert.equal(calloutBoxesOverlap(boxes[1], boxes[2]), false);
 });

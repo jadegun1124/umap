@@ -57,6 +57,7 @@ test('the main map polyline grows as a foreground walk streams in', async () => 
   const { window } = dom;
   globalThis.window = window;
   globalThis.document = window.document;
+  globalThis.Element = window.Element;
   globalThis.HTMLElement = window.HTMLElement;
   globalThis.SVGElement = window.SVGElement;
   globalThis.Node = window.Node;
@@ -238,6 +239,7 @@ async function openStreetMap() {
   const { window } = dom;
   globalThis.window = window;
   globalThis.document = window.document;
+  globalThis.Element = window.Element;
   globalThis.HTMLElement = window.HTMLElement;
   globalThis.SVGElement = window.SVGElement;
   globalThis.Node = window.Node;
@@ -538,6 +540,110 @@ test('the main map matches the records line and ends on the pin for a shaped wal
     const holeCoords = coordsOf(holePaint);
     assert.equal(holePaint.includes(';'), false, `walk hole still dashed ${holePaint}`);
     assert.equal(holeCoords[holeCoords.length - 1], `${holePin.lat.toFixed(5)},${holePin.lng.toFixed(5)}`, holePaint);
+  } finally {
+    root.unmount();
+  }
+});
+
+test('a 50m group shares one chip and the same poll does not rewrite it', async () => {
+  const opened = await openStreetMap();
+  const { React, root, bundled, act } = opened;
+  const lat = 37.6372;
+  const lng = 127.07085;
+  const metersEast = (meters) => lng + meters / (111320 * Math.cos((lat * Math.PI) / 180));
+  const member = (id, name, eastMeters, battery, place) => ({
+    id,
+    name,
+    role: id === 'self' ? 'self' : 'guardian',
+    share: 'allowed',
+    lat,
+    lng: metersEast(eastMeters),
+    battery,
+    place,
+    updatedAt: Date.now(),
+    accuracyM: 10,
+    moving: false,
+  });
+  const people = [
+    member('mom', '엄마', 18, 52, '하계청구아파트'),
+    member('khoon', 'Khoon', 30, null, '하계청구아파트'),
+    member('self', '부건', 0, 27, '하계청구아파트'),
+    member('uncle', '삼촌', 200, 10, '상계동'),
+  ];
+  const draw = async (list) => {
+    await act(async () => {
+      root.render(React.createElement(bundled.StreetMap, {
+        center: { lat, lng },
+        zoom: 16,
+        members: list,
+        home: null,
+        trails: [],
+        trailColor: '#0084FF',
+        selectedId: 'self',
+        onSelect: () => {},
+      }));
+    });
+  };
+  try {
+    await draw(people);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 40));
+    });
+    const mapNode = document.querySelector('.umap-street-map');
+    assert.equal(mapNode.dataset.groupRuns, '1');
+    const chips = document.querySelectorAll('[data-status-group]');
+    assert.equal(chips.length, 1);
+    assert.equal((chips[0].innerHTML.match(/data-place/g) || []).length, 1);
+    assert.match(chips[0].innerHTML, /하계청구아파트/);
+    const names = [...chips[0].querySelectorAll('[data-name]')].map((node) => node.textContent);
+    assert.deepEqual(names, ['나', '엄마', 'Khoon'], chips[0].innerHTML);
+    assert.match(chips[0].innerHTML, /—/);
+    const leaflet = mapNode.__kinnexMap;
+    for (const person of people) {
+      const marker = [...leaflet.eachLayer ? [] : []];
+      void marker;
+    }
+    const pins = [...document.querySelectorAll('.umap-member-pin')];
+    assert.equal(pins.length, 4);
+    const markerPoints = [];
+    leaflet.eachLayer((layer) => {
+      if (typeof layer.getLatLng !== 'function' || !layer.getElement?.()?.classList?.contains('umap-member-pin')) return;
+      markerPoints.push(layer.getLatLng());
+    });
+    for (const person of people) {
+      assert.ok(markerPoints.some((point) => Math.abs(point.lat - person.lat) < 1e-8 && Math.abs(point.lng - person.lng) < 1e-8));
+    }
+    leaflet.eachLayer((layer) => {
+      const element = layer.getElement?.();
+      if (!element?.classList?.contains('umap-member-pin')) return;
+      const at = layer.getLatLng();
+      const person = people.find((item) => Math.abs(at.lat - item.lat) < 1e-8 && Math.abs(at.lng - item.lng) < 1e-8);
+      const tails = element.querySelectorAll('[data-label-tail]').length;
+      if (person && (person.id === 'mom' || person.id === 'khoon')) assert.equal(tails, 0, person.id);
+      else assert.equal(tails, 1, person?.id || 'pin');
+    });
+    const before = chips[0].innerHTML;
+    const writes = mapNode.dataset.domWrites;
+    await draw(people.map((person) => ({ ...person })));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    assert.equal(mapNode.dataset.groupRuns, '1');
+    assert.equal(mapNode.dataset.domWrites, writes);
+    assert.equal(document.querySelector('[data-status-group]').innerHTML, before);
+    leaflet.fire('dragstart');
+    await draw(people.map((person) => (person.id === 'mom' ? { ...person, battery: 40 } : { ...person })));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    assert.equal(document.querySelector('[data-status-group]').innerHTML, before);
+    assert.equal(mapNode.dataset.groupRuns, '1');
+    leaflet.fire('moveend');
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    assert.match(document.querySelector('[data-status-group]').innerHTML, /40%/);
+    assert.equal(mapNode.dataset.groupRuns, '2');
   } finally {
     root.unmount();
   }
