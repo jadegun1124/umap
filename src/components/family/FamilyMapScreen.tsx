@@ -1160,6 +1160,7 @@ export function FamilyMapScreen() {
               <Plus className="h-5 w-5" />
             </RoundButton>
             <RoundButton
+              locate
               label={placingHome ? '내 위치로' : recenterLabel(followId, followMember?.name)}
               onClick={() => {
                 if (placingHome) {
@@ -2858,9 +2859,9 @@ function Sheet({ title, onClose, children }: { title: string; onClose: () => voi
   );
 }
 
-function RoundButton({ children, onClick, label }: { children: React.ReactNode; onClick: () => void; label: string }) {
+function RoundButton({ children, onClick, label, locate = false }: { children: React.ReactNode; onClick: () => void; label: string; locate?: boolean }) {
   return (
-    <button type="button" onClick={onClick} aria-label={label} className="flex h-11 w-11 items-center justify-center rounded-full bg-white shadow-md">
+    <button type="button" onClick={onClick} aria-label={label} data-locate-control={locate ? '' : undefined} className="flex h-11 w-11 items-center justify-center rounded-full bg-white shadow-md">
       {children}
     </button>
   );

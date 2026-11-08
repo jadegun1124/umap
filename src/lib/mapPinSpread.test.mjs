@@ -4,29 +4,23 @@ import {
   CALLOUT_BLOCK_PX,
   CALLOUT_STACK_PX,
   bubbleSlot,
-  calloutBoxesOverlap,
-  calloutScreenBox,
   markerZIndex,
   spreadPinPositions,
 } from './mapPinSpread.mjs';
 
-test('two members on the same spot keep the real coordinate and stack labels above it', () => {
+test('two members on the same spot keep the real coordinate and are not spread', () => {
   const members = [
     { id: 'self', lat: 37.6372, lng: 127.07085 },
     { id: 'khoon', lat: 37.6372, lng: 127.07085 },
   ];
   const placed = spreadPinPositions(members);
-  const lower = placed.get('khoon');
-  const upper = placed.get('self');
-  assert.ok(lower && upper);
-  assert.equal(lower.lat, members[1].lat);
-  assert.equal(lower.lng, members[1].lng);
-  assert.equal(upper.lat, members[0].lat);
-  assert.equal(upper.lng, members[0].lng);
-  assert.equal(lower.dx, 0);
-  assert.equal(upper.dx, 0);
-  assert.equal(lower.dy, 0);
-  assert.equal(upper.dy, -CALLOUT_STACK_PX);
+  for (const member of members) {
+    const slot = placed.get(member.id);
+    assert.equal(slot.lat, member.lat);
+    assert.equal(slot.lng, member.lng);
+    assert.equal(slot.dx, 0);
+    assert.equal(slot.dy, 0);
+  }
   assert.ok(CALLOUT_STACK_PX >= CALLOUT_BLOCK_PX);
 });
 
@@ -42,7 +36,7 @@ test('a member standing alone keeps the real coordinate and the label on the pin
   assert.equal(placed.get('far').dy, 0);
 });
 
-test('stacked callouts stay above their own pins and do not overlap at any zoom', () => {
+test('nearby pins stay on their coordinates with no callout offset', () => {
   const south = { id: 'mom', lat: 37.6372, lng: 127.07085 };
   const north = { id: 'self', lat: 37.6372 + 30 / 111320, lng: 127.07085 };
   const same = [
@@ -51,17 +45,12 @@ test('stacked callouts stay above their own pins and do not overlap at any zoom'
   ];
   for (const members of [[south, north], same]) {
     const placed = spreadPinPositions(members);
-    for (const zoom of [15, 17, 19]) {
-      const boxes = members.map((member) => {
-        const slot = placed.get(member.id);
-        const box = calloutScreenBox({ lat: slot.lat, lng: slot.lng, dx: slot.dx, dy: slot.dy, zoom });
-        assert.equal(slot.lat, member.lat);
-        assert.equal(slot.lng, member.lng);
-        assert.equal(box.tail.x, box.pin.x);
-        assert.ok(box.bottom <= box.pin.y - 21 + 0.001);
-        return box;
-      });
-      assert.equal(calloutBoxesOverlap(boxes[0], boxes[1]), false);
+    for (const member of members) {
+      const slot = placed.get(member.id);
+      assert.equal(slot.lat, member.lat);
+      assert.equal(slot.lng, member.lng);
+      assert.equal(slot.dx, 0);
+      assert.equal(slot.dy, 0);
     }
   }
 });
@@ -74,9 +63,9 @@ test('the southern chip stays on its circle and northern chips climb', () => {
   ];
   const placed = spreadPinPositions(members);
   assert.deepEqual(bubbleSlot(0, 3), { dx: 0, dy: 0 });
-  assert.equal(placed.get('south').dy, 0);
-  assert.equal(placed.get('mid').dy, -CALLOUT_STACK_PX);
-  assert.equal(placed.get('north').dy, -2 * CALLOUT_STACK_PX);
-  assert.ok(markerZIndex(placed.get('south').dy, false) > markerZIndex(placed.get('north').dy, false));
-  assert.ok(markerZIndex(-CALLOUT_STACK_PX * 8, true) > markerZIndex(0, false));
+  for (const member of members) {
+    assert.equal(placed.get(member.id).dy, 0);
+    assert.equal(placed.get(member.id).lat, member.lat);
+  }
+  assert.ok(markerZIndex(0, true) > markerZIndex(0, false));
 });

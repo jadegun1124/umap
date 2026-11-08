@@ -85,8 +85,8 @@ test('the circle is the marker anchor and a shifted chip keeps a leader back to 
   const screen = text('../components/family/StreetMap.tsx');
   assert.match(screen, /memberCalloutHtml/);
   assert.match(screen, /memberPinIcon/);
-  assert.match(screen, /markerZIndex\(at\.dy, selected\)/);
-  const marker = screen.slice(screen.indexOf('const marker = L.marker([at.lat, at.lng]'), screen.indexOf("marker.on('click'"));
+  assert.match(screen, /markerZIndex\(0, selected \|\| anchorOf\.has\(member\.id\)\)/);
+  const marker = screen.slice(screen.indexOf('const marker = L.marker([member.lat, member.lng]'), screen.indexOf("marker.on('click'"));
   assert.match(marker, /iconSize: pinIcon\.iconSize/);
   assert.match(marker, /iconAnchor: pinIcon\.iconAnchor/);
   assert.equal(marker.includes('iconSize: [0, 0]'), false);
@@ -105,7 +105,7 @@ test('the release notes do not promise dashed walks or a diag code', () => {
   assert.match(workflow, /키 업로드/);
   assert.match(workflow, /10초/);
   assert.match(workflow, /30초/);
-  assert.match(workflow, /1\.82\.0/);
+  assert.match(workflow, /1\.83\.0/);
   assert.match(workflow, /1\.75\.0 코드로 롤백/);
   const html = text('../../index.html');
   assert.match(html, /umap-tiles-v1/);

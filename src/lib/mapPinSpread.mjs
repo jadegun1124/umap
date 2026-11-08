@@ -17,25 +17,6 @@ export function memberPinIcon() {
   return { iconSize: [pin, pin], iconAnchor: [pin / 2, pin / 2] };
 }
 
-const CLUSTER_M = 40;
-
-function metersBetween(a, b) {
-  const toRad = (value) => (value * Math.PI) / 180;
-  const dLat = toRad(b.lat - a.lat);
-  const dLng = toRad(b.lng - a.lng);
-  const lat1 = toRad(a.lat);
-  const lat2 = toRad(b.lat);
-  const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
-  return 2 * 6371000 * Math.asin(Math.min(1, Math.sqrt(h)));
-}
-
-/** South first, so the southern chip hugs its circle and northern chips climb above it. */
-function compareCluster(left, right) {
-  if (left.lat !== right.lat) return left.lat - right.lat;
-  if (left.lng !== right.lng) return left.lng - right.lng;
-  return String(left.id).localeCompare(String(right.id));
-}
-
 /**
  * Screen-pixel shift of the callout only. dx/dy are not added to the circle.
  * index 0 sits on the pin. Later chips move straight up by a fixed step.
@@ -50,17 +31,9 @@ export function spreadPinPositions(members) {
   const located = (Array.isArray(members) ? members : []).filter((member) => (
     member && Number.isFinite(member.lat) && Number.isFinite(member.lng)
   ));
-  const used = new Set();
   for (const member of located) {
-    if (used.has(member.id)) continue;
-    const group = located
-      .filter((other) => !used.has(other.id) && metersBetween(member, other) <= CLUSTER_M)
-      .sort(compareCluster);
-    group.forEach((item, index) => {
-      const slot = bubbleSlot(index, group.length);
-      placed.set(item.id, { lat: item.lat, lng: item.lng, dx: slot.dx, dy: slot.dy });
-      used.add(item.id);
-    });
+    if (placed.has(member.id)) continue;
+    placed.set(member.id, { lat: member.lat, lng: member.lng, dx: 0, dy: 0 });
   }
   return placed;
 }
@@ -160,7 +133,7 @@ export function memberCalloutHtml({ dx = 0, dy = 0, dimmed = false, tailColor = 
   return `<div data-pin-root style="position:relative;width:${pin}px;height:${pin}px;overflow:visible;opacity:${dimmed ? '0.55' : '1'}">
     ${leaderMarkup(shiftX, shiftY)}
     <div data-pin-anchor style="position:relative;z-index:1;width:${pin}px;height:${pin}px;display:flex;align-items:center;justify-content:center">${faceHtml}</div>
-    <div data-callout style="position:absolute;z-index:2;left:50%;bottom:100%;width:max-content;transform:translate(calc(-50% + ${shiftX}px), ${shiftY}px)">
+    <div data-callout style="position:absolute;z-index:2;left:50%;bottom:100%;width:max-content;transform:translate(calc(-50% + ${shiftX}px), ${shiftY}px);pointer-events:none">
       ${labelHtml}
       <span data-label-tail style="display:block;width:0;height:0;margin:0 auto;border-left:6px solid transparent;border-right:6px solid transparent;border-top:7px solid ${tail}"></span>
     </div>

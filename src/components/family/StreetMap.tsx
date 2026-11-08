@@ -3,9 +3,10 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { noteDiag } from '../../lib/diagLog.mjs';
 import { hasLocation } from '../../lib/geo';
-import { MEMBER_PIN_PX, markerZIndex, memberCalloutHtml, memberPinIcon, spreadPinPositions } from '../../lib/mapPinSpread.mjs';
+import { MEMBER_PIN_PX, markerZIndex, memberCalloutHtml, memberPinIcon } from '../../lib/mapPinSpread.mjs';
 import { savedPlaceLabel } from '../../lib/memberPlace.mjs';
 import { memberIsDimmed, memberPresence, pinAgeLabel } from '../../lib/memberPresence.mjs';
+import { groupMembersByPlace, groupStatusHtml, representativePlace, statusPaintKey } from '../../lib/statusChip.mjs';
 import { appendLiveTip, trailDrawParts } from '../../lib/tracking.mjs';
 import { VWORLD_ATTRIBUTION, vworldApiKey, vworldBaseTileUrl } from '../../services/vworld';
 import type { HomeZone, Member, TrackPoint } from '../../types/family';
@@ -21,12 +22,29 @@ export interface StreetMapHandle {
   setPlayback: (frame: { lat: number; lng: number; label: string } | null, follow?: boolean) => void;
 }
 
+function nudgeLocateChips(map: L.Map) {
+  const button = map.getContainer().parentElement?.parentElement?.querySelector('[data-locate-control]');
+  if (!(button instanceof HTMLElement)) return;
+  const buttonBox = button.getBoundingClientRect();
+  map.getContainer().querySelectorAll('[data-callout]').forEach((node) => {
+    if (!(node instanceof HTMLElement)) return;
+    node.style.marginLeft = '';
+    const box = node.getBoundingClientRect();
+    const overlap = box.right > buttonBox.left && box.left < buttonBox.right && box.bottom > buttonBox.top && box.top < buttonBox.bottom;
+    if (!overlap) return;
+    const shift = Math.ceil(box.right - buttonBox.left) + 8;
+    node.style.marginLeft = `-${shift}px`;
+  });
+}
+
 function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char] ?? char);
 }
 
 function batteryMarkup(member: Member, selected: boolean): string {
-  if (member.battery == null) return '';
+  if (member.battery == null || !Number.isFinite(Number(member.battery))) {
+    return `<span style="margin-left:4px;font-weight:800">—</span>`;
+  }
   const pct = Math.max(0, Math.min(100, Math.round(member.battery)));
   const charging = member.charging === true;
   const color = selected ? '#ffffff' : pct <= 20 ? '#dc2626' : '#334155';
@@ -61,6 +79,14 @@ export const StreetMap = forwardRef<StreetMapHandle, {
   const mapRef = useRef<L.Map | null>(null);
   const layersRef = useRef<L.LayerGroup | null>(null);
   const trailRef = useRef<L.LayerGroup | null>(null);
+  const pinMarkersRef = useRef(new Map<string, { marker: L.Marker; key: string }>());
+  const homeLayersRef = useRef<{ circle: L.Circle; label: L.Marker } | null>(null);
+  const movingRef = useRef(false);
+  const markerDirtyRef = useRef(false);
+  const trailDirtyRef = useRef(false);
+  const paintMarkersRef = useRef<() => void>(() => {});
+  const paintTrailsRef = useRef<() => void>(() => {});
+  const paintKeyRef = useRef('');
   const playbackRef = useRef<L.Marker | null>(null);
   const playbackPanRef = useRef(0);
   const [ready, setReady] = useState(false);
@@ -180,6 +206,7 @@ export const StreetMap = forwardRef<StreetMapHandle, {
     trailRef.current = L.layerGroup().addTo(map);
     layersRef.current = L.layerGroup().addTo(map);
     mapRef.current = map;
+    Object.defineProperty(node, '__kinnexMap', { value: map, configurable: true });
     let moveTick = 0;
     const emitMove = () => {
       const current = map.getCenter();
@@ -197,11 +224,26 @@ export const StreetMap = forwardRef<StreetMapHandle, {
       onGestureRef.current?.();
     };
     map.on('zoomstart', noteUserView);
+    const markMoving = () => {
+      movingRef.current = true;
+    };
+    const releaseMoving = () => {
+      if (!movingRef.current && !markerDirtyRef.current && !trailDirtyRef.current) return;
+      movingRef.current = false;
+      if (markerDirtyRef.current) paintMarkersRef.current();
+      if (trailDirtyRef.current) paintTrailsRef.current();
+      nudgeLocateChips(map);
+    };
+    map.on('movestart', markMoving);
+    map.on('zoomstart', markMoving);
     map.on('dragstart', () => {
       map.stop();
+      markMoving();
       onUserViewRef.current?.();
       onGestureRef.current?.();
     });
+    map.on('moveend', releaseMoving);
+    map.on('zoomend', releaseMoving);
     setReady(true);
     const resize = () => map.invalidateSize();
     resize();
@@ -217,7 +259,11 @@ export const StreetMap = forwardRef<StreetMapHandle, {
       map.off('moveend');
       map.off('click');
       map.off('zoomstart', noteUserView);
+      map.off('movestart', markMoving);
+      map.off('zoomstart', markMoving);
       map.off('dragstart');
+      map.off('moveend', releaseMoving);
+      map.off('zoomend', releaseMoving);
       playbackRef.current = null;
       map.remove();
       mapRef.current = null;
@@ -256,80 +302,156 @@ export const StreetMap = forwardRef<StreetMapHandle, {
   }, [key, ready]);
 
   useEffect(() => {
-    const group = layersRef.current;
-    if (!ready || !group) return;
-    group.clearLayers();
+    const paint = () => {
+      const group = layersRef.current;
+      const map = mapRef.current;
+      if (!ready || !group || !map) return;
+      if (movingRef.current) {
+        markerDirtyRef.current = true;
+        return;
+      }
+      markerDirtyRef.current = false;
+      const paintKey = `${statusPaintKey(members, selectedId)}|home:${home ? `${home.lat.toFixed(5)},${home.lng.toFixed(5)},${home.radiusM}` : ''}`;
+      if (paintKey === paintKeyRef.current && pinMarkersRef.current.size > 0) return;
+      paintKeyRef.current = paintKey;
+      if (nodeRef.current) nodeRef.current.dataset.groupRuns = String(Number(nodeRef.current.dataset.groupRuns || 0) + 1);
 
-    if (home) {
-      L.circle([home.lat, home.lng], {
-        radius: home.radiusM,
-        color: '#0084FF',
-        weight: 2,
-        fillColor: '#0084FF',
-        fillOpacity: 0.14,
-      }).addTo(group);
-      L.marker([home.lat, home.lng], {
-        interactive: false,
-        icon: L.divIcon({
-          className: 'umap-home-label',
-          html: '<span style="display:inline-block;padding:2px 8px;border-radius:999px;background:#fff;color:#0f172a;font-size:11px;font-weight:700;box-shadow:0 1px 4px rgba(15,23,42,.16)">우리 집</span>',
-          iconSize: [64, 22],
-          iconAnchor: [32, 28],
-        }),
-      }).addTo(group);
-    }
-
-    const pins = spreadPinPositions(members);
-    const pinIcon = memberPinIcon();
-    const faceBox = `width:${MEMBER_PIN_PX}px;height:${MEMBER_PIN_PX}px;box-sizing:border-box;border-radius:999px;border:4px solid #fff;box-shadow:0 6px 16px rgba(15,23,42,.2)`;
-    for (const member of members) {
-      if (!hasLocation(member)) continue;
-      const at = pins.get(member.id) || { lat: member.lat, lng: member.lng, dx: 0, dy: 0 };
-      const selected = member.id === selectedId;
-      const presence = memberPresence(member, Date.now());
-      const dimmed = memberIsDimmed(presence);
-      const age = escapeHtml(pinAgeLabel(presence));
-      const color = '#0084FF';
-      const self = member.role === 'self';
-      const label = escapeHtml(self ? '나' : member.name);
-      const savedPlace = savedPlaceLabel(member.lat, member.lng, home);
-      const placeText = savedPlace || (typeof member.place === 'string' ? member.place.trim() : '');
-      const place = placeText && placeText !== '근처' ? escapeHtml(placeText) : '';
-      const initial = escapeHtml(self ? '나' : member.name.slice(0, 1));
-      const battery = batteryMarkup(member, selected);
-      const photo = typeof member.photo === 'string' && member.photo.startsWith('data:image/') && member.photo.length < 120_000
-        ? member.photo
-        : '';
-      const face = photo
-        ? `<img alt="" src="${escapeHtml(photo)}" style="${faceBox};object-fit:cover"/>`
-        : `<span style="${faceBox};background:${color};color:#fff;display:flex;align-items:center;justify-content:center;font-weight:900">${initial}</span>`;
-      const marker = L.marker([at.lat, at.lng], {
-        zIndexOffset: markerZIndex(at.dy, selected),
-        icon: L.divIcon({
-          className: 'umap-member-pin',
-          html: memberCalloutHtml({
-            dx: at.dx,
-            dy: at.dy,
-            dimmed,
-            tailColor: selected ? '#0084FF' : '#fff',
-            labelHtml: `<span data-label style="display:inline-flex;flex-direction:column;align-items:center;margin-bottom:4px;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:700;max-width:180px;box-shadow:0 1px 4px rgba(15,23,42,.16);background:${selected ? '#0084FF' : '#fff'};color:${selected ? '#fff' : '#0f172a'}"><span style="display:inline-flex;align-items:center;white-space:nowrap">${label}${battery}</span>${place ? `<span style="display:block;max-width:164px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;font-weight:600;opacity:.85">${place}</span>` : ''}${age ? `<span style="display:block;max-width:164px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;font-weight:700;opacity:.9">${age}</span>` : ''}</span>`,
-            faceHtml: face,
+      const heldHome = homeLayersRef.current;
+      if (!home) {
+        if (heldHome) {
+          heldHome.circle.remove();
+          heldHome.label.remove();
+          homeLayersRef.current = null;
+        }
+      } else if (heldHome) {
+        heldHome.circle.setLatLng([home.lat, home.lng]);
+        heldHome.circle.setRadius(home.radiusM);
+        heldHome.label.setLatLng([home.lat, home.lng]);
+      } else {
+        const circle = L.circle([home.lat, home.lng], {
+          radius: home.radiusM,
+          color: '#0084FF',
+          weight: 2,
+          fillColor: '#0084FF',
+          fillOpacity: 0.14,
+        }).addTo(group);
+        const label = L.marker([home.lat, home.lng], {
+          interactive: false,
+          icon: L.divIcon({
+            className: 'umap-home-label',
+            html: '<span style="display:inline-block;padding:2px 8px;border-radius:999px;background:#fff;color:#0f172a;font-size:11px;font-weight:700;border:1px solid #e2e8f0">우리 집</span>',
+            iconSize: [64, 22],
+            iconAnchor: [32, 28],
           }),
-          iconSize: pinIcon.iconSize,
-          iconAnchor: pinIcon.iconAnchor,
-        }),
-      });
-      marker.on('click', (event) => {
-        L.DomEvent.stopPropagation(event);
-        onSelectRef.current(member.id);
-      });
-      marker.addTo(group);
-    }
+        }).addTo(group);
+        homeLayersRef.current = { circle, label };
+      }
+
+      const placeOf = (member: Member) => {
+        if (!hasLocation(member)) return typeof member.place === 'string' ? member.place : '';
+        const savedPlace = savedPlaceLabel(member.lat, member.lng, home);
+        return savedPlace || (typeof member.place === 'string' ? member.place : '');
+      };
+      const groups = groupMembersByPlace(members);
+      const labelOf = new Map<string, string>();
+      const anchorOf = new Set<string>();
+      for (const cluster of groups) {
+        if (cluster.length < 2) continue;
+        const ordered = cluster.slice();
+        const anchor = ordered.find((member) => member.id === 'self' || member.role === 'self') || ordered[0];
+        anchorOf.add(anchor.id);
+        labelOf.set(anchor.id, groupStatusHtml(cluster, representativePlace(cluster, placeOf)));
+      }
+
+      const pinIcon = memberPinIcon();
+      const faceBox = `width:${MEMBER_PIN_PX}px;height:${MEMBER_PIN_PX}px;box-sizing:border-box;border-radius:999px;border:4px solid #fff`;
+      const seen = new Set<string>();
+      for (const member of members) {
+        if (!hasLocation(member)) continue;
+        seen.add(member.id);
+        const selected = member.id === selectedId;
+        const presence = memberPresence(member, Date.now());
+        const dimmed = memberIsDimmed(presence);
+        const age = escapeHtml(pinAgeLabel(presence));
+        const self = member.role === 'self' || member.id === 'self';
+        const label = escapeHtml(self ? '나' : member.name);
+        const place = escapeHtml(placeOf(member) && placeOf(member) !== '근처' ? placeOf(member) : '');
+        const initial = escapeHtml(self ? '나' : member.name.slice(0, 1));
+        const battery = batteryMarkup(member, selected);
+        const photo = typeof member.photo === 'string' && member.photo.startsWith('data:image/') && member.photo.length < 120_000
+          ? member.photo
+          : '';
+        const face = photo
+          ? `<img alt="" src="${escapeHtml(photo)}" style="${faceBox};object-fit:cover"/>`
+          : `<span style="${faceBox};background:#0084FF;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:900">${initial}</span>`;
+        const groupedAway = groups.some((cluster) => cluster.length > 1 && cluster.some((item) => item.id === member.id)) && !anchorOf.has(member.id);
+        const labelHtml = labelOf.get(member.id)
+          || (groupedAway ? '' : `<span data-label style="display:inline-flex;flex-direction:column;align-items:center;margin-bottom:4px;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:700;max-width:180px;border:1px solid #e2e8f0;background:${selected ? '#0084FF' : '#fff'};color:${selected ? '#fff' : '#0f172a'};pointer-events:none"><span style="display:inline-flex;align-items:center;white-space:nowrap">${label}${battery}</span>${place ? `<span data-place style="display:block;max-width:164px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;font-weight:600">${place}</span>` : ''}${age ? `<span style="display:block;max-width:164px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;font-weight:700">${age}</span>` : ''}</span>`);
+        const html = memberCalloutHtml({
+          dx: 0,
+          dy: 0,
+          dimmed,
+          tailColor: selected ? '#0084FF' : '#fff',
+          labelHtml,
+          faceHtml: face,
+        });
+        const contentKey = `${member.lat.toFixed(5)},${member.lng.toFixed(5)}|${html}`;
+        const held = pinMarkersRef.current.get(member.id);
+        if (held && held.key === contentKey) continue;
+        if (nodeRef.current) nodeRef.current.dataset.domWrites = String(Number(nodeRef.current.dataset.domWrites || 0) + 1);
+        if (held) {
+          const at = held.marker.getLatLng();
+          if (!at || at.lat !== member.lat || at.lng !== member.lng) held.marker.setLatLng([member.lat, member.lng]);
+          const iconEl = held.marker.getElement();
+          if (iconEl) iconEl.innerHTML = html;
+          else {
+            held.marker.setIcon(L.divIcon({
+              className: anchorOf.has(member.id) ? 'umap-member-pin umap-member-status' : 'umap-member-pin',
+              html,
+              iconSize: pinIcon.iconSize,
+              iconAnchor: pinIcon.iconAnchor,
+            }));
+          }
+          held.marker.setZIndexOffset(markerZIndex(0, selected || anchorOf.has(member.id)));
+          held.key = contentKey;
+          continue;
+        }
+        const marker = L.marker([member.lat, member.lng], {
+          zIndexOffset: markerZIndex(0, selected || anchorOf.has(member.id)),
+          icon: L.divIcon({
+            className: anchorOf.has(member.id) ? 'umap-member-pin umap-member-status' : 'umap-member-pin',
+            html,
+            iconSize: pinIcon.iconSize,
+            iconAnchor: pinIcon.iconAnchor,
+          }),
+        });
+        marker.on('click', (event) => {
+          L.DomEvent.stopPropagation(event);
+          onSelectRef.current(member.id);
+        });
+        marker.addTo(group);
+        pinMarkersRef.current.set(member.id, { marker, key: contentKey });
+      }
+      for (const [id, held] of pinMarkersRef.current) {
+        if (seen.has(id)) continue;
+        held.marker.remove();
+        pinMarkersRef.current.delete(id);
+      }
+      nudgeLocateChips(map);
+    };
+    paintMarkersRef.current = paint;
+    paint();
   }, [home, members, ready, selectedId]);
 
   useEffect(() => {
+    const paint = () => {
     const trailGroup = trailRef.current;
     if (!ready || !trailGroup) return;
+    if (movingRef.current) {
+      trailDirtyRef.current = true;
+      return;
+    }
+    trailDirtyRef.current = false;
     trailGroup.clearLayers();
     const stroke = { smoothFactor: 0, lineCap: 'round' as const, lineJoin: 'round' as const };
     const drawn: string[] = [];
@@ -377,6 +499,9 @@ export const StreetMap = forwardRef<StreetMapHandle, {
     }
     if (nodeRef.current) nodeRef.current.dataset.trail = drawn.join(';');
     noteDiag({ kind: 'render', points: pointCount, segments: drawn.length });
+    };
+    paintTrailsRef.current = paint;
+    paint();
   }, [ready, trails, trailColor]);
 
   const missingKey = !key;
