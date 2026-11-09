@@ -10,6 +10,15 @@ export const DIAG_UPLOAD_GZIP_MAX = 700_000;
 const STORAGE_KEY = 'umap_diag_ring_v1';
 const SENT_KEY = 'umap_diag_sent_v1';
 const SENT_LIMIT = 8;
+const WRITE_NOW_BYTES = 64_000;
+const RENDER_GAP_MS = 30_000;
+
+let ring = null;
+let ringBytes = 0;
+let dirty = false;
+let flushTimer = 0;
+let hooks = false;
+let lastRenderAt = 0;
 
 function storage() {
   try {
@@ -48,13 +57,62 @@ function writeRaw(events) {
 }
 
 export function clearDiag() {
+  ring = [];
+  ringBytes = 2;
+  dirty = false;
+  if (flushTimer) {
+    clearTimeout(flushTimer);
+    flushTimer = 0;
+  }
   const box = storage();
   if (!box) return;
   try {
     box.removeItem(STORAGE_KEY);
+    box.removeItem(SENT_KEY);
   } catch {
     writeRaw([]);
   }
+}
+
+export function reloadDiagRing() {
+  ring = null;
+  ringBytes = 0;
+  dirty = false;
+}
+
+function ensureRing() {
+  if (ring) return;
+  ring = readRaw();
+  ringBytes = JSON.stringify(ring).length;
+}
+
+function armHooks() {
+  if (hooks || typeof window === 'undefined' || typeof document === 'undefined') return;
+  hooks = true;
+  window.addEventListener('pagehide', () => flushDiagRing());
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') flushDiagRing();
+  });
+}
+
+export function flushDiagRing() {
+  if (flushTimer) {
+    clearTimeout(flushTimer);
+    flushTimer = 0;
+  }
+  if (!dirty || !ring) return;
+  writeRaw(ring);
+  dirty = false;
+}
+
+function persistRing() {
+  if (!dirty) return;
+  if (ringBytes > WRITE_NOW_BYTES && typeof window !== 'undefined') {
+    armHooks();
+    if (!flushTimer) flushTimer = setTimeout(() => flushDiagRing(), 4000);
+    return;
+  }
+  flushDiagRing();
 }
 
 function roundDiagNumber(key, value) {
@@ -71,21 +129,27 @@ export function trimDiagEvents(events, now = Date.now(), limits = {}) {
   const rows = (Array.isArray(events) ? events : []).filter((event) => (
     event && Number.isFinite(event.t) && now - event.t <= windowMs && now - event.t >= -60_000
   ));
-  const fits = (list) => list.length <= maxEvents && JSON.stringify(list).length <= maxBytes;
-  while (!fits(rows)) {
-    const renderAt = rows.findIndex((event) => event.kind === 'render');
+  const sized = rows.map((event) => ({ event, size: JSON.stringify(event).length + 1 }));
+  let bytes = 2 + sized.reduce((sum, item) => sum + item.size, 0);
+  const drop = (index) => {
+    bytes -= sized[index].size;
+    sized.splice(index, 1);
+  };
+  while (sized.length > maxEvents || bytes > maxBytes) {
+    const renderAt = sized.findIndex((item) => item.event.kind === 'render');
     if (renderAt >= 0) {
-      rows.splice(renderAt, 1);
+      drop(renderAt);
       continue;
     }
-    if (rows.length <= 1) break;
-    rows.shift();
+    if (sized.length <= 1) break;
+    drop(0);
   }
-  return rows.slice(-maxEvents);
+  return sized.map((item) => item.event);
 }
 
 export function readDiagEvents(now = Date.now()) {
-  return trimDiagEvents(readRaw(), now);
+  ensureRing();
+  return trimDiagEvents(ring, now);
 }
 
 export function noteDiag(event) {
@@ -99,7 +163,23 @@ export function noteDiag(event) {
     else if (typeof value === 'number' && Number.isFinite(value)) row[key] = roundDiagNumber(key, value);
   }
   if (!row.kind) return;
-  writeRaw(trimDiagEvents(readRaw().concat([row]), now));
+  if (row.kind === 'render') {
+    if (now - lastRenderAt < RENDER_GAP_MS) return;
+    lastRenderAt = now;
+  }
+  ensureRing();
+  const rowBytes = JSON.stringify(row).length + 1;
+  const expired = ring.length > 0 && now - ring[0].t > DIAG_WINDOW_MS;
+  const over = ring.length + 1 > DIAG_MAX_EVENTS || ringBytes + rowBytes > DIAG_MAX_BYTES;
+  if (expired || over) {
+    ring = trimDiagEvents(ring.concat([row]), now);
+    ringBytes = JSON.stringify(ring).length;
+  } else {
+    ring.push(row);
+    ringBytes += rowBytes;
+  }
+  dirty = true;
+  persistRing();
 }
 
 export function readDiagCodes() {

@@ -60,6 +60,12 @@ test('a gzipped diagnostic upload expands back into events', async () => {
   assert.equal(report.status, 200);
   const read = await call(accounts, 'GET', `/v1/diag/${report.body.id}`);
   assert.equal(read.body.events[0].lat, 37.5);
+  const bomb = gzipSync(Buffer.from('x'.repeat(1_600_000))).toString('base64');
+  const rejected = await call(accounts, 'POST', '/v1/diag', {
+    accountKey: created.body.account.accountKey,
+    body: { encoding: 'gzip', payload: bomb },
+  });
+  assert.equal(rejected.status, 400);
 });
 
 test('a diagnostic report is stored on the account and read only by its id', async () => {

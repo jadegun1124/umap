@@ -8,6 +8,7 @@ export const DIAG_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const DIAG_INDEX = 'diag-index';
 const MAX_EVENTS = 12_000;
 export const MAX_DIAG_BODY = 768 * 1024;
+export const MAX_DIAG_INFLATED = 1_500_000;
 const MAX_EVENT_KEYS = 24;
 
 function bytesToBase64Url(bytes) {
@@ -50,12 +51,35 @@ export async function decodeDiagBody(value) {
 
 async function ungzipBase64(payload) {
   const raw = Uint8Array.from(atob(payload), (char) => char.charCodeAt(0));
+  let text = '';
   if (typeof DecompressionStream === 'function') {
     const stream = new Blob([raw]).stream().pipeThrough(new DecompressionStream('gzip'));
-    return new Response(stream).text();
+    const reader = stream.getReader();
+    const parts = [];
+    let total = 0;
+    while (true) {
+      const step = await reader.read();
+      if (step.done) break;
+      total += step.value.length;
+      if (total > MAX_DIAG_INFLATED) {
+        await reader.cancel();
+        throw new Error('diag-size');
+      }
+      parts.push(step.value);
+    }
+    const merged = new Uint8Array(total);
+    let offset = 0;
+    for (const part of parts) {
+      merged.set(part, offset);
+      offset += part.length;
+    }
+    text = new TextDecoder().decode(merged);
+  } else {
+    const { gunzipSync } = await import('node:zlib');
+    text = gunzipSync(raw).toString('utf8');
   }
-  const { gunzipSync } = await import('node:zlib');
-  return gunzipSync(raw).toString('utf8');
+  if (text.length > MAX_DIAG_INFLATED) throw new Error('diag-size');
+  return text;
 }
 
 export function cleanDiagEvents(value) {

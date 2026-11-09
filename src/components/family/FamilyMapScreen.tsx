@@ -2913,7 +2913,7 @@ function DiagSendButton() {
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1500);
     };
-    void navigator.clipboard?.writeText(id).then(done).catch(() => {
+    const fallback = () => {
       try {
         const area = document.createElement('textarea');
         area.value = id;
@@ -2925,7 +2925,13 @@ function DiagSendButton() {
       } catch {
         setNote('복사하지 못했습니다. 번호를 길게 눌러 선택해 주세요.');
       }
-    });
+    };
+    const clip = navigator.clipboard;
+    if (!clip || typeof clip.writeText !== 'function') {
+      fallback();
+      return;
+    }
+    void clip.writeText(id).then(done).catch(fallback);
   };
   return (
     <div className="mt-4 rounded-2xl bg-slate-50 px-3 py-3">

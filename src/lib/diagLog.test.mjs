@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { gunzipSync } from 'node:zlib';
-import { clearDiag, fixChannelSource, noteDiag, packDiagUpload, readDiagCodes, readDiagEvents, rememberDiagCode, trimDiagEvents } from './diagLog.mjs';
+import { clearDiag, fixChannelSource, noteDiag, packDiagUpload, readDiagCodes, readDiagEvents, reloadDiagRing, rememberDiagCode, trimDiagEvents } from './diagLog.mjs';
 
 function memoryStorage() {
   const box = new Map();
@@ -24,16 +24,23 @@ test('the diagnostic ring keeps 24 hours in localStorage and drops the 25th hour
   const stored = JSON.parse(box.get('umap_diag_ring_v1'));
   stored[0].t = Date.now() - 23 * 60 * 60 * 1000;
   box.set('umap_diag_ring_v1', JSON.stringify(stored));
+  reloadDiagRing();
   assert.equal(readDiagEvents().length, 1);
   stored[0].t = Date.now() - 25 * 60 * 60 * 1000;
   box.set('umap_diag_ring_v1', JSON.stringify(stored));
+  reloadDiagRing();
   assert.equal(readDiagEvents().length, 0);
   noteDiag({ kind: 'fix', lat: 37.2, lng: 127.3 });
   assert.equal(readDiagEvents().length, 1);
   const again = JSON.parse(box.get('umap_diag_ring_v1'));
   assert.equal(again.length, 1);
+  noteDiag({ kind: 'fix', lat: 37.4, lng: 127.4 });
+  reloadDiagRing();
+  assert.equal(readDiagEvents().length, 2);
+  rememberDiagCode('abcdefghijklmnop', 10);
   clearDiag();
   assert.equal(readDiagEvents().length, 0);
+  assert.deepEqual(readDiagCodes(), []);
   delete globalThis.localStorage;
 });
 
