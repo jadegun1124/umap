@@ -141,6 +141,7 @@ export function flushDiagRing() {
 
 function persistRing() {
   if (!dirty) return;
+  // The tail is the durable copy. A failed full write waits a minute.
   writeTail();
   if (Date.now() < fullWriteBlockedUntil) return;
   const compact = ringBytes <= WRITE_NOW_BYTES || typeof window === 'undefined' || tail.length >= 40;
