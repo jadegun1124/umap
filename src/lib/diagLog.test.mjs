@@ -81,6 +81,26 @@ test('sent diagnostic codes stay on this phone', () => {
   delete globalThis.localStorage;
 });
 
+test('a large ring keeps a new fix on disk before the full rewrite', () => {
+  const box = memoryStorage();
+  globalThis.window = { addEventListener() {} };
+  globalThis.document = { visibilityState: 'hidden', addEventListener() {} };
+  const now = Date.now();
+  const seed = [];
+  for (let index = 0; index < 1000; index += 1) {
+    seed.push({ t: now, kind: 'fix', reason: `stay-${index}-padding`, n: index });
+  }
+  box.set('umap_diag_ring_v1', JSON.stringify(seed));
+  reloadDiagRing();
+  noteDiag({ kind: 'fix', lat: 37.5, lng: 127.5, reason: 'background' });
+  reloadDiagRing();
+  assert.equal(readDiagEvents().some((event) => event.reason === 'background'), true);
+  delete globalThis.window;
+  delete globalThis.document;
+  clearDiag();
+  delete globalThis.localStorage;
+});
+
 test('a native provider name is kept and a js coarse fix is network', () => {
   assert.equal(fixChannelSource('native', 'fused', true), 'fused');
   assert.equal(fixChannelSource('native', 'gps', true), 'gps');

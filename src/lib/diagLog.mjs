@@ -8,12 +8,14 @@ export const DIAG_UPLOAD_RAW_MAX = 180_000;
 export const DIAG_UPLOAD_GZIP_MAX = 700_000;
 
 const STORAGE_KEY = 'umap_diag_ring_v1';
+const TAIL_KEY = 'umap_diag_tail_v1';
 const SENT_KEY = 'umap_diag_sent_v1';
 const SENT_LIMIT = 8;
 const WRITE_NOW_BYTES = 64_000;
 const RENDER_GAP_MS = 30_000;
 
 let ring = null;
+let tail = [];
 let ringBytes = 0;
 let dirty = false;
 let flushTimer = 0;
@@ -29,15 +31,23 @@ function storage() {
   }
 }
 
-function readRaw() {
+function readKey(key) {
   const box = storage();
   if (!box) return [];
   try {
-    const parsed = JSON.parse(box.getItem(STORAGE_KEY) || '[]');
+    const parsed = JSON.parse(box.getItem(key) || '[]');
     return Array.isArray(parsed) ? parsed : [];
   } catch {
     return [];
   }
+}
+
+function readRaw() {
+  return readKey(STORAGE_KEY);
+}
+
+function readTail() {
+  return readKey(TAIL_KEY);
 }
 
 function writeRaw(events) {
@@ -68,6 +78,7 @@ export function clearDiag() {
   if (!box) return;
   try {
     box.removeItem(STORAGE_KEY);
+    box.removeItem(TAIL_KEY);
     box.removeItem(SENT_KEY);
   } catch {
     writeRaw([]);
@@ -76,14 +87,31 @@ export function clearDiag() {
 
 export function reloadDiagRing() {
   ring = null;
+  tail = [];
   ringBytes = 0;
   dirty = false;
 }
 
 function ensureRing() {
   if (ring) return;
-  ring = readRaw();
+  tail = readTail();
+  ring = trimDiagEvents(readRaw().concat(tail));
   ringBytes = JSON.stringify(ring).length;
+}
+
+function writeTail() {
+  const box = storage();
+  if (!box) return;
+  try {
+    if (tail.length === 0) box.removeItem(TAIL_KEY);
+    else box.setItem(TAIL_KEY, JSON.stringify(tail));
+  } catch {
+    /* the full ring write still tries */
+  }
+}
+
+function backgrounded() {
+  return typeof document !== 'undefined' && document.visibilityState === 'hidden';
 }
 
 function armHooks() {
@@ -102,12 +130,16 @@ export function flushDiagRing() {
   }
   if (!dirty || !ring) return;
   writeRaw(ring);
+  tail = [];
+  writeTail();
   dirty = false;
 }
 
 function persistRing() {
   if (!dirty) return;
-  if (ringBytes > WRITE_NOW_BYTES && typeof window !== 'undefined') {
+  writeTail();
+  const compact = ringBytes <= WRITE_NOW_BYTES || typeof window === 'undefined' || backgrounded() || tail.length >= 40;
+  if (!compact) {
     armHooks();
     if (!flushTimer) flushTimer = setTimeout(() => flushDiagRing(), 4000);
     return;
@@ -178,6 +210,7 @@ export function noteDiag(event) {
     ring.push(row);
     ringBytes += rowBytes;
   }
+  tail = tail.concat([row]).slice(-200);
   dirty = true;
   persistRing();
 }
