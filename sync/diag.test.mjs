@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createMemoryAccountStore } from './account.mjs';
-import { cleanDiagEvents } from './diag.mjs';
+import { cleanDiagEvents, decodeDiagBody } from './diag.mjs';
+import { gzipSync } from 'node:zlib';
 import { createMemoryStore, handleSyncRequest } from './protocol.mjs';
 
 function snapshot() {
@@ -42,6 +43,23 @@ test('geocode candidates and the app version are kept in a diagnostic report', (
   assert.equal(events[0].candidates, names);
   assert.equal(events[0].label, '하계 1차청구아파트 105동');
   assert.equal(events[0].version, '1.44.0');
+});
+
+test('a gzipped diagnostic upload expands back into events', async () => {
+  const json = JSON.stringify({ events: [{ kind: 'fix', t: 10, lat: 37.5, lng: 127.1, reason: 'accepted' }] });
+  const payload = gzipSync(Buffer.from(json)).toString('base64');
+  const events = await decodeDiagBody({ encoding: 'gzip', payload });
+  assert.equal(events.length, 1);
+  assert.equal(events[0].reason, 'accepted');
+  const accounts = createMemoryAccountStore();
+  const created = await call(accounts, 'POST', '/v1/account', { body: snapshot() });
+  const report = await call(accounts, 'POST', '/v1/diag', {
+    accountKey: created.body.account.accountKey,
+    body: { encoding: 'gzip', payload },
+  });
+  assert.equal(report.status, 200);
+  const read = await call(accounts, 'GET', `/v1/diag/${report.body.id}`);
+  assert.equal(read.body.events[0].lat, 37.5);
 });
 
 test('a diagnostic report is stored on the account and read only by its id', async () => {

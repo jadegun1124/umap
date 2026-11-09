@@ -1,9 +1,15 @@
-// Rolling diagnostic ring on this phone. Uploading it is a separate, explicit step.
-// Coordinates stay in this buffer until the user sends the report.
+// Rolling diagnostic ring on this phone. localStorage keeps it across
+// restart and swipe-away. Uploading it is a separate, explicit step.
+
+export const DIAG_WINDOW_MS = 24 * 60 * 60 * 1000;
+export const DIAG_MAX_EVENTS = 12_000;
+export const DIAG_MAX_BYTES = 1_200_000;
+export const DIAG_UPLOAD_RAW_MAX = 180_000;
+export const DIAG_UPLOAD_GZIP_MAX = 700_000;
 
 const STORAGE_KEY = 'umap_diag_ring_v1';
-const MAX_EVENTS = 5000;
-const WINDOW_MS = 2 * 60 * 60 * 1000;
+const SENT_KEY = 'umap_diag_sent_v1';
+const SENT_LIMIT = 8;
 
 function storage() {
   try {
@@ -28,10 +34,16 @@ function readRaw() {
 function writeRaw(events) {
   const box = storage();
   if (!box) return;
+  let payload = JSON.stringify(events);
   try {
-    box.setItem(STORAGE_KEY, JSON.stringify(events));
+    box.setItem(STORAGE_KEY, payload);
   } catch {
-    /* a full disk drops the newest note instead of breaking location */
+    const shorter = events.slice(Math.ceil(events.length / 2));
+    try {
+      box.setItem(STORAGE_KEY, JSON.stringify(shorter));
+    } catch {
+      /* a full disk drops the newest note instead of breaking location */
+    }
   }
 }
 
@@ -41,13 +53,39 @@ export function clearDiag() {
   try {
     box.removeItem(STORAGE_KEY);
   } catch {
-    /* the next logout still drops the in-memory copy by rewriting an empty list */
     writeRaw([]);
   }
 }
 
+function roundDiagNumber(key, value) {
+  if (key === 'lat' || key === 'lng') return Math.round(value * 1e5) / 1e5;
+  if (key === 'accuracy' || key === 'speed') return Math.round(value * 10) / 10;
+  if (key === 't' || key === 'at') return Math.round(value);
+  return Math.round(value * 1000) / 1000;
+}
+
+export function trimDiagEvents(events, now = Date.now(), limits = {}) {
+  const windowMs = limits.windowMs ?? DIAG_WINDOW_MS;
+  const maxEvents = limits.maxEvents ?? DIAG_MAX_EVENTS;
+  const maxBytes = limits.maxBytes ?? DIAG_MAX_BYTES;
+  const rows = (Array.isArray(events) ? events : []).filter((event) => (
+    event && Number.isFinite(event.t) && now - event.t <= windowMs && now - event.t >= -60_000
+  ));
+  const fits = (list) => list.length <= maxEvents && JSON.stringify(list).length <= maxBytes;
+  while (!fits(rows)) {
+    const renderAt = rows.findIndex((event) => event.kind === 'render');
+    if (renderAt >= 0) {
+      rows.splice(renderAt, 1);
+      continue;
+    }
+    if (rows.length <= 1) break;
+    rows.shift();
+  }
+  return rows.slice(-maxEvents);
+}
+
 export function readDiagEvents(now = Date.now()) {
-  return readRaw().filter((event) => event && Number.isFinite(event.t) && now - event.t <= WINDOW_MS).slice(-MAX_EVENTS);
+  return trimDiagEvents(readRaw(), now);
 }
 
 export function noteDiag(event) {
@@ -58,10 +96,76 @@ export function noteDiag(event) {
     if (key === 't' || !/^[a-z][a-z0-9]{0,24}$/.test(key)) continue;
     if (typeof value === 'string') row[key] = value.slice(0, 160);
     else if (typeof value === 'boolean') row[key] = value;
-    else if (typeof value === 'number' && Number.isFinite(value)) row[key] = value;
+    else if (typeof value === 'number' && Number.isFinite(value)) row[key] = roundDiagNumber(key, value);
   }
   if (!row.kind) return;
-  writeRaw(readDiagEvents(now).concat([row]).slice(-MAX_EVENTS));
+  writeRaw(trimDiagEvents(readRaw().concat([row]), now));
+}
+
+export function readDiagCodes() {
+  const box = storage();
+  if (!box) return [];
+  try {
+    const parsed = JSON.parse(box.getItem(SENT_KEY) || '[]');
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((row) => row && typeof row.id === 'string' && row.id.length >= 16 && Number.isFinite(row.at)).slice(0, SENT_LIMIT);
+  } catch {
+    return [];
+  }
+}
+
+export function rememberDiagCode(id, at = Date.now()) {
+  if (typeof id !== 'string' || id.length < 16) return readDiagCodes();
+  const box = storage();
+  const next = [{ id, at }, ...readDiagCodes().filter((row) => row.id !== id)].slice(0, SENT_LIMIT);
+  if (box) {
+    try {
+      box.setItem(SENT_KEY, JSON.stringify(next));
+    } catch {
+      /* the number still shows on this screen */
+    }
+  }
+  return next;
+}
+
+function bytesToBase64(bytes) {
+  let binary = '';
+  const chunk = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunk));
+  }
+  return btoa(binary);
+}
+
+async function gzipJson(json) {
+  if (typeof CompressionStream !== 'function') return null;
+  const stream = new Blob([json]).stream().pipeThrough(new CompressionStream('gzip'));
+  const packed = new Uint8Array(await new Response(stream).arrayBuffer());
+  return JSON.stringify({ encoding: 'gzip', payload: bytesToBase64(packed) });
+}
+
+/** JSON under the plain cap, otherwise gzip. Older webviews trim instead. */
+export async function packDiagUpload(events, limits = {}) {
+  const rawMax = limits.rawMax ?? DIAG_UPLOAD_RAW_MAX;
+  const gzipMax = limits.gzipMax ?? DIAG_UPLOAD_GZIP_MAX;
+  let batch = Array.isArray(events) ? events.slice() : [];
+  while (batch.length > 1 && JSON.stringify(batch).length > rawMax * 8) {
+    batch = batch.slice(Math.ceil(batch.length / 5));
+  }
+  let json = JSON.stringify({ events: batch });
+  if (json.length <= rawMax) return json;
+  let packed = await gzipJson(json);
+  let guard = 0;
+  while (packed && packed.length > gzipMax && batch.length > 1 && guard < 6) {
+    batch = batch.slice(Math.ceil(batch.length / 5));
+    json = JSON.stringify({ events: batch });
+    if (json.length <= rawMax) return json;
+    packed = await gzipJson(json);
+    guard += 1;
+  }
+  if (packed && packed.length <= gzipMax) return packed;
+  while (JSON.stringify(batch).length > rawMax && batch.length > 1) batch = batch.slice(Math.ceil(batch.length / 5));
+  return JSON.stringify({ events: batch });
 }
 
 export function fixChannelSource(channel, provider, precise) {

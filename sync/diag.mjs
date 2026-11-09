@@ -6,7 +6,8 @@ import { recordHandling } from './handling.mjs';
 
 export const DIAG_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const DIAG_INDEX = 'diag-index';
-const MAX_EVENTS = 5000;
+const MAX_EVENTS = 12_000;
+export const MAX_DIAG_BODY = 768 * 1024;
 const MAX_EVENT_KEYS = 24;
 
 function bytesToBase64Url(bytes) {
@@ -33,6 +34,28 @@ function short(value, max = 80) {
   const text = value.trim();
   if (!text) return undefined;
   return text.slice(0, max);
+}
+
+export async function decodeDiagBody(value) {
+  if (!value || typeof value !== 'object') return [];
+  if (value.encoding === 'gzip' && typeof value.payload === 'string') {
+    const json = await ungzipBase64(value.payload);
+    const parsed = JSON.parse(json);
+    if (Array.isArray(parsed)) return parsed;
+    if (parsed && Array.isArray(parsed.events)) return parsed.events;
+    return [];
+  }
+  return value.events;
+}
+
+async function ungzipBase64(payload) {
+  const raw = Uint8Array.from(atob(payload), (char) => char.charCodeAt(0));
+  if (typeof DecompressionStream === 'function') {
+    const stream = new Blob([raw]).stream().pipeThrough(new DecompressionStream('gzip'));
+    return new Response(stream).text();
+  }
+  const { gunzipSync } = await import('node:zlib');
+  return gunzipSync(raw).toString('utf8');
 }
 
 export function cleanDiagEvents(value) {

@@ -5,7 +5,7 @@
 import { isKeyWrap, isSeal, isVault } from '../src/lib/familySeal.mjs';
 import { NAVER_REDIRECT, allowedNaverRedirect } from '../src/lib/naverAuth.mjs';
 import { listDisclosures, purgeExpiredDisclosureIndex, purgeExpiredDisclosures } from './disclosure.mjs';
-import { diagReadAuthorized, forgetDiagReports, listDiagReports, purgeDiagReports, putDiagReport, readDiagReport } from './diag.mjs';
+import { decodeDiagBody, diagReadAuthorized, forgetDiagReports, listDiagReports, MAX_DIAG_BODY, purgeDiagReports, putDiagReport, readDiagReport } from './diag.mjs';
 import { listHandling, recordHandling } from './handling.mjs';
 import { mintInvite, redeemInvite, revokeInvite } from './invite.mjs';
 
@@ -1276,12 +1276,14 @@ export async function parseAccountOperation(request) {
     return { kind: 'account-get', accountKey };
   }
 
+  const diagPost = path === '/v1/diag' && request.method === 'POST';
+  const bodyLimit = diagPost ? MAX_DIAG_BODY : MAX_ACCOUNT_BODY;
   const declared = Number(request.headers.get('content-length') || 0);
-  if (Number.isFinite(declared) && declared > MAX_ACCOUNT_BODY) return json({ error: 'size' }, 413);
+  if (Number.isFinite(declared) && declared > bodyLimit) return json({ error: 'size' }, 413);
   let value = {};
   if (request.method !== 'GET') {
     const text = await request.text();
-    if (text.length > MAX_ACCOUNT_BODY) return json({ error: 'size' }, 413);
+    if (text.length > bodyLimit) return json({ error: 'size' }, 413);
     if (text) {
       try {
         value = JSON.parse(text);
@@ -1292,7 +1294,13 @@ export async function parseAccountOperation(request) {
   }
 
   if (request.method === 'POST' && path === '/v1/diag') {
-    return { kind: 'account-diag-put', accountKey, events: value.events };
+    let events = [];
+    try {
+      events = await decodeDiagBody(value);
+    } catch {
+      return json({ error: 'json' }, 400);
+    }
+    return { kind: 'account-diag-put', accountKey, events };
   }
 
   if (request.method === 'POST' && path === '/v1/invites') {
