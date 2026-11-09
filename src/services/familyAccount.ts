@@ -15,7 +15,7 @@ import {
 } from '../lib/accountRestore.mjs';
 import { openAccountSecrets, prepareBackup } from '../lib/familyVault.mjs';
 import { planAccountBackup } from '../lib/historyMerge.mjs';
-import { readDiagEvents } from '../lib/diagLog.mjs';
+import { packDiagUpload, readDiagEvents } from '../lib/diagLog.mjs';
 import { familySyncUrl } from './familySync';
 
 export {
@@ -215,13 +215,12 @@ export async function uploadDiagReport(accountKey = readStoredAccountKey(typeof 
   if (!accountKey || !familySyncUrl()) return { ok: false, message: '로그인된 계정이 있어야 보냅니다. 카카오·네이버 또는 복구 코드로 들어온 뒤에 보내 주세요.' };
   const events = readDiagEvents();
   if (events.length === 0) return { ok: false, message: '보낼 진단 기록이 없습니다. 잠시 움직인 뒤에 다시 보내 주세요.' };
-  let batch = events;
-  while (JSON.stringify(batch).length > 180_000 && batch.length > 1) batch = batch.slice(Math.ceil(batch.length / 5));
+  const packed = await packDiagUpload(events);
   try {
     const response = await request('/v1/diag', {
       method: 'POST',
       headers: accountHeaders(accountKey),
-      body: JSON.stringify({ events: batch }),
+      body: packed,
     });
     const body = await response.json().catch(() => null) as { ok?: boolean; id?: string; error?: string } | null;
     if (!response.ok || !body || body.ok !== true || typeof body.id !== 'string') {

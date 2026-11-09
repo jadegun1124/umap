@@ -2902,19 +2902,53 @@ function AppVersionLine() {
 function DiagSendButton() {
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState('');
+  const [latest, setLatest] = useState('');
+  const [copied, setCopied] = useState(false);
+  const [sent, setSent] = useState<{ id: string; at: number }[]>([]);
+  useEffect(() => {
+    void import('../../lib/diagLog.mjs').then(({ readDiagCodes }) => setSent(readDiagCodes()));
+  }, []);
+  const copyCode = (id: string) => {
+    const done = () => {
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    };
+    const fallback = () => {
+      try {
+        const area = document.createElement('textarea');
+        area.value = id;
+        document.body.appendChild(area);
+        area.select();
+        document.execCommand('copy');
+        area.remove();
+        done();
+      } catch {
+        setNote('복사하지 못했습니다. 번호를 길게 눌러 선택해 주세요.');
+      }
+    };
+    const clip = navigator.clipboard;
+    if (!clip || typeof clip.writeText !== 'function') {
+      fallback();
+      return;
+    }
+    void clip.writeText(id).then(done).catch(fallback);
+  };
   return (
     <div className="mt-4 rounded-2xl bg-slate-50 px-3 py-3">
       <p className="text-sm font-black text-slate-900">진단 기록 보내기</p>
-      <p className="mt-1 text-xs font-semibold leading-5 text-slate-500">최근 2시간의 위치·궤적 판단을 개발자에게 바로 보냅니다. 좌표가 포함되고 7일 뒤 지워집니다. 가족 위치와 기록 암호화는 그대로입니다.</p>
+      <p className="mt-1 text-xs font-semibold leading-5 text-slate-500">최근 24시간의 위치·궤적 판단을 개발자에게 바로 보냅니다. 이 폰에 남고, 앱을 닫아도 하루 동안 유지됩니다. 좌표가 포함되고 서버에서는 7일 뒤 지워집니다. 가족 위치와 기록 암호화는 그대로입니다.</p>
       <button
         type="button"
         disabled={busy}
         onClick={() => {
           setBusy(true);
           setNote('');
-          void import('../../services/familyAccount').then(({ uploadDiagReport }) => uploadDiagReport()).then((result) => {
+          void import('../../services/familyAccount').then(({ uploadDiagReport }) => uploadDiagReport()).then(async (result) => {
             if (result.ok && result.id) {
-              setNote('보냈습니다');
+              const { rememberDiagCode } = await import('../../lib/diagLog.mjs');
+              setLatest(result.id);
+              setSent(rememberDiagCode(result.id));
+              setNote('');
               return;
             }
             setNote(result.message || '올리지 못했습니다.');
@@ -2924,6 +2958,26 @@ function DiagSendButton() {
       >
         {busy ? '올리는 중…' : '진단 기록 보내기'}
       </button>
+      {latest && (
+        <div className="mt-3">
+          <p className="text-xs font-bold text-slate-500">진단 코드</p>
+          <p className="mt-1 break-all font-mono text-2xl font-black leading-8 text-slate-900">{latest}</p>
+          <button type="button" onClick={() => copyCode(latest)} className="mt-2 text-sm font-bold text-[#0084FF]">
+            {copied ? '복사했습니다' : '코드 복사'}
+          </button>
+        </div>
+      )}
+      {sent.length > 0 && (
+        <ul className="mt-3 space-y-2">
+          <li className="text-xs font-bold text-slate-500">최근 보낸 진단 코드</li>
+          {sent.map((row) => (
+            <li key={row.id} className="flex items-start justify-between gap-2">
+              <span className="break-all font-mono text-xs font-bold text-slate-800">{row.id}</span>
+              <button type="button" onClick={() => copyCode(row.id)} className="shrink-0 text-xs font-bold text-[#0084FF]">복사</button>
+            </li>
+          ))}
+        </ul>
+      )}
       {note && <p className="mt-1 text-xs font-semibold leading-5 text-slate-600">{note}</p>}
     </div>
   );
@@ -2966,11 +3020,13 @@ function handlingLine(event: HandlingEvent): string {
 }
 
 function DisclosureLogPanel() {
+  const [open, setOpen] = useState(false);
   const [rows, setRows] = useState<DisclosureRecord[] | null>(null);
   const [events, setEvents] = useState<HandlingEvent[] | null>(null);
   const [intact, setIntact] = useState(true);
   const [message, setMessage] = useState<string | null>(null);
   useEffect(() => {
+    if (!open) return undefined;
     let live = true;
     void loadOwnDisclosures().then((result) => {
       if (!live) return;
@@ -2986,11 +3042,21 @@ function DisclosureLogPanel() {
     return () => {
       live = false;
     };
-  }, []);
+  }, [open]);
   const empty = rows !== null && events !== null && rows.length === 0 && events.length === 0 && !message;
   return (
     <section className="mt-4" aria-label="위치정보 이용·제공 기록">
-      <h3 className="text-sm font-black text-slate-800">위치정보 이용·제공 기록</h3>
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+        className="w-full rounded-full bg-slate-100 py-3 text-sm font-bold text-slate-800"
+      >
+        {open ? '수집·이용 내역 접기' : '수집·이용 내역 보기'}
+      </button>
+      {!open ? null : (
+      <>
+      <h3 className="mt-3 text-sm font-black text-slate-800">위치정보 이용·제공 기록</h3>
       <p className="mt-1 text-xs leading-5 text-slate-500">
         위치를 올리거나 가족이 확인한 사실, 제3자에게 넘긴 종류의 기록입니다. 표시 이름, 카카오·네이버 계정, 가족 구성, 기기, 계정·복구 정보, 위치, 기록, 장소 이름이 적힐 수 있습니다. 그 값과 좌표는 적지 않습니다. 올린 날부터 6개월 뒤 지우고, 회원 탈퇴 후에도 그 기간이 끝날 때까지 남습니다.
       </p>
@@ -3023,6 +3089,8 @@ function DisclosureLogPanel() {
             </li>
           ))}
         </ul>
+      )}
+      </>
       )}
     </section>
   );

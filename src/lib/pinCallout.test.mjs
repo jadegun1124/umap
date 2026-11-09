@@ -108,7 +108,8 @@ test('the release notes do not promise dashed walks or a diag code', () => {
   assert.match(workflow, /키 업로드/);
   assert.match(workflow, /10초/);
   assert.match(workflow, /30초/);
-  assert.match(workflow, /1\.83\.0/);
+  assert.match(workflow, /1\.84\.0/);
+  assert.match(workflow, /24시간/);
   assert.match(workflow, /1\.75\.0 코드로 롤백/);
   const html = text('../../index.html');
   assert.match(html, /umap-tiles-v1/);

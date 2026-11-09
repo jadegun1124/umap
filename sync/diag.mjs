@@ -6,7 +6,9 @@ import { recordHandling } from './handling.mjs';
 
 export const DIAG_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const DIAG_INDEX = 'diag-index';
-const MAX_EVENTS = 5000;
+const MAX_EVENTS = 12_000;
+export const MAX_DIAG_BODY = 768 * 1024;
+export const MAX_DIAG_INFLATED = 1_500_000;
 const MAX_EVENT_KEYS = 24;
 
 function bytesToBase64Url(bytes) {
@@ -33,6 +35,51 @@ function short(value, max = 80) {
   const text = value.trim();
   if (!text) return undefined;
   return text.slice(0, max);
+}
+
+export async function decodeDiagBody(value) {
+  if (!value || typeof value !== 'object') return [];
+  if (value.encoding === 'gzip' && typeof value.payload === 'string') {
+    const json = await ungzipBase64(value.payload);
+    const parsed = JSON.parse(json);
+    if (Array.isArray(parsed)) return parsed;
+    if (parsed && Array.isArray(parsed.events)) return parsed.events;
+    return [];
+  }
+  return value.events;
+}
+
+async function ungzipBase64(payload) {
+  const raw = Uint8Array.from(atob(payload), (char) => char.charCodeAt(0));
+  let text = '';
+  if (typeof DecompressionStream === 'function') {
+    const stream = new Blob([raw]).stream().pipeThrough(new DecompressionStream('gzip'));
+    const reader = stream.getReader();
+    const parts = [];
+    let total = 0;
+    while (true) {
+      const step = await reader.read();
+      if (step.done) break;
+      total += step.value.length;
+      if (total > MAX_DIAG_INFLATED) {
+        await reader.cancel();
+        throw new Error('diag-size');
+      }
+      parts.push(step.value);
+    }
+    const merged = new Uint8Array(total);
+    let offset = 0;
+    for (const part of parts) {
+      merged.set(part, offset);
+      offset += part.length;
+    }
+    text = new TextDecoder().decode(merged);
+  } else {
+    const { gunzipSync } = await import('node:zlib');
+    text = gunzipSync(raw).toString('utf8');
+  }
+  if (text.length > MAX_DIAG_INFLATED) throw new Error('diag-size');
+  return text;
 }
 
 export function cleanDiagEvents(value) {
