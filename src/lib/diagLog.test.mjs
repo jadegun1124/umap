@@ -101,6 +101,23 @@ test('a large ring keeps a new fix on disk before the full rewrite', () => {
   delete globalThis.localStorage;
 });
 
+test('a failed full write leaves the new fix in the tail', () => {
+  const box = memoryStorage();
+  noteDiag({ kind: 'fix', lat: 37.1, lng: 127.1, reason: 'kept' });
+  const original = box.set.bind(box);
+  box.set = (key, value) => {
+    if (key === 'umap_diag_ring_v1') throw new Error('full');
+    original(key, value);
+  };
+  globalThis.localStorage.setItem = box.set;
+  noteDiag({ kind: 'fix', lat: 37.2, lng: 127.2, reason: 'tail' });
+  reloadDiagRing();
+  const reasons = readDiagEvents().map((event) => event.reason);
+  assert.equal(reasons.includes('kept'), true);
+  assert.equal(reasons.includes('tail'), true);
+  delete globalThis.localStorage;
+});
+
 test('a native provider name is kept and a js coarse fix is network', () => {
   assert.equal(fixChannelSource('native', 'fused', true), 'fused');
   assert.equal(fixChannelSource('native', 'gps', true), 'gps');

@@ -52,16 +52,16 @@ function readTail() {
 
 function writeRaw(events) {
   const box = storage();
-  if (!box) return;
-  let payload = JSON.stringify(events);
+  if (!box) return false;
   try {
-    box.setItem(STORAGE_KEY, payload);
+    box.setItem(STORAGE_KEY, JSON.stringify(events));
+    return true;
   } catch {
-    const shorter = events.slice(Math.ceil(events.length / 2));
     try {
-      box.setItem(STORAGE_KEY, JSON.stringify(shorter));
+      box.setItem(STORAGE_KEY, JSON.stringify(events.slice(Math.ceil(events.length / 2))));
+      return true;
     } catch {
-      /* a full disk drops the newest note instead of breaking location */
+      return false;
     }
   }
 }
@@ -110,10 +110,6 @@ function writeTail() {
   }
 }
 
-function backgrounded() {
-  return typeof document !== 'undefined' && document.visibilityState === 'hidden';
-}
-
 function armHooks() {
   if (hooks || typeof window === 'undefined' || typeof document === 'undefined') return;
   hooks = true;
@@ -129,7 +125,7 @@ export function flushDiagRing() {
     flushTimer = 0;
   }
   if (!dirty || !ring) return;
-  writeRaw(ring);
+  if (!writeRaw(ring)) return;
   tail = [];
   writeTail();
   dirty = false;
@@ -138,7 +134,7 @@ export function flushDiagRing() {
 function persistRing() {
   if (!dirty) return;
   writeTail();
-  const compact = ringBytes <= WRITE_NOW_BYTES || typeof window === 'undefined' || backgrounded() || tail.length >= 40;
+  const compact = ringBytes <= WRITE_NOW_BYTES || typeof window === 'undefined' || tail.length >= 40;
   if (!compact) {
     armHooks();
     if (!flushTimer) flushTimer = setTimeout(() => flushDiagRing(), 4000);
