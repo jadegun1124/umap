@@ -19,6 +19,7 @@ let tail = [];
 let ringBytes = 0;
 let dirty = false;
 let flushTimer = 0;
+let fullWriteBlockedUntil = 0;
 let hooks = false;
 let lastRenderAt = 0;
 
@@ -70,6 +71,7 @@ export function clearDiag() {
   ring = [];
   ringBytes = 2;
   dirty = false;
+  fullWriteBlockedUntil = 0;
   if (flushTimer) {
     clearTimeout(flushTimer);
     flushTimer = 0;
@@ -90,6 +92,7 @@ export function reloadDiagRing() {
   tail = [];
   ringBytes = 0;
   dirty = false;
+  fullWriteBlockedUntil = 0;
 }
 
 function ensureRing() {
@@ -125,7 +128,12 @@ export function flushDiagRing() {
     flushTimer = 0;
   }
   if (!dirty || !ring) return;
-  if (!writeRaw(ring)) return;
+  if (Date.now() < fullWriteBlockedUntil) return;
+  if (!writeRaw(ring)) {
+    fullWriteBlockedUntil = Date.now() + 60_000;
+    return;
+  }
+  fullWriteBlockedUntil = 0;
   tail = [];
   writeTail();
   dirty = false;
@@ -134,6 +142,7 @@ export function flushDiagRing() {
 function persistRing() {
   if (!dirty) return;
   writeTail();
+  if (Date.now() < fullWriteBlockedUntil) return;
   const compact = ringBytes <= WRITE_NOW_BYTES || typeof window === 'undefined' || tail.length >= 40;
   if (!compact) {
     armHooks();

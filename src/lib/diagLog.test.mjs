@@ -104,17 +104,23 @@ test('a large ring keeps a new fix on disk before the full rewrite', () => {
 test('a failed full write leaves the new fix in the tail', () => {
   const box = memoryStorage();
   noteDiag({ kind: 'fix', lat: 37.1, lng: 127.1, reason: 'kept' });
+  let fullWrites = 0;
   const original = box.set.bind(box);
   box.set = (key, value) => {
-    if (key === 'umap_diag_ring_v1') throw new Error('full');
+    if (key === 'umap_diag_ring_v1') {
+      fullWrites += 1;
+      throw new Error('full');
+    }
     original(key, value);
   };
-  globalThis.localStorage.setItem = box.set;
   noteDiag({ kind: 'fix', lat: 37.2, lng: 127.2, reason: 'tail' });
+  noteDiag({ kind: 'fix', lat: 37.3, lng: 127.3, reason: 'later' });
+  assert.equal(fullWrites, 2);
   reloadDiagRing();
   const reasons = readDiagEvents().map((event) => event.reason);
   assert.equal(reasons.includes('kept'), true);
   assert.equal(reasons.includes('tail'), true);
+  assert.equal(reasons.includes('later'), true);
   delete globalThis.localStorage;
 });
 
