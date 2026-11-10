@@ -85,6 +85,16 @@ test('a backup waits when the server cannot be read and otherwise unions by id',
   });
   assert.equal(held.keepHistory, true);
   assert.equal(held.journeys.length, 0);
+  const unread = planAccountBackup({
+    localJourneys: local,
+    localVisits: [],
+    remoteOk: false,
+    remoteLocked: false,
+    remoteJourneys: [],
+    remoteVisits: [],
+  });
+  assert.equal(unread.keepHistory, true);
+  assert.equal(unread.journeys.length, 0);
   const remote = [trip('khoon-drive', Date.now(), 7000)];
   const merged = planAccountBackup({
     localJourneys: local,

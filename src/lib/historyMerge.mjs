@@ -86,16 +86,15 @@ export function applyMemberTrail(local, incoming) {
 
 /**
  * Decide what history a backup may upload.
- * If the server could not be read, or the seal would not open, keep the server copy.
- * Otherwise upload the id union so a shorter phone does not replace a longer backup.
+ * A failed read keeps the server copy. A seal that opened is unioned by id.
+ * A seal that was read but would not open still uploads this phone's own journeys.
  */
 export function planAccountBackup({ localJourneys, localVisits, remoteOk, remoteLocked, remoteJourneys, remoteVisits }) {
   const localJ = Array.isArray(localJourneys) ? localJourneys : [];
   const localV = Array.isArray(localVisits) ? localVisits : [];
-  if (!remoteOk || remoteLocked) {
-    if (localJ.length === 0 && localV.length === 0) {
-      return { keepHistory: true, journeys: [], visits: [] };
-    }
+  if (!remoteOk) return { keepHistory: true, journeys: [], visits: [] };
+  if (remoteLocked) {
+    if (localJ.length === 0 && localV.length === 0) return { keepHistory: true, journeys: [], visits: [] };
     return { keepHistory: false, journeys: localJ, visits: localV };
   }
   return {

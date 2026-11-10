@@ -103,6 +103,9 @@ test('an 800m catch-up inside 120s used to store no point and now stores it', ()
   assert.match(java, /moved >= 50f && implied > 12f/);
   assert.match(java, /JOURNAL_CAP = 6_000/);
   assert.match(java, /trail-journal\.seal/);
+  assert.match(java, /uploadedThrough/);
+  assert.match(java, /NativeDiag.commitFile/);
+  assert.equal(java.includes('dest.delete()'), false);
   assert.equal(java.includes('journal.remove(0);\n        }\n        if (upload.pin'), false);
 });
 
@@ -138,6 +141,13 @@ test('a 45s-old walk batch is kept, and a 100m fix on the 20s stay probe is not 
   );
   assert.ok(merged.length >= 2);
   assert.equal(mergeNativeFixes(merged, [{ ...eastOf(home.lat, home.lng, 30), at: 20_000, accuracyM: 8, speedMps: 1.4 }]), merged);
+  const late = { ...eastOf(home.lat, home.lng, 80), at: 80_000, accuracyM: 8, speedMps: 1.4 };
+  const early = { ...eastOf(home.lat, home.lng, 20), at: 20_000, accuracyM: 8, speedMps: 1.4 };
+  const ordered = mergeNativeFixes([late], [early, { ...home, at: 0, accuracyM: 8, speedMps: 1.2 }]);
+  const times = ordered.filter((point) => !point.stayEnd).map((point) => point.at);
+  assert.deepEqual(times, [...times].sort((left, right) => left - right));
+  assert.equal(times[0] <= times[times.length - 1], true);
+  assert.ok(times.includes(20_000));
 });
 
 test('a quiet stay stays at 20s, and an unclear step uses the 15s bridge', () => {

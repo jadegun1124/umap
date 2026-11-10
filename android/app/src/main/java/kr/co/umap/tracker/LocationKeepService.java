@@ -158,6 +158,8 @@ public class LocationKeepService {
     private static Location lastSample;
     private static final JSONArray pendingPoints = new JSONArray();
     private static final JSONArray journal = new JSONArray();
+    /** Newest point time already accepted by the family upload. The journal itself stays. */
+    private static long uploadedThrough = 0L;
     private static long lastEmittedAt = 0L;
     private static boolean journalLoaded = false;
 
@@ -684,13 +686,14 @@ public class LocationKeepService {
         lastEmittedAt = 0L;
         while (pendingPoints.length() > 0) pendingPoints.remove(0);
         while (journal.length() > 0) journal.remove(0);
+        uploadedThrough = 0L;
         filterLoaded = true;
         journalLoaded = true;
         deleteJournalFile(context);
         prefs(context).edit()
             .remove("stable").remove("last").remove("lastAt").remove("heartbeatAt").remove("lastFixAt")
             .remove("beatLatE6").remove("beatLngE6").remove("beatAcc")
-            .remove("journal")
+            .remove("journal").remove("uploadedThrough")
             .apply();
     }
 
@@ -713,8 +716,11 @@ public class LocationKeepService {
 
     private static void deleteJournalFile(Context context) {
         if (context == null) return;
-        java.io.File file = journalFile(context);
-        if (file.exists() && !file.delete()) file.deleteOnExit();
+        java.io.File dir = context.getFilesDir();
+        for (String name : new String[] { JOURNAL_FILE, JOURNAL_FILE + ".bak", JOURNAL_FILE + ".tmp" }) {
+            java.io.File file = new java.io.File(dir, name);
+            if (file.exists() && !file.delete()) file.deleteOnExit();
+        }
     }
 
     public static String journalJson() {
@@ -728,6 +734,7 @@ public class LocationKeepService {
     private static void loadJournal(Context context) {
         if (journalLoaded || context == null) return;
         journalLoaded = true;
+        uploadedThrough = prefs(context).getLong("uploadedThrough", 0L);
         String raw = readJournalRaw(context);
         if (raw == null || raw.isEmpty()) return;
         if (raw.startsWith("umap-device-seal:")) raw = DeviceCipher.open(raw);
@@ -738,7 +745,8 @@ public class LocationKeepService {
                 JSONObject point = stored.optJSONObject(index);
                 if (point == null) continue;
                 journal.put(point);
-                pendingPoints.put(new JSONObject(point.toString()));
+                long at = point.optLong("at");
+                if (at <= 0L || at > uploadedThrough) pendingPoints.put(new JSONObject(point.toString()));
             }
         } catch (Exception ignored) {
             /* The next fix starts a new journal. */
@@ -746,26 +754,9 @@ public class LocationKeepService {
     }
 
     private static String readJournalRaw(Context context) {
-        String fromFile = readSmallFile(journalFile(context), 2_000_000);
+        String fromFile = NativeDiag.readCommitted(journalFile(context), 2_000_000);
         if (fromFile != null && !fromFile.isEmpty()) return fromFile.trim();
         return prefs(context).getString("journal", "");
-    }
-
-    private static String readSmallFile(java.io.File file, int cap) {
-        if (file == null || !file.isFile()) return "";
-        try (InputStream input = new java.io.FileInputStream(file)) {
-            ByteArrayOutputStream buffer = new ByteArrayOutputStream();
-            byte[] chunk = new byte[4096];
-            int count;
-            int total = 0;
-            while ((count = input.read(chunk)) >= 0 && total < cap) {
-                buffer.write(chunk, 0, count);
-                total += count;
-            }
-            return buffer.toString(StandardCharsets.UTF_8);
-        } catch (Exception error) {
-            return "";
-        }
     }
 
     private static void saveJournal(Context context) {
@@ -778,8 +769,7 @@ public class LocationKeepService {
             try (OutputStream output = new java.io.FileOutputStream(tmp)) {
                 output.write(sealed.getBytes(StandardCharsets.UTF_8));
             }
-            if (dest.exists() && !dest.delete()) return;
-            if (!tmp.renameTo(dest)) return;
+            if (!NativeDiag.commitFile(tmp, dest)) return;
             prefs(context).edit().remove("journal").apply();
         } catch (Exception ignored) {
             /* Keep the previous file if this seal fails. */
@@ -930,9 +920,14 @@ public class LocationKeepService {
 
     private static void commitUpload(Context context, Upload upload, boolean dropPending) {
         if (dropPending) {
+            long through = uploadedThrough;
             for (int index = 0; index < upload.sent && pendingPoints.length() > 0; index += 1) {
+                JSONObject point = pendingPoints.optJSONObject(0);
+                if (point != null) through = Math.max(through, point.optLong("at"));
                 pendingPoints.remove(0);
             }
+            uploadedThrough = through;
+            if (context != null) prefs(context).edit().putLong("uploadedThrough", through).apply();
         }
         if (upload.pin != null) lastPublished = new Location(upload.pin);
         lastPublishedAt = upload.at;

@@ -91,15 +91,18 @@ public final class NativeDiag {
             sinceFlush = 0;
             lastFlushAt = 0L;
             if (context == null) return;
-            File file = new File(context.getFilesDir(), FILE_NAME);
-            if (file.exists() && !file.delete()) file.deleteOnExit();
+            File dir = context.getFilesDir();
+            for (String name : new String[] { FILE_NAME, FILE_NAME + ".bak", FILE_NAME + ".tmp" }) {
+                File file = new File(dir, name);
+                if (file.exists() && !file.delete()) file.deleteOnExit();
+            }
         }
     }
 
     private static void load(Context context) {
         if (loaded) return;
         loaded = true;
-        String raw = readFile(new File(context.getFilesDir(), FILE_NAME));
+        String raw = readCommitted(new File(context.getFilesDir(), FILE_NAME), MAX_BYTES * 2);
         if (raw == null || raw.isEmpty()) return;
         try {
             JSONArray stored = new JSONArray(raw);
@@ -139,8 +142,32 @@ public final class NativeDiag {
         } catch (Exception ignored) {
             return;
         }
-        if (dest.exists() && !dest.delete()) return;
-        if (!tmp.renameTo(dest)) tmp.delete();
+        commitFile(tmp, dest);
+    }
+
+    /** Move tmp into place. The previous file stays as .bak until the new name is in place. */
+    static boolean commitFile(File tmp, File dest) {
+        if (tmp == null || dest == null || !tmp.isFile()) return false;
+        File dir = dest.getParentFile();
+        File bak = new File(dir, dest.getName() + ".bak");
+        if (bak.exists() && !bak.delete()) return false;
+        if (dest.exists() && !dest.renameTo(bak)) return false;
+        if (!tmp.renameTo(dest)) {
+            if (!dest.exists() && bak.exists()) bak.renameTo(dest);
+            return false;
+        }
+        if (bak.exists() && !bak.delete()) bak.deleteOnExit();
+        return true;
+    }
+
+    static String readCommitted(File dest, int cap) {
+        if (dest == null) return "";
+        String primary = readFile(dest, cap);
+        if (primary != null && !primary.isEmpty()) return primary;
+        File dir = dest.getParentFile();
+        String bak = readFile(new File(dir, dest.getName() + ".bak"), cap);
+        if (bak != null && !bak.isEmpty()) return bak;
+        return readFile(new File(dir, dest.getName() + ".tmp"), cap);
     }
 
     private static String readArray() {
@@ -149,14 +176,14 @@ public final class NativeDiag {
         return copy.toString();
     }
 
-    private static String readFile(File file) {
+    private static String readFile(File file, int cap) {
         if (file == null || !file.isFile()) return "";
         try (InputStream input = new FileInputStream(file)) {
             ByteArrayOutputStream buffer = new ByteArrayOutputStream();
             byte[] chunk = new byte[4096];
             int count;
             int total = 0;
-            while ((count = input.read(chunk)) >= 0 && total < MAX_BYTES * 2) {
+            while ((count = input.read(chunk)) >= 0 && total < cap) {
                 buffer.write(chunk, 0, count);
                 total += count;
             }
