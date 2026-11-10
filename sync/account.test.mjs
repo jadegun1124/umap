@@ -921,6 +921,43 @@ test('a sealed backup deletes plaintext history and the stored recovery code', a
   assert.ok(again.body.account.vault);
 });
 
+test('a backup that did not read the current seal does not replace it', async () => {
+  const { base64UrlToBytes, historySealAck, mintDeviceKey, sealJson } = await import('../src/lib/familySeal.mjs');
+  const accounts = createMemoryAccountStore();
+  const created = await accountCall(accounts, 'POST', '/v1/account', { body: snapshot() });
+  const device = await mintDeviceKey();
+  const content = base64UrlToBytes(device.contentKey);
+  const longer = await sealJson(content, device.publicKey, {
+    journeys: snapshot().journeys,
+    visits: snapshot().visits,
+    home: null,
+  });
+  const stored = await accountCall(accounts, 'PUT', '/v1/account', {
+    accountKey: created.body.account.accountKey,
+    body: { ...snapshot({ journeys: [], visits: [], home: null }), sealedHistory: longer },
+  });
+  assert.equal(stored.body.account.sealedHistory.ct, longer.ct);
+  const shorter = await sealJson(content, device.publicKey, { journeys: [], visits: [], home: null });
+  const missed = await accountCall(accounts, 'PUT', '/v1/account', {
+    accountKey: created.body.account.accountKey,
+    body: { ...snapshot({ journeys: [], visits: [], home: null }), sealedHistory: shorter },
+  });
+  assert.equal(missed.status, 200);
+  assert.equal(missed.body.account.sealedHistory.ct, longer.ct);
+  assert.equal(Array.isArray(missed.body.account.priorSeals) ? missed.body.account.priorSeals.length : 0, 0);
+  const read = await accountCall(accounts, 'PUT', '/v1/account', {
+    accountKey: created.body.account.accountKey,
+    body: {
+      ...snapshot({ journeys: [], visits: [], home: null }),
+      sealedHistory: shorter,
+      seenSeal: historySealAck(longer.ct),
+    },
+  });
+  assert.equal(read.status, 200);
+  assert.equal(read.body.account.sealedHistory.ct, shorter.ct);
+  assert.equal(read.body.account.priorSeals.some((seal) => seal.ct === longer.ct), true);
+});
+
 test('an empty snapshot without keepHistory does not erase stored journeys', async () => {
   const accounts = createMemoryAccountStore();
   const created = await accountCall(accounts, 'POST', '/v1/account', { body: snapshot() });

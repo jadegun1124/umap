@@ -746,7 +746,9 @@ public class LocationKeepService {
                 if (point == null) continue;
                 journal.put(point);
                 long at = point.optLong("at");
-                if (at <= 0L || at > uploadedThrough) pendingPoints.put(new JSONObject(point.toString()));
+                if (point.optBoolean("up")) continue;
+                if (at > 0L && at <= uploadedThrough) continue;
+                pendingPoints.put(new JSONObject(point.toString()));
             }
         } catch (Exception ignored) {
             /* The next fix starts a new journal. */
@@ -920,14 +922,15 @@ public class LocationKeepService {
 
     private static void commitUpload(Context context, Upload upload, boolean dropPending) {
         if (dropPending) {
-            long through = uploadedThrough;
+            JSONArray sent = new JSONArray();
             for (int index = 0; index < upload.sent && pendingPoints.length() > 0; index += 1) {
                 JSONObject point = pendingPoints.optJSONObject(0);
-                if (point != null) through = Math.max(through, point.optLong("at"));
+                if (point != null) sent.put(point);
                 pendingPoints.remove(0);
             }
-            uploadedThrough = through;
-            if (context != null) prefs(context).edit().putLong("uploadedThrough", through).apply();
+            markUploaded(sent);
+            saveJournal(context);
+            if (context != null) prefs(context).edit().putLong("uploadedThrough", uploadedThrough).commit();
         }
         if (upload.pin != null) lastPublished = new Location(upload.pin);
         lastPublishedAt = upload.at;
@@ -955,6 +958,27 @@ public class LocationKeepService {
             }
         } catch (Exception ignored) {
             /* The next fix tries again. */
+        }
+    }
+
+    /** Mark the journal rows that this post already handed to the family. The file keeps them. */
+    private static void markUploaded(JSONArray sent) {
+        if (sent == null) return;
+        int cursor = 0;
+        for (int index = 0; index < journal.length() && cursor < sent.length(); index += 1) {
+            JSONObject point = journal.optJSONObject(index);
+            JSONObject done = sent.optJSONObject(cursor);
+            if (point == null || done == null || point.optBoolean("up")) continue;
+            if (point.optLong("at") != done.optLong("at")) continue;
+            if (point.optDouble("lat") != done.optDouble("lat") || point.optDouble("lng") != done.optDouble("lng")) continue;
+            try {
+                point.put("up", true);
+            } catch (Exception ignored) {
+                return;
+            }
+            long at = point.optLong("at");
+            if (at > uploadedThrough) uploadedThrough = at;
+            cursor += 1;
         }
     }
 

@@ -14,6 +14,7 @@ import {
   writeStoredRecoveryCode,
 } from '../lib/accountRestore.mjs';
 import { openAccountSecrets, prepareBackup } from '../lib/familyVault.mjs';
+import { historySealAck } from '../lib/familySeal.mjs';
 import { planAccountBackup } from '../lib/historyMerge.mjs';
 import { mergeDiagRings, packDiagUpload, readDiagEvents } from '../lib/diagLog.mjs';
 import { readNativeDiag } from './umapLocation';
@@ -57,6 +58,7 @@ export interface AccountSnapshot {
   mergedVault?: unknown;
   keepHistory?: boolean;
   dropRecovery?: boolean;
+  seenSeal?: string;
 }
 
 function timeoutSignal(ms: number): AbortSignal {
@@ -127,10 +129,13 @@ async function planBackupFromServer(snapshot: AccountSnapshot, accountKey: strin
   let remoteLocked = false;
   let remoteJourneys: unknown[] = [];
   let remoteVisits: unknown[] = [];
+  let seenSeal = '';
   try {
     const loaded = await loadFamilyAccount(accountKey);
     if (loaded.ok && loaded.account) {
       remoteOk = true;
+      const stored = loaded.account.sealedHistory as { ct?: string } | null | undefined;
+      seenSeal = stored && typeof stored.ct === 'string' ? historySealAck(stored.ct) : '';
       const opened = await openAccountSecrets(loaded.account, typeof localStorage === 'undefined' ? null : localStorage);
       remoteLocked = opened.historyLocked === true;
       remoteJourneys = Array.isArray(opened.journeys) ? opened.journeys : [];
@@ -138,6 +143,7 @@ async function planBackupFromServer(snapshot: AccountSnapshot, accountKey: strin
     }
   } catch {
     remoteOk = false;
+    seenSeal = '';
   }
   const plan = planAccountBackup({
     localJourneys,
@@ -146,9 +152,15 @@ async function planBackupFromServer(snapshot: AccountSnapshot, accountKey: strin
     remoteLocked,
     remoteJourneys,
     remoteVisits,
+    seenSeal,
   });
   if (plan.keepHistory) return { ...snapshot, journeys: [], visits: [], keepHistory: true };
-  return { ...snapshot, journeys: plan.journeys as AccountSnapshot['journeys'], visits: plan.visits as AccountSnapshot['visits'] };
+  return {
+    ...snapshot,
+    journeys: plan.journeys as AccountSnapshot['journeys'],
+    visits: plan.visits as AccountSnapshot['visits'],
+    ...(plan.seenSeal ? { seenSeal: plan.seenSeal } : {}),
+  };
 }
 
 export async function backupFamilyAccount(snapshot: AccountSnapshot, accountKey = readStoredAccountKey(localStorage)) {

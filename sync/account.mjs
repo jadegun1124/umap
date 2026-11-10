@@ -2,7 +2,7 @@
 // look up the same member id, room keys, and a 30-day journey/visit backup.
 // An old googleSub field is kept on the record and ignored. Provider ids
 // are never the family member id.
-import { isHistoryKey, isKeyWrap, isSeal, isVault } from '../src/lib/familySeal.mjs';
+import { historySealAck, isHistoryKey, isKeyWrap, isSeal, isVault } from '../src/lib/familySeal.mjs';
 import { NAVER_REDIRECT, allowedNaverRedirect } from '../src/lib/naverAuth.mjs';
 import { listDisclosures, purgeExpiredDisclosureIndex, purgeExpiredDisclosures } from './disclosure.mjs';
 import { decodeDiagBody, diagReadAuthorized, forgetDiagReports, listDiagReports, MAX_DIAG_BODY, purgeDiagReports, putDiagReport, readDiagReport } from './diag.mjs';
@@ -330,6 +330,7 @@ export function cleanAccountSnapshot(input, now = Date.now()) {
     ? { v: 1, alg: 'A256GCM', kid: input.sealedHistory.kid, iv: input.sealedHistory.iv, ct: input.sealedHistory.ct }
     : null;
   const historyKey = isHistoryKey(input.historyKey) ? { iv: input.historyKey.iv, ct: input.historyKey.ct } : null;
+  const seenSeal = typeof input.seenSeal === 'string' && /^[0-9a-f]{1,8}-[0-9a-f]{1,8}$/.test(input.seenSeal) ? input.seenSeal : '';
   const keepHistory = input.keepHistory === true && !sealedHistory;
   const journeys = [];
   const visits = [];
@@ -356,6 +357,7 @@ export function cleanAccountSnapshot(input, now = Date.now()) {
       ...(vault ? { vault } : {}),
       ...(sealedHistory ? { sealedHistory } : {}),
       ...(historyKey ? { historyKey } : {}),
+      ...(seenSeal ? { seenSeal } : {}),
       ...(keepHistory ? { keepHistory: true } : {}),
       ...(keepHistory && input.homeCleared === true && !cleanHome(input.home) ? { clearHome: true } : {}),
       ...(input.dropRecovery === true && vault ? { dropRecovery: true } : {}),
@@ -598,13 +600,17 @@ function mergeSnapshot(record, snapshot, now) {
   if (snapshot.historyShares) next.historyShares = snapshot.historyShares;
   if (snapshot.historyKey) next.historyKey = snapshot.historyKey;
   if (snapshot.sealedHistory) {
-    const priorSeals = rememberPriorSeal(record, snapshot.sealedHistory);
-    next.sealedHistory = snapshot.sealedHistory;
-    if (priorSeals.length) next.priorSeals = priorSeals;
-    next.journeys = [];
-    next.visits = [];
-    next.home = null;
-    next.clearHome = false;
+    const current = record && record.sealedHistory;
+    const acknowledged = !current || !current.ct || snapshot.seenSeal === historySealAck(current.ct);
+    if (acknowledged) {
+      const priorSeals = rememberPriorSeal(record, snapshot.sealedHistory);
+      next.sealedHistory = snapshot.sealedHistory;
+      if (priorSeals.length) next.priorSeals = priorSeals;
+      next.journeys = [];
+      next.visits = [];
+      next.home = null;
+      next.clearHome = false;
+    }
   } else if (!snapshot.keepHistory) {
     if (snapshot.clearHome === true) {
       next.home = null;

@@ -33,6 +33,16 @@ export function randomFamilyId() {
   return bytesToBase64Url(randomBytes(16));
 }
 
+/** Short id of a stored ciphertext. A backup must send this to replace that seal. */
+export function historySealAck(ct) {
+  if (typeof ct !== 'string' || !ct) return '';
+  let hash = 5381;
+  for (let index = 0; index < ct.length; index += 1) {
+    hash = ((hash * 33) ^ ct.charCodeAt(index)) >>> 0;
+  }
+  return `${ct.length.toString(16)}-${hash.toString(16)}`;
+}
+
 export function isSeal(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   if (value.v !== 1 || value.alg !== 'A256GCM') return false;

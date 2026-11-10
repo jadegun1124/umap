@@ -14,5 +14,6 @@ export function planAccountBackup(input: {
   remoteLocked?: boolean;
   remoteJourneys?: unknown;
   remoteVisits?: unknown;
-}): { keepHistory: boolean; journeys: any[]; visits: any[] };
+  seenSeal?: string;
+}): { keepHistory: boolean; journeys: any[]; visits: any[]; seenSeal: string };
 export function shouldApplyTrailResponse(status: number, trails: unknown): boolean;
