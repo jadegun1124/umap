@@ -19,6 +19,12 @@ test('a restart uploads only the journal rows the last post did not already send
   assert.equal(pendingFromJournal(journal, 0).length, 120);
   const again = pendingFromJournal(saved.journal, saved.uploadedThrough);
   assert.equal(again.length, 40);
+  const gap = markUploaded(
+    [{ lat: 1, lng: 2, at: 1_000 }, { lat: 1, lng: 4, at: 3_000 }],
+    [{ lat: 9, lng: 9, at: 2_000 }, { lat: 1, lng: 4, at: 3_000 }],
+  );
+  assert.equal(gap.journal[1].up, true);
+  assert.equal(pendingFromJournal(gap.journal, gap.uploadedThrough).some((point) => point.at === 3_000), false);
   assert.equal(java.includes('if (at <= 0L || at > uploadedThrough) pendingPoints.put'), false);
   assert.match(java, /point\.optBoolean\("up"\)/);
   assert.match(java, /point\.put\("up", true\)/);

@@ -595,14 +595,16 @@ function mergeSnapshot(record, snapshot, now) {
     nameChosen: true,
     updatedAt: now,
   };
-  if (snapshot.vault) next.vault = snapshot.vault;
   if (Array.isArray(snapshot.roster)) next.roster = snapshot.roster;
-  if (snapshot.historyShares) next.historyShares = snapshot.historyShares;
-  if (snapshot.historyKey) next.historyKey = snapshot.historyKey;
+  const currentSeal = record && record.sealedHistory;
+  const sealRejected = !!(snapshot.sealedHistory && currentSeal && currentSeal.ct && snapshot.seenSeal !== historySealAck(currentSeal.ct));
+  if (!sealRejected) {
+    if (snapshot.vault) next.vault = snapshot.vault;
+    if (snapshot.historyShares) next.historyShares = snapshot.historyShares;
+    if (snapshot.historyKey) next.historyKey = snapshot.historyKey;
+  }
   if (snapshot.sealedHistory) {
-    const current = record && record.sealedHistory;
-    const acknowledged = !current || !current.ct || snapshot.seenSeal === historySealAck(current.ct);
-    if (acknowledged) {
+    if (!sealRejected) {
       const priorSeals = rememberPriorSeal(record, snapshot.sealedHistory);
       next.sealedHistory = snapshot.sealedHistory;
       if (priorSeals.length) next.priorSeals = priorSeals;
@@ -628,7 +630,7 @@ function mergeSnapshot(record, snapshot, now) {
     next.home = snapshot.home;
     next.clearHome = false;
   }
-  if (snapshot.dropRecovery && next.vault) next.recoveryCode = '';
+  if (!sealRejected && snapshot.dropRecovery && next.vault) next.recoveryCode = '';
   return next;
 }
 

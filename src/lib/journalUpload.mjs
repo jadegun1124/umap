@@ -5,17 +5,37 @@ export function markUploaded(journal, sent) {
   const batch = Array.isArray(sent) ? sent : [];
   let cursor = 0;
   let uploadedThrough = 0;
+  let index = 0;
   for (const point of next) {
-    if (point && Number(point.at) > uploadedThrough && point.up === true) uploadedThrough = Number(point.at);
+    if (point && point.up === true && Number(point.at) > uploadedThrough) uploadedThrough = Number(point.at);
   }
-  for (const point of next) {
-    if (cursor >= batch.length) break;
+  while (index < next.length && cursor < batch.length) {
+    const point = next[index];
     const done = batch[cursor];
-    if (!point || point.up === true || !done) continue;
-    if (Number(point.at) !== Number(done.at) || Number(point.lat) !== Number(done.lat) || Number(point.lng) !== Number(done.lng)) continue;
-    point.up = true;
-    if (Number(point.at) > uploadedThrough) uploadedThrough = Number(point.at);
-    cursor += 1;
+    if (!done) {
+      cursor += 1;
+      continue;
+    }
+    if (!point || point.up === true) {
+      index += 1;
+      continue;
+    }
+    const same = Number(point.at) === Number(done.at)
+      && Number(point.lat) === Number(done.lat)
+      && Number(point.lng) === Number(done.lng);
+    if (same) {
+      point.up = true;
+      if (Number(point.at) > uploadedThrough) uploadedThrough = Number(point.at);
+      cursor += 1;
+      index += 1;
+      continue;
+    }
+    if (Number(point.at) > Number(done.at)) {
+      if (Number(done.at) > uploadedThrough) uploadedThrough = Number(done.at);
+      cursor += 1;
+      continue;
+    }
+    index += 1;
   }
   return { journal: next, uploadedThrough };
 }

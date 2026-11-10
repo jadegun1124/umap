@@ -965,20 +965,40 @@ public class LocationKeepService {
     private static void markUploaded(JSONArray sent) {
         if (sent == null) return;
         int cursor = 0;
-        for (int index = 0; index < journal.length() && cursor < sent.length(); index += 1) {
+        int index = 0;
+        while (index < journal.length() && cursor < sent.length()) {
             JSONObject point = journal.optJSONObject(index);
             JSONObject done = sent.optJSONObject(cursor);
-            if (point == null || done == null || point.optBoolean("up")) continue;
-            if (point.optLong("at") != done.optLong("at")) continue;
-            if (point.optDouble("lat") != done.optDouble("lat") || point.optDouble("lng") != done.optDouble("lng")) continue;
-            try {
-                point.put("up", true);
-            } catch (Exception ignored) {
-                return;
+            if (done == null) {
+                cursor += 1;
+                continue;
             }
-            long at = point.optLong("at");
-            if (at > uploadedThrough) uploadedThrough = at;
-            cursor += 1;
+            if (point == null || point.optBoolean("up")) {
+                index += 1;
+                continue;
+            }
+            boolean same = point.optLong("at") == done.optLong("at")
+                && point.optDouble("lat") == done.optDouble("lat")
+                && point.optDouble("lng") == done.optDouble("lng");
+            if (same) {
+                try {
+                    point.put("up", true);
+                } catch (Exception ignored) {
+                    return;
+                }
+                long at = point.optLong("at");
+                if (at > uploadedThrough) uploadedThrough = at;
+                cursor += 1;
+                index += 1;
+                continue;
+            }
+            if (point.optLong("at") > done.optLong("at")) {
+                long at = done.optLong("at");
+                if (at > uploadedThrough) uploadedThrough = at;
+                cursor += 1;
+                continue;
+            }
+            index += 1;
         }
     }
 
