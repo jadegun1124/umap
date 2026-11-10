@@ -55,6 +55,29 @@ export function isKeyWrap(value) {
   return !!epk && epk.length === 32 && !!iv && iv.length === 12 && !!ct && ct.length >= 16 && ct.length <= 128;
 }
 
+export function isHistoryKey(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const iv = base64UrlToBytes(value.iv);
+  const ct = base64UrlToBytes(value.ct);
+  return !!iv && iv.length === 12 && !!ct && ct.length >= 16 && ct.length <= 128;
+}
+
+const HISTORY_ACCOUNT_INFO = 'umap-history-account-v1';
+
+export async function wrapContentKeyForAccount(accountKey, contentKey) {
+  if (typeof accountKey !== 'string' || accountKey.length < 16) return null;
+  const raw = typeof contentKey === 'string' ? base64UrlToBytes(contentKey) : contentKey;
+  if (!(raw instanceof Uint8Array) || raw.length !== 32) return null;
+  const kek = await hkdfKey(TEXT.encode(accountKey), 'umap-account', HISTORY_ACCOUNT_INFO);
+  return sealRaw(kek, raw);
+}
+
+export async function openContentKeyForAccount(accountKey, wrap) {
+  if (typeof accountKey !== 'string' || accountKey.length < 16 || !isHistoryKey(wrap)) return null;
+  const kek = await hkdfKey(TEXT.encode(accountKey), 'umap-account', HISTORY_ACCOUNT_INFO);
+  return openRaw(kek, wrap.iv, wrap.ct);
+}
+
 export function isVault(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   if (value.kdf !== 'PBKDF2-SHA256' || value.iter !== VAULT_ITERATIONS) return false;

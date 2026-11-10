@@ -111,6 +111,12 @@ public class LocationKeepService {
     private static final long RIDE_BRIDGE_FOR_MS = 3 * 60_000L;
     /** Drop a second provider's burst. 1s ride fixes and 2.5s walk fixes sit outside this window. */
     private static final long SAMPLE_GAP_MS = 800L;
+    /**
+     * A Samsung batch can arrive after the walk. 30s dropped that whole batch,
+     * so a later catch-up fix was the only sample. Three minutes still rejects
+     * a location that has been sitting for a long time.
+     */
+    private static final long FIX_ACCEPT_AGE_MS = 180_000L;
     /** One sealed family batch. Local emit() is not throttled by these. */
     private static final long UPLOAD_MOVING_MS = 30_000L;
     private static final long UPLOAD_STILL_MS = 60_000L;
@@ -127,7 +133,12 @@ public class LocationKeepService {
     /** After a re-register, leave GNSS alone long enough to lock. */
     private static final long GPS_REREGISTER_COOLDOWN_MS = 60_000L;
     private static volatile long lastReregisterAt = 0L;
-    private static final int JOURNAL_CAP = 120;
+    /** About four hours at a 2s walk, or a day of 15s samples. Older than a day is dropped. */
+    private static final int JOURNAL_CAP = 6_000;
+    private static final long JOURNAL_KEEP_MS = 24L * 60L * 60L * 1000L;
+    /** One place upload carries this many new points. The journal itself is not trimmed by it. */
+    private static final int UPLOAD_BATCH = 80;
+    private static final String JOURNAL_FILE = "trail-journal.seal";
     private static volatile boolean starting = false;
     private static final int HEARTBEAT_CODE = REQUEST_CODE + 1;
     private static long requestedGpsMs = GPS_STILL_PROBE_MS;
@@ -595,6 +606,7 @@ public class LocationKeepService {
         }
         updatesRegistered = true;
         lastReregisterAt = System.currentTimeMillis();
+        NativeDiag.note(context, "gps", "reregister", -1, -1, -1, gpsMs, false, "", 0, 0);
     }
 
     private static void removeUpdates(Context context) {
@@ -674,6 +686,7 @@ public class LocationKeepService {
         while (journal.length() > 0) journal.remove(0);
         filterLoaded = true;
         journalLoaded = true;
+        deleteJournalFile(context);
         prefs(context).edit()
             .remove("stable").remove("last").remove("lastAt").remove("heartbeatAt").remove("lastFixAt")
             .remove("beatLatE6").remove("beatLngE6").remove("beatAcc")
@@ -681,11 +694,41 @@ public class LocationKeepService {
             .apply();
     }
 
+    private static void trimJournal(long now) {
+        long cutoff = now - JOURNAL_KEEP_MS;
+        while (journal.length() > 0) {
+            JSONObject first = journal.optJSONObject(0);
+            long at = first == null ? 0L : first.optLong("at");
+            if (journal.length() > JOURNAL_CAP || (at > 0L && at < cutoff)) {
+                journal.remove(0);
+                continue;
+            }
+            break;
+        }
+    }
+
+    private static java.io.File journalFile(Context context) {
+        return new java.io.File(context.getFilesDir(), JOURNAL_FILE);
+    }
+
+    private static void deleteJournalFile(Context context) {
+        if (context == null) return;
+        java.io.File file = journalFile(context);
+        if (file.exists() && !file.delete()) file.deleteOnExit();
+    }
+
+    public static String journalJson() {
+        synchronized (LOCK) {
+            if (appContext != null) loadJournal(appContext);
+            return journal.toString();
+        }
+    }
+
     /** The in-memory journal dies when an update kills the process. The sealed file does not. */
     private static void loadJournal(Context context) {
         if (journalLoaded || context == null) return;
         journalLoaded = true;
-        String raw = prefs(context).getString("journal", "");
+        String raw = readJournalRaw(context);
         if (raw == null || raw.isEmpty()) return;
         if (raw.startsWith("umap-device-seal:")) raw = DeviceCipher.open(raw);
         if (raw == null || raw.isEmpty()) return;
@@ -702,12 +745,42 @@ public class LocationKeepService {
         }
     }
 
+    private static String readJournalRaw(Context context) {
+        String fromFile = readSmallFile(journalFile(context), 2_000_000);
+        if (fromFile != null && !fromFile.isEmpty()) return fromFile.trim();
+        return prefs(context).getString("journal", "");
+    }
+
+    private static String readSmallFile(java.io.File file, int cap) {
+        if (file == null || !file.isFile()) return "";
+        try (InputStream input = new java.io.FileInputStream(file)) {
+            ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+            byte[] chunk = new byte[4096];
+            int count;
+            int total = 0;
+            while ((count = input.read(chunk)) >= 0 && total < cap) {
+                buffer.write(chunk, 0, count);
+                total += count;
+            }
+            return buffer.toString(StandardCharsets.UTF_8);
+        } catch (Exception error) {
+            return "";
+        }
+    }
+
     private static void saveJournal(Context context) {
         if (context == null) return;
         try {
             String sealed = DeviceCipher.seal(journal.toString());
             if (sealed == null || sealed.isEmpty()) return;
-            prefs(context).edit().putString("journal", sealed).apply();
+            java.io.File dest = journalFile(context);
+            java.io.File tmp = new java.io.File(context.getFilesDir(), JOURNAL_FILE + ".tmp");
+            try (OutputStream output = new java.io.FileOutputStream(tmp)) {
+                output.write(sealed.getBytes(StandardCharsets.UTF_8));
+            }
+            if (dest.exists() && !dest.delete()) return;
+            if (!tmp.renameTo(dest)) return;
+            prefs(context).edit().remove("journal").apply();
         } catch (Exception ignored) {
             /* Keep the previous file if this seal fails. */
         }
@@ -765,22 +838,43 @@ public class LocationKeepService {
     private static Upload handleFix(Context context, Location location) {
         ensureFilter(context);
         JSONObject config = readConfig(context);
-        if (config == null) return null;
+        if (config == null) {
+            NativeDiag.note(context, "fix", "no-config", -1, -1, -1, -1, false, "", 0, 0);
+            return null;
+        }
         long now = System.currentTimeMillis();
         long fixAt = location.getTime() > 0 ? location.getTime() : now;
-        if (now - fixAt > 30_000 || fixAt > now + 10_000) return null;
+        if (now - fixAt > FIX_ACCEPT_AGE_MS || fixAt > now + 10_000) {
+            NativeDiag.note(context, "fix", "stale", Math.round(location.getAccuracy()), Math.max(0L, now - fixAt), -1, -1, false, "", 0, 0);
+            return null;
+        }
         boolean precise = config.optBoolean("precise", true);
         float accuracy = location.getAccuracy();
-        if (accuracy <= 0f) return null;
+        if (accuracy <= 0f) {
+            NativeDiag.note(context, "fix", "accuracy", Math.round(accuracy), Math.max(0L, now - fixAt), -1, -1, false, "", 0, 0);
+            return null;
+        }
         boolean freshPrecise = stableFix != null && now - stableFix.getTime() < 20_000L;
-        if (precise && accuracy > 80f && (freshPrecise || accuracy > 400f)) return null;
-        if (!precise && accuracy > 400f) return null;
+        if (precise && accuracy > 80f && (freshPrecise || accuracy > 400f)) {
+            NativeDiag.note(context, "fix", "accuracy", Math.round(accuracy), Math.max(0L, now - fixAt), -1, -1, false, "", 0, 0);
+            return null;
+        }
+        if (!precise && accuracy > 400f) {
+            NativeDiag.note(context, "fix", "accuracy", Math.round(accuracy), Math.max(0L, now - fixAt), -1, -1, false, "", 0, 0);
+            return null;
+        }
         if (stableFix != null) {
             long dt = fixAt - stableFix.getTime();
-            if (dt < 0) return null;
+            if (dt < 0) {
+                NativeDiag.note(context, "fix", "time", Math.round(accuracy), Math.max(0L, now - fixAt), -1, dt, false, "", 0, 0);
+                return null;
+            }
             if (dt > 0 && dt <= 180_000) {
                 float speed = stableFix.distanceTo(location) / (dt / 1000f);
-                if (speed > 350f) return null;
+                if (speed > 350f) {
+                    NativeDiag.note(context, "fix", "speed", Math.round(accuracy), Math.max(0L, now - fixAt), Math.round(stableFix.distanceTo(location)), dt, false, "", 0, 0);
+                    return null;
+                }
             }
         }
         stableFix = new Location(location);
@@ -792,11 +886,14 @@ public class LocationKeepService {
             float implied = sinceSample > 0 ? jumped / (sinceSample / 1000f) : 0f;
             boolean rideSample = implied >= RIDE_MIN_MPS && jumped >= RIDE_STEP_M && sinceSample >= 800L;
             if (sinceSample >= 0 && sinceSample < SAMPLE_GAP_MS && !relocation && !rideSample) {
+                NativeDiag.note(context, "fix", "interval", Math.round(accuracy), Math.max(0L, now - fixAt), Math.round(jumped), sinceSample, false, "", 0, 0);
                 rememberFilter(context);
                 return null;
             }
         }
         boolean wasMoving = movingStream;
+        float movedFromAnchor = motionAnchor == null ? 0f : motionAnchor.distanceTo(location);
+        long anchorDt = motionAnchor == null || motionAnchor.getTime() <= 0L ? 0L : Math.max(0L, fixAt - motionAnchor.getTime());
         boolean moving = noteMovement(location, fixAt);
         boolean stateChanged = wasMoving != moving;
         long want = gpsInterval(moving, now);
@@ -810,6 +907,7 @@ public class LocationKeepService {
         noteHeartbeat(context);
         LocationKeepProcess.setMovingWake(context, movingStream);
         boolean record = recordFix(moving);
+        NativeDiag.note(context, "fix", moving ? "moving" : "still", Math.round(accuracy), Math.max(0L, now - fixAt), Math.round(movedFromAnchor), anchorDt, record, "", record ? 1 : 0, 0);
         if (record) rememberPoint(location, fixAt);
         long gap = moving ? UPLOAD_MOVING_MS : UPLOAD_STILL_MS;
         boolean due = lastPublishedAt <= 0L || now - lastPublishedAt >= gap;
@@ -823,7 +921,7 @@ public class LocationKeepService {
         upload.moving = moving;
         upload.flush = stateChanged;
         upload.at = now;
-        upload.trail = copyPending();
+        upload.trail = copyPending(UPLOAD_BATCH);
         upload.sent = upload.trail.length();
         rememberFilter(context);
         scheduleHeartbeat(context);
@@ -853,8 +951,8 @@ public class LocationKeepService {
             }
             pendingPoints.put(point);
             journal.put(new JSONObject(point.toString()));
+            trimJournal(fixAt);
             while (pendingPoints.length() > JOURNAL_CAP) pendingPoints.remove(0);
-            while (journal.length() > JOURNAL_CAP) journal.remove(0);
             saveJournal(appContext);
             if (sink != null) {
                 emit(location, fixAt);
@@ -865,9 +963,10 @@ public class LocationKeepService {
         }
     }
 
-    private static JSONArray copyPending() {
+    private static JSONArray copyPending(int limit) {
         JSONArray copy = new JSONArray();
-        for (int index = 0; index < pendingPoints.length(); index += 1) {
+        int count = Math.min(Math.max(0, limit), pendingPoints.length());
+        for (int index = 0; index < count; index += 1) {
             JSONObject point = pendingPoints.optJSONObject(index);
             if (point != null) copy.put(point);
         }
@@ -939,12 +1038,13 @@ public class LocationKeepService {
         float implied = dt > 0 ? moved / (dt / 1000f) : 0f;
         boolean pacedWalk = dt >= WALK_DISPLACE_MS && dt <= WALK_PACE_MAX_MS && moved >= WALK_DISPLACE_M && implied >= WALK_IMPLIED_MIN_MPS && implied <= 12f;
         boolean pacedTrip = dt > WALK_PACE_MAX_MS && moved >= WALK_DISPLACE_M && implied >= WALK_IMPLIED_MIN_MPS && implied <= 45f;
+        boolean pacedGap = dt >= WALK_DISPLACE_MS && dt <= WALK_PACE_MAX_MS && moved >= 50f && implied > 12f && implied <= 45f;
         boolean reported = speed >= WALK_IMPLIED_MIN_MPS && moved >= 5f && implied >= 0.45f && dt >= WALK_DISPLACE_MS && dt <= WALK_PACE_MAX_MS;
         // Above a walk, a car used to stay on the slow request and the trail
         // became one chord. A reported ride, or a fast gap with no speed, arms 1s.
         boolean rideReported = speed >= RIDE_MIN_MPS && moved >= RIDE_STEP_M && dt >= 1_000L && dt <= 30_000L && implied >= RIDE_MIN_MPS * 0.45f;
         boolean rideImplied = speed < 0f && dt >= 2_500L && dt <= 180_000L && moved >= RIDE_STAY_STEP_M && implied > 2.4f && implied <= 45f;
-        if (pacedWalk || pacedTrip || reported || rideReported || rideImplied) {
+        if (pacedWalk || pacedTrip || pacedGap || reported || rideReported || rideImplied) {
             if (speed >= RIDE_MIN_MPS || implied >= RIDE_MIN_MPS) lastRideAt = fixAt;
             motionAnchor = new Location(fix);
             motionAnchor.setTime(fixAt);
@@ -1095,6 +1195,8 @@ public class LocationKeepService {
                     if (trail != null) body.put("trail", trail);
                 }
                 int status = put(base, target.optString("token"), body, identified ? profileKey : "");
+                int sent = upload == null || upload.trail == null ? 0 : upload.trail.length();
+                NativeDiag.note(context, "upload", sent > 0 ? "trail" : "heartbeat", -1, -1, -1, -1, sent > 0, sent > 0 ? "trail" : "heartbeat", sent, status);
                 if (status >= 200 && status < 300) {
                     target.put("revokeSent", !sharing);
                     changed = true;

@@ -1,4 +1,5 @@
 export function clearDiag(): void;
+export function mergeDiagRings(jsEvents: unknown, nativeEvents: unknown): Array<Record<string, string | number | boolean>>;
 export function readDiagEvents(now?: number): Array<Record<string, string | number | boolean>>;
 export function noteDiag(event: Record<string, string | number | boolean | null | undefined>): void;
 export function readDiagCodes(): Array<{ id: string; at: number }>;

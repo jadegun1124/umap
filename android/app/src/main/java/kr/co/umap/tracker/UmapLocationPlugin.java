@@ -104,7 +104,14 @@ public class UmapLocationPlugin extends Plugin {
 
     private void emitFix(JSONObject fix) {
         AppCompatActivity activity = getActivity();
-        if (activity == null) return;
+        if (activity == null) {
+            try {
+                notifyListeners("fix", JSObject.fromJSONObject(fix));
+            } catch (JSONException ignored) {
+                /* The journal is still pulled when the screen returns. */
+            }
+            return;
+        }
         activity.runOnUiThread(() -> {
             try {
                 notifyListeners("fix", JSObject.fromJSONObject(fix));
@@ -526,6 +533,26 @@ public class UmapLocationPlugin extends Plugin {
         if ("permission".equals(reason) && hasBackground()) reason = null;
         if (reason != null) result.put("reason", reason);
         call.resolve(result);
+    }
+
+    @PluginMethod
+    public void trailJournal(PluginCall call) {
+        JSObject result = new JSObject();
+        result.put("journal", LocationKeepService.journalJson());
+        call.resolve(result);
+    }
+
+    @PluginMethod
+    public void nativeDiag(PluginCall call) {
+        JSObject result = new JSObject();
+        result.put("events", NativeDiag.readJson(getContext()));
+        call.resolve(result);
+    }
+
+    @PluginMethod
+    public void clearNativeDiag(PluginCall call) {
+        NativeDiag.clear(getContext());
+        call.resolve();
     }
 
     @PluginMethod

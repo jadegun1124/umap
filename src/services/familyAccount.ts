@@ -15,7 +15,8 @@ import {
 } from '../lib/accountRestore.mjs';
 import { openAccountSecrets, prepareBackup } from '../lib/familyVault.mjs';
 import { planAccountBackup } from '../lib/historyMerge.mjs';
-import { packDiagUpload, readDiagEvents } from '../lib/diagLog.mjs';
+import { mergeDiagRings, packDiagUpload, readDiagEvents } from '../lib/diagLog.mjs';
+import { readNativeDiag } from './umapLocation';
 import { familySyncUrl } from './familySync';
 
 export {
@@ -213,7 +214,7 @@ export interface HandlingEvent {
 
 export async function uploadDiagReport(accountKey = readStoredAccountKey(typeof localStorage === 'undefined' ? null : localStorage)): Promise<{ ok: boolean; id?: string; message?: string }> {
   if (!accountKey || !familySyncUrl()) return { ok: false, message: '로그인된 계정이 있어야 보냅니다. 카카오·네이버 또는 복구 코드로 들어온 뒤에 보내 주세요.' };
-  const events = readDiagEvents();
+  const events = mergeDiagRings(readDiagEvents(), await readNativeDiag());
   if (events.length === 0) return { ok: false, message: '보낼 진단 기록이 없습니다. 잠시 움직인 뒤에 다시 보내 주세요.' };
   const packed = await packDiagUpload(events);
   try {

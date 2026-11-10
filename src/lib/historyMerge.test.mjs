@@ -97,4 +97,14 @@ test('a backup waits when the server cannot be read and otherwise unions by id',
   assert.equal(merged.keepHistory, false);
   assert.equal(merged.journeys.some((item) => item.id === 'khoon-drive'), true);
   assert.equal(merged.journeys.some((item) => item.id === 'local-walk'), true);
+  const locked = planAccountBackup({
+    localJourneys: local,
+    localVisits: [],
+    remoteOk: true,
+    remoteLocked: true,
+    remoteJourneys: [],
+    remoteVisits: [],
+  });
+  assert.equal(locked.keepHistory, false);
+  assert.equal(locked.journeys.some((item) => item.id === 'local-walk'), true);
 });

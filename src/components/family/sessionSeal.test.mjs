@@ -19,6 +19,7 @@ test('logout clears the sealed session before the next persist', () => {
   assert.ok(cancelAt >= 0 && clearAt > cancelAt && dispatchAt > clearAt);
   assert.match(logout, /logoutLocalAccount\(/);
   assert.match(logout, /clearDiag\(\)/);
+  assert.match(logout, /clearNativeDiag\(\)/);
 });
 
 test('a late seal restore cannot write after logout', () => {
@@ -32,6 +33,7 @@ test('a late seal restore cannot write after logout', () => {
   assert.match(withdraw, /cancelDeviceSealRestore\(\)/);
   assert.match(withdraw, /forgetDurableSession\(\)/);
   assert.match(withdraw, /clearDiag\(\)/);
+  assert.match(withdraw, /clearNativeDiag\(\)/);
 });
 
 test('logout and reset drop the durable file before the next persist', () => {

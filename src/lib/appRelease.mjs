@@ -3,8 +3,8 @@
 // On an APK, MainActivity.appVersion() reports the installed package so the
 // line matches the build on that phone.
 
-export const APP_VERSION_NAME = '1.84.0';
-export const APP_VERSION_CODE = 90;
+export const APP_VERSION_NAME = '1.85.0';
+export const APP_VERSION_CODE = 91;
 
 /** Stable page for the newest sideload APK. The file name changes every release. */
 export const APP_UPDATE_URL = 'https://github.com/jadegun1124/umap/releases/latest';
