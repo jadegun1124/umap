@@ -37,13 +37,35 @@ function prefixTail(points, at) {
   return anchors.slice(-4).map((point) => ({ ...point }));
 }
 
+function samePlace(point, sample) {
+  return point
+    && !point.stayEnd
+    && Math.abs(point.at - sample.at) <= 1
+    && Math.abs(point.lat - sample.lat) < 1e-6
+    && Math.abs(point.lng - sample.lng) < 1e-6;
+}
+
+/**
+ * A later vertex already on the line can be what stripped this sample.
+ * Keep the sample only when that vertex still leaves it in place.
+ */
+function survivesNext(tail, sample, nextVertex) {
+  const withSample = settleTrailPoint(tail, sample, sample.at).points;
+  const followed = settleTrailPoint(withSample, sampleOf(nextVertex), nextVertex.at).points;
+  return followed.some((point) => samePlace(point, sample));
+}
+
 /**
  * Decide one journal sample against the line that already exists at that time.
- * A keep is inserted. A snap may extend the final stay marker. Nothing already stored is removed.
+ * A keep is inserted only if the next stored vertex would not strip it.
+ * A snap may extend the final stay marker. Nothing already stored is removed.
  */
 function acceptSample(points, sample) {
-  const decided = settleTrailPoint(prefixTail(points, sample.at), sample, sample.at);
+  const tail = prefixTail(points, sample.at);
+  const decided = settleTrailPoint(tail, sample, sample.at);
   if (decided.decision === 'keep') {
+    const nextVertex = points.find((item) => item && !item.stayEnd && Number.isFinite(item.at) && item.at > sample.at);
+    if (nextVertex && !survivesNext(tail, sample, nextVertex)) return points;
     const index = points.findIndex((item) => item && Number.isFinite(item.at) && item.at > sample.at);
     const next = points.slice();
     next.splice(index < 0 ? next.length : index, 0, sample);

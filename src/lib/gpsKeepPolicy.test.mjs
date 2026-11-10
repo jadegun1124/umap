@@ -173,6 +173,17 @@ test('a 45s-old walk batch is kept, and a 100m fix on the 20s stay probe is not 
   const kept = mergeNativeFixes(outing, [probe]);
   assert.equal(kept.length, outing.length);
   for (const point of outing) assert.equal(kept.includes(point), true);
+  const start = { ...home, at: 0, accuracyM: 8, speedMps: 1.3 };
+  const kink = { ...eastOf(home.lat, home.lng, 0), lat: home.lat + 40 / 111_320, at: 8_000, accuracyM: 8, speedMps: 1.3 };
+  const after = { ...eastOf(home.lat, home.lng, 40), at: 16_000, accuracyM: 8, speedMps: 1.3 };
+  const onward = { ...eastOf(home.lat, home.lng, 80), at: 28_000, accuracyM: 8, speedMps: 1.3 };
+  let drawn = [];
+  for (const sample of [start, kink, after, onward]) drawn = settleTrailPoint(drawn, sample, sample.at).points;
+  const withoutKink = drawn.filter((point) => !point.stayEnd);
+  assert.equal(withoutKink.some((point) => point.at === 8_000), false);
+  const restored = mergeNativeFixes(withoutKink, [start, kink, after, onward]);
+  assert.equal(restored.some((point) => point.at === 8_000), false);
+  for (const point of withoutKink) assert.equal(restored.includes(point), true);
   const reader = diag.slice(diag.indexOf('static String readCommitted'), diag.indexOf('private static String readArray'));
   assert.ok(reader.indexOf('.tmp') >= 0 && reader.indexOf('.tmp') < reader.indexOf('.bak'));
 });
