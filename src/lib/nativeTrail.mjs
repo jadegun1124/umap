@@ -20,68 +20,47 @@ function sampleOf(point) {
   };
 }
 
-function metersBetween(left, right) {
-  const lat = (left.lat + right.lat) / 2;
-  const north = (right.lat - left.lat) * 111_320;
-  const east = (right.lng - left.lng) * 111_320 * Math.cos((lat * Math.PI) / 180);
-  return Math.hypot(north, east);
-}
-
-/** A journal row the live line already settled: close in time and place to a vertex. */
-function alreadyOnTrail(track, point) {
-  for (const item of track) {
-    if (!item || !Number.isFinite(item.at) || !Number.isFinite(item.lat) || !Number.isFinite(item.lng)) continue;
-    if (Math.abs(item.at - point.at) > 12_000) continue;
-    if (metersBetween(item, point) <= 40) return true;
-  }
-  return false;
-}
-
-function sameTrail(left, right) {
-  if (left.length !== right.length) return false;
-  for (let index = 0; index < left.length; index += 1) {
-    const a = left[index];
-    const b = right[index];
-    if (!a || !b || Boolean(a.stayEnd) !== Boolean(b.stayEnd)) return false;
-    if (Math.abs(a.at - b.at) > 1) return false;
-    if (Math.abs(a.lat - b.lat) > 1e-6 || Math.abs(a.lng - b.lng) > 1e-6) return false;
-  }
-  return true;
-}
-
 function settleSamples(seed, samples) {
   let points = seed;
   for (const point of samples) points = settleTrailPoint(points, point, point.at).points;
   return points;
 }
 
-/**
- * Settle one new sample against the tail only.
- * The stored line is not collapsed, so an earlier stay marker stays put.
- */
-function applyFresh(existing, sample) {
-  const anchors = existing.filter((point) => point && !point.stayEnd);
-  const tail = anchors.slice(-4);
-  const decided = settleTrailPoint(tail, sample, sample.at);
-  if (decided.decision === 'drop') return existing;
-  if (decided.decision === 'snap') {
-    const marker = [...decided.points].reverse().find((point) => point && point.stayEnd);
-    if (!marker) return existing;
-    const last = existing[existing.length - 1];
-    if (last?.stayEnd) {
-      if (Math.abs(last.at - marker.at) <= 1 && Math.abs(last.lat - marker.lat) < 1e-6) return existing;
-      const next = existing.slice();
-      next[next.length - 1] = { ...last, at: marker.at, accuracyM: marker.accuracyM ?? last.accuracyM };
-      return next;
-    }
-    return existing.concat(marker);
+/** Copies of the vertices already drawn at or before this sample. The stored line is not passed through. */
+function prefixTail(points, at) {
+  const anchors = [];
+  for (const point of points) {
+    if (!point || point.stayEnd || !Number.isFinite(point.at) || point.at > at) continue;
+    if (!Number.isFinite(point.lat) || !Number.isFinite(point.lng)) continue;
+    anchors.push(point);
   }
-  const removed = new Set(tail.filter((point) => !decided.points.includes(point)));
-  const added = decided.points.filter((point) => point && !point.stayEnd && !tail.includes(point));
-  if (removed.size === 0 && added.length === 0) return existing;
-  const next = removed.size === 0 ? existing.slice() : existing.filter((point) => !removed.has(point));
-  next.push(...added);
-  return next;
+  return anchors.slice(-4).map((point) => ({ ...point }));
+}
+
+/**
+ * Decide one journal sample against the line that already exists at that time.
+ * A keep is inserted. A snap may extend the final stay marker. Nothing already stored is removed.
+ */
+function acceptSample(points, sample) {
+  const decided = settleTrailPoint(prefixTail(points, sample.at), sample, sample.at);
+  if (decided.decision === 'keep') {
+    const index = points.findIndex((item) => item && Number.isFinite(item.at) && item.at > sample.at);
+    const next = points.slice();
+    next.splice(index < 0 ? next.length : index, 0, sample);
+    return next;
+  }
+  const lastAt = points.reduce((max, point) => (point && Number.isFinite(point.at) ? Math.max(max, point.at) : max), -Infinity);
+  if (decided.decision !== 'snap' || !(sample.at > lastAt)) return points;
+  const marker = [...decided.points].reverse().find((point) => point && point.stayEnd);
+  if (!marker) return points;
+  const last = points[points.length - 1];
+  if (last?.stayEnd) {
+    if (Math.abs(last.at - marker.at) <= 1 && Math.abs(last.lat - marker.lat) < 1e-6) return points;
+    const next = points.slice();
+    next[next.length - 1] = { ...last, at: marker.at, accuracyM: marker.accuracyM ?? last.accuracyM };
+    return next;
+  }
+  return points.concat(marker);
 }
 
 function coveredByJourney(journeys, at) {
@@ -94,10 +73,10 @@ function coveredByJourney(journeys, at) {
 
 /**
  * Fold saved native points into the live trail.
- * Points already inside a saved journey, or already settled next to a vertex,
- * stay out. New points run through the same trail settlement as a live fix,
- * so a stay hop or a GPS spike does not become a record vertex.
- * The line before the first new point, including its stay marker, is kept.
+ * Each new point is judged against the vertices already drawn before it.
+ * A point the settlement would keep is inserted at its time. A later still
+ * sample may extend the last stay marker. Stored vertices are not replayed
+ * and are not removed, so a 20s still probe cannot erase the outing line.
  * An empty live line is settled from the journal so a restart can still draw it.
  */
 export function mergeNativeFixes(track, incoming, journeys) {
@@ -107,12 +86,10 @@ export function mergeNativeFixes(track, incoming, journeys) {
     const key = pointKey(point);
     if (key) seen.add(key);
   }
-  const lastAt = existing.reduce((max, point) => (point && Number.isFinite(point.at) ? Math.max(max, point.at) : max), -Infinity);
   const fresh = [];
   for (const point of Array.isArray(incoming) ? incoming : []) {
     if (!point || point.stayEnd || !Number.isFinite(point.at)) continue;
     if (coveredByJourney(journeys, point.at)) continue;
-    if (point.at <= lastAt && alreadyOnTrail(existing, point)) continue;
     const key = pointKey(point);
     if (!key || seen.has(key)) continue;
     seen.add(key);
@@ -121,29 +98,7 @@ export function mergeNativeFixes(track, incoming, journeys) {
   if (fresh.length === 0) return existing;
   fresh.sort((left, right) => left.at - right.at);
   if (existing.length === 0) return settleSamples([], fresh);
-  if (fresh.every((point) => point.at > lastAt)) {
-    let points = existing;
-    for (const point of fresh) points = applyFresh(points, point);
-    return points;
-  }
-  const startAt = fresh[0].at;
-  const prefix = [];
-  const replay = [];
-  for (const point of existing) {
-    if (!point || !Number.isFinite(point.at) || point.at < startAt) prefix.push(point);
-    else replay.push(sampleOf(point));
-  }
-  const anchor = [...prefix].reverse().find((point) => point && !point.stayEnd && Number.isFinite(point.lat));
-  const samples = replay.concat(fresh).sort((left, right) => left.at - right.at);
-  let settled = settleSamples(anchor ? [{ ...anchor }] : [], samples);
-  if (
-    anchor
-    && settled[0]
-    && !settled[0].stayEnd
-    && Math.abs(settled[0].at - anchor.at) <= 1
-    && Math.abs(settled[0].lat - anchor.lat) < 1e-6
-    && Math.abs(settled[0].lng - anchor.lng) < 1e-6
-  ) settled = settled.slice(1);
-  const merged = prefix.concat(settled);
-  return sameTrail(merged, existing) ? existing : merged;
+  let points = existing;
+  for (const point of fresh) points = acceptSample(points, point);
+  return points;
 }

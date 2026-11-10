@@ -161,6 +161,18 @@ test('a 45s-old walk batch is kept, and a 100m fix on the 20s stay probe is not 
   const live = [{ ...home, at: 60_000, accuracyM: 8, speedMps: 0 }];
   const archived = mergeNativeFixes(live, [early], [{ startedAt: 0, endedAt: 60_000 }]);
   assert.equal(archived, live);
+  const outing = [0, 40, 80, 120, 160].map((sec, index) => ({
+    ...eastOf(home.lat, home.lng, index * 30),
+    at: sec * 1000,
+    accuracyM: 8,
+    speedMps: 0,
+  }));
+  const marker = { ...outing[0], at: 35_000, stayEnd: true, speedMps: 0 };
+  outing.splice(1, 0, marker);
+  const probe = { ...eastOf(home.lat, home.lng, 8), at: 20_000, accuracyM: 10, speedMps: 0 };
+  const kept = mergeNativeFixes(outing, [probe]);
+  assert.equal(kept.length, outing.length);
+  for (const point of outing) assert.equal(kept.includes(point), true);
   const reader = diag.slice(diag.indexOf('static String readCommitted'), diag.indexOf('private static String readArray'));
   assert.ok(reader.indexOf('.tmp') >= 0 && reader.indexOf('.tmp') < reader.indexOf('.bak'));
 });
