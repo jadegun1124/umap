@@ -143,11 +143,18 @@ test('a 45s-old walk batch is kept, and a 100m fix on the 20s stay probe is not 
   assert.equal(mergeNativeFixes(merged, [{ ...eastOf(home.lat, home.lng, 30), at: 20_000, accuracyM: 8, speedMps: 1.4 }]), merged);
   const late = { ...eastOf(home.lat, home.lng, 80), at: 80_000, accuracyM: 8, speedMps: 1.4 };
   const early = { ...eastOf(home.lat, home.lng, 20), at: 20_000, accuracyM: 8, speedMps: 1.4 };
-  const ordered = mergeNativeFixes([late], [early, { ...home, at: 0, accuracyM: 8, speedMps: 1.2 }]);
-  const times = ordered.filter((point) => !point.stayEnd).map((point) => point.at);
+  const stay = { lat: home.lat, lng: home.lng, at: 5_000, stayEnd: true, speedMps: 0, accuracyM: 8 };
+  const ordered = mergeNativeFixes([stay, late], [early, { ...home, at: 0, accuracyM: 8, speedMps: 1.2 }]);
+  const times = ordered.map((point) => point.at);
   assert.deepEqual(times, [...times].sort((left, right) => left - right));
-  assert.equal(times[0] <= times[times.length - 1], true);
   assert.ok(times.includes(20_000));
+  assert.equal(ordered.includes(stay), true);
+  assert.equal(ordered.includes(late), true);
+  const live = [{ ...home, at: 60_000, accuracyM: 8, speedMps: 0 }];
+  const archived = mergeNativeFixes(live, [early], [{ startedAt: 0, endedAt: 60_000 }]);
+  assert.equal(archived, live);
+  const reader = diag.slice(diag.indexOf('static String readCommitted'), diag.indexOf('private static String readArray'));
+  assert.ok(reader.indexOf('.tmp') >= 0 && reader.indexOf('.tmp') < reader.indexOf('.bak'));
 });
 
 test('a quiet stay stays at 20s, and an unclear step uses the 15s bridge', () => {

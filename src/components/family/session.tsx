@@ -1024,7 +1024,7 @@ function reduceSession(state: Session, action: Action): Session {
       return { ...state, notices: state.notices.map((item) => ({ ...item, read: true })) };
     case 'merge-native-trail': {
       const current = state.tracks.self || [];
-      const merged = mergeNativeFixes(current, action.points);
+      const merged = mergeNativeFixes(current, action.points, state.journeys?.self);
       if (merged === current) return state;
       const at = Date.now();
       const tracks = tracksWithinHistory({ ...state.tracks, self: merged }, at);

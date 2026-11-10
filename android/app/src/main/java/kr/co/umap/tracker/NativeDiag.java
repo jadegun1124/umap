@@ -162,12 +162,18 @@ public final class NativeDiag {
 
     static String readCommitted(File dest, int cap) {
         if (dest == null) return "";
-        String primary = readFile(dest, cap);
-        if (primary != null && !primary.isEmpty()) return primary;
         File dir = dest.getParentFile();
-        String bak = readFile(new File(dir, dest.getName() + ".bak"), cap);
-        if (bak != null && !bak.isEmpty()) return bak;
-        return readFile(new File(dir, dest.getName() + ".tmp"), cap);
+        // dest is the committed file. If it is missing, tmp was written and the
+        // process died before the rename, so tmp is newer than bak.
+        if (dest.isFile()) {
+            String primary = readFile(dest, cap);
+            if (primary != null && !primary.isEmpty()) return primary;
+        } else if (dir != null) {
+            String pending = readFile(new File(dir, dest.getName() + ".tmp"), cap);
+            if (pending != null && !pending.isEmpty()) return pending;
+        }
+        if (dir == null) return "";
+        return readFile(new File(dir, dest.getName() + ".bak"), cap);
     }
 
     private static String readArray() {

@@ -17,30 +17,47 @@ function sampleOf(point) {
   };
 }
 
+function coveredByJourney(journeys, at) {
+  for (const journey of Array.isArray(journeys) ? journeys : []) {
+    if (!journey || !Number.isFinite(journey.startedAt) || !Number.isFinite(journey.endedAt)) continue;
+    if (at >= journey.startedAt && at <= journey.endedAt) return true;
+  }
+  return false;
+}
+
 /**
  * Fold saved native points into the live trail.
- * The whole line is settled again in time order, so an older background point
- * does not get appended after a newer live point.
+ * Points already inside a saved journey stay there. New points are inserted by
+ * time, and the existing vertices, including stay markers, are left as they are.
+ * An empty live line is settled from the journal so a restart can still draw it.
  */
-export function mergeNativeFixes(track, incoming) {
+export function mergeNativeFixes(track, incoming, journeys) {
   const existing = Array.isArray(track) ? track : [];
-  const rows = [];
   const seen = new Set();
-  const take = (point) => {
-    if (!point || point.stayEnd) return;
+  for (const point of existing) {
     const key = pointKey(point);
-    if (!key || seen.has(key)) return;
-    seen.add(key);
-    rows.push(point);
-  };
-  for (const point of existing) take(point);
-  const before = rows.length;
-  for (const point of Array.isArray(incoming) ? incoming : []) take(point);
-  if (rows.length === before) return existing;
-  rows.sort((left, right) => left.at - right.at);
-  let points = [];
-  for (const point of rows) {
-    points = settleTrailPoint(points, sampleOf(point), point.at).points;
+    if (key) seen.add(key);
   }
-  return points;
+  const fresh = [];
+  for (const point of Array.isArray(incoming) ? incoming : []) {
+    if (!point || point.stayEnd || !Number.isFinite(point.at)) continue;
+    if (coveredByJourney(journeys, point.at)) continue;
+    const key = pointKey(point);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    fresh.push(sampleOf(point));
+  }
+  if (fresh.length === 0) return existing;
+  fresh.sort((left, right) => left.at - right.at);
+  if (existing.length === 0) {
+    let points = [];
+    for (const point of fresh) points = settleTrailPoint(points, point, point.at).points;
+    return points;
+  }
+  const merged = existing.slice();
+  for (const point of fresh) {
+    const index = merged.findIndex((item) => item && Number.isFinite(item.at) && item.at > point.at);
+    merged.splice(index < 0 ? merged.length : index, 0, point);
+  }
+  return merged;
 }
