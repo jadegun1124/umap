@@ -140,8 +140,9 @@ function noteMovement(state, policy, fix) {
     return false;
   }
   const littleDrift = moved < policy.walkDisplaceM && dt >= policy.movingHoldMs;
-  const departLimit = policy.anchorDepartM || 0;
-  const settled = moved <= 50 && (departLimit <= 0 || moved < departLimit) && dt >= policy.movingHoldMs && (speed < 0 || speed < 0.7);
+  // 30m only starts the stream. A later still fix may sit 30–50m from that
+  // anchor; the stay bubble (at least 50m) is what ends 2s sampling.
+  const settled = moved <= stayGate(state.anchor.accuracyM, fix.accuracyM) && dt >= policy.movingHoldMs && (speed < 0 || speed < 0.7);
   if (littleDrift || settled) {
     if (state.stillSince === 0) state.stillSince = state.anchor.at;
     state.movingStream = false;

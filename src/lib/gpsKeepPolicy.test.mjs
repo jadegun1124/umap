@@ -331,6 +331,23 @@ test('a screen-off burst keeps each 2s walk fix, and a 30m departure leaves the 
   assert.equal(delayed.interval, 2_000);
   assert.ok(delayed.recorded >= 2);
 
+  const returned = replayFixes(policy, [
+    { ...home, at: 0, speedMps: 0, accuracyM: 8 },
+    { ...eastOf(home.lat, home.lng, 40), at: 150_000, speedMps: 0, accuracyM: 8 },
+    { ...home, at: 220_000, speedMps: 0, accuracyM: 8 },
+  ]);
+  assert.equal(returned.moving, false);
+  assert.equal(returned.interval, 20_000);
+  const onward = replayFixes(policy, [
+    { ...home, at: 0, speedMps: 0, accuracyM: 8 },
+    { ...eastOf(home.lat, home.lng, 40), at: 150_000, speedMps: 0, accuracyM: 8 },
+    { ...eastOf(home.lat, home.lng, 80), at: 180_000, speedMps: 0, accuracyM: 8 },
+  ]);
+  assert.equal(onward.moving, true);
+  assert.equal(onward.interval, 2_000);
+  assert.match(java, /moved <= stayGate\(motionAnchor, fix\)/);
+  assert.equal(java.includes('moved < ANCHOR_DEPART_M && moved <= stayGate'), false);
+
   assert.match(java, /sinceFix >= 0L \? sinceFix : sinceWall/);
   assert.match(java, /KEY_LOCATIONS/);
   assert.match(java, /setMaxUpdateDelayMillis\(0L\)/);

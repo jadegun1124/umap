@@ -1242,7 +1242,10 @@ public class LocationKeepService {
             return false;
         }
         boolean littleDrift = moved < WALK_DISPLACE_M && dt >= MOVING_HOLD_MS;
-        boolean settled = moved < ANCHOR_DEPART_M && moved <= stayGate(motionAnchor, fix) && dt >= MOVING_HOLD_MS && (speed < 0f || speed < 0.7f);
+        // 30m only starts the stream. Ending it still uses the stay bubble
+        // (at least 50m). A one-off 30–50m jump can then return to the 20s
+        // check once the hold passes and the speed is still low.
+        boolean settled = moved <= stayGate(motionAnchor, fix) && dt >= MOVING_HOLD_MS && (speed < 0f || speed < 0.7f);
         if (littleDrift || settled) {
             if (stillSinceMs == 0L) stillSinceMs = anchorAt;
             movingStream = false;
