@@ -14,9 +14,9 @@ public class LocationKeepReceiver extends BroadcastReceiver {
             LocationKeepService.onHeartbeat(context.getApplicationContext(), pending);
             return;
         }
-        Location location = LocationKeepService.locationFrom(intent);
-        if (location == null) return;
+        java.util.List<android.location.Location> locations = LocationKeepService.locationsFrom(intent);
+        if (locations.isEmpty()) return;
         PendingResult pending = goAsync();
-        LocationKeepService.onFix(context.getApplicationContext(), location, pending);
+        LocationKeepService.onLocations(context.getApplicationContext(), locations, pending);
     }
 }

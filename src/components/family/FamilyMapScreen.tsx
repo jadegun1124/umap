@@ -2829,7 +2829,7 @@ function KeepNoticeSheet({
         <p className="mt-2 text-sm leading-6 text-slate-600">
           {mode === 'permission'
             ? '알림 권한은 SOS, 집 반경, 움직임 시작·멈춤, 새 대화에 씁니다. 허용을 누르면 알림 창이 열립니다. 위치 공유 중에는 알림 목록에 Kinnex 카드가 나오지 않습니다. 앱이 혼자 켜지 않습니다. 전화번호는 쓰지 않습니다.'
-            : '켜면 앱을 닫아도 위치를 기록합니다. 걷는 동안은 2초, 차나 자전거는 1초마다 받습니다. 머무는 동안은 20초마다 움직임만 확인하고 점은 남기지 않습니다. 가족에게는 이동 중 30초, 머무는 중 60초마다 묶어서 보냅니다. 알림 목록에 위치 유지 카드가 남습니다. 삼성 절전 앱·수면 중 앱에서는 Kinnex를 제외해 주세요. 배터리 제한 없음도 켜 주세요. 앱이 혼자 켜지 않습니다.'}
+            : '켜면 앱을 닫아도 위치를 기록합니다. 걷는 동안은 2초, 차나 자전거는 1초마다 받습니다. 머무는 동안은 20초마다 움직임만 확인하고 점은 남기지 않습니다. 가족에게는 이동 중 10초, 머무는 중 60초마다 묶어서 보냅니다. 알림 목록에 위치 유지 카드가 남습니다. 삼성 절전 앱·수면 중 앱에서는 Kinnex를 제외해 주세요. 배터리 제한 없음도 켜 주세요. 앱이 혼자 켜지 않습니다.'}
         </p>
         {note && <p className="mt-3 text-sm leading-6 text-amber-800">{note}</p>}
         <button type="button" disabled={busy} onClick={onPrimary} className="mt-4 w-full rounded-full bg-[#0084FF] py-3.5 font-bold text-white disabled:opacity-40">

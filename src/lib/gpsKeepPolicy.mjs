@@ -36,6 +36,7 @@ export function policyFromJava(source) {
     acceptAgeMs: num('FIX_ACCEPT_AGE_MS'),
     walkDisplaceM: flt('WALK_DISPLACE_M'),
     walkImpliedMin: flt('WALK_IMPLIED_MIN_MPS'),
+    anchorDepartM: flt('ANCHOR_DEPART_M'),
     reportedImpliedMin: 0.45,
     reportedMinSpeed: flt('WALK_IMPLIED_MIN_MPS'),
     reportedMinMoved: 5,
@@ -118,7 +119,9 @@ function noteMovement(state, policy, fix) {
   const reported = speed >= policy.reportedMinSpeed && moved >= policy.reportedMinMoved && implied >= policy.reportedImpliedMin && dt >= policy.walkDisplaceMs && dt <= policy.walkPaceMaxMs;
   const rideReported = speed >= RIDE_MIN_MPS && moved >= RIDE_STEP_M && dt >= 1_000 && dt <= 30_000 && implied >= RIDE_MIN_MPS * 0.45;
   const rideImplied = speed < 0 && dt >= 2_500 && dt <= 180_000 && moved >= RIDE_STAY_STEP_M && implied > 2.4 && implied <= 45;
-  if (pacedWalk || pacedTrip || pacedGap || reported || rideReported || rideImplied) {
+  const departM = policy.anchorDepartM || 0;
+  const leftAnchor = departM > 0 && !state.movingStream && moved >= departM && dt >= 1_000 && dt <= 180_000 && implied <= 45;
+  if (pacedWalk || pacedTrip || pacedGap || reported || rideReported || rideImplied || leftAnchor) {
     if (speed >= RIDE_MIN_MPS || implied >= RIDE_MIN_MPS) state.lastRideAt = fix.at;
     state.anchor = { ...fix };
     state.stillSince = 0;
@@ -137,7 +140,9 @@ function noteMovement(state, policy, fix) {
     return false;
   }
   const littleDrift = moved < policy.walkDisplaceM && dt >= policy.movingHoldMs;
-  const settled = moved <= 50 && dt >= policy.movingHoldMs && (speed < 0 || speed < 0.7);
+  // 30m only starts the stream. A later still fix may sit 30–50m from that
+  // anchor; the stay bubble (at least 50m) is what ends 2s sampling.
+  const settled = moved <= stayGate(state.anchor.accuracyM, fix.accuracyM) && dt >= policy.movingHoldMs && (speed < 0 || speed < 0.7);
   if (littleDrift || settled) {
     if (state.stillSince === 0) state.stillSince = state.anchor.at;
     state.movingStream = false;
@@ -189,7 +194,10 @@ export function acceptFix(state, policy, fix, now) {
   }
   state.stable = { ...fix, at: fixAt };
   if (state.lastSample && state.lastSampleAt > 0) {
-    const since = now - state.lastSampleAt;
+    const sinceWall = now - state.lastSampleAt;
+    const sampleTime = state.lastSample.at > 0 ? state.lastSample.at : state.lastSampleAt;
+    const sinceFix = fixAt - sampleTime;
+    const since = sinceFix >= 0 ? sinceFix : sinceWall;
     const jumped = meters(state.lastSample, fix);
     const relocation = jumped > stayGate(state.lastSample.accuracyM, accuracy);
     const implied = since > 0 ? jumped / (since / 1000) : 0;
@@ -199,6 +207,7 @@ export function acceptFix(state, policy, fix, now) {
     }
   }
   const moving = noteMovement(state, policy, { ...fix, at: fixAt });
+  state.requestedMs = gpsInterval(state, policy, moving, fixAt);
   state.lastSample = { ...fix, at: fixAt };
   state.lastSampleAt = now;
   const recorded = !state.anchorRecorded || moving;
@@ -208,6 +217,17 @@ export function acceptFix(state, policy, fix, now) {
 
 export function freshMotion(policy) {
   return freshState(policy);
+}
+
+/** One screen-off delivery. Fix times differ; the wall clock is the arrival. */
+export function acceptBurst(state, policy, fixes, now) {
+  const ordered = (Array.isArray(fixes) ? fixes : []).filter(Boolean).sort((left, right) => left.at - right.at);
+  const recorded = [];
+  for (const fix of ordered) {
+    const result = acceptFix(state, policy, fix, now);
+    if (result.recorded) recorded.push(fix);
+  }
+  return { recorded, moving: state.movingStream, interval: state.requestedMs };
 }
 
 export function replayFixes(policy, fixes) {

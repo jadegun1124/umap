@@ -8,7 +8,12 @@ import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.location.Location;
+import android.location.LocationListener;
 import android.location.LocationManager;
+import android.location.LocationRequest;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.net.Uri;
 import android.app.AlarmManager;
 import android.os.BatteryManager;
@@ -26,6 +31,7 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import org.json.JSONArray;
@@ -46,11 +52,21 @@ import org.json.JSONObject;
  *
  * A walk requests GPS every 2s once the step is clear and switches on the
  * detecting fix. A bike or vehicle (about 7 km/h) requests every 1s. A stay
- * asks every 20s and never slower than 30s. Stay fixes are not trail points;
- * the pin stays on the stay anchor. Family uploads are one sealed batch:
- * every 30s while moving, every 60s while still, and immediately when the
- * phone changes between stay and journey. Distance does not trigger an upload.
- * A partial wake lock is held only while the moving stream is on.
+ * asks every 20s and never slower than 30s. A still fix that is already 30m
+ * from the anchor arms the moving interval on that fix, even when speed is 0.
+ * Stay fixes are not trail points; the pin stays on the stay anchor.
+ * Family uploads are one sealed batch: every 10s while moving, every 60s
+ * while still, and immediately when the phone changes between stay and
+ * journey. Distance does not trigger an upload. A partial wake lock is held
+ * only while the moving stream is on, and it is taken before that stream is
+ * re-registered.
+ *
+ * Screen-off delivery can arrive as one burst. The gap between stored fixes
+ * uses each fix's own time, and a PendingIntent batch is walked in time
+ * order, so the burst is not collapsed to its last point. The foreground
+ * service also registers an in-process listener. A PendingIntent alone is
+ * deferred after the UI is gone; that deferral is the suspected screen-off
+ * path, and the listener is what keeps the 1s/2s request in this process.
  */
 public class LocationKeepService {
     public static final String ACTION_FIX = "kr.co.umap.tracker.LOCATION_FIX";
@@ -104,6 +120,12 @@ public class LocationKeepService {
     /** No speed reading. Matches TRAIL_RIDE_STAY_STEP_M so a courtyard hop does not arm GPS. */
     private static final float RIDE_STAY_STEP_M = 18f;
     /**
+     * Past courtyard jitter, short of a neighborhood relocation.
+     * A delayed still fix this far from the anchor arms 2s or 1s on this fix.
+     * Speed 0 must not keep the 20s request after the phone has left.
+     */
+    private static final float ANCHOR_DEPART_M = 30f;
+    /**
      * After a ride, sample faster than the 20s dash hole, slower than 2.5s.
      * Three minutes covers a signal. A longer park returns to 2 minutes, then 5.
      */
@@ -118,7 +140,8 @@ public class LocationKeepService {
      */
     private static final long FIX_ACCEPT_AGE_MS = 180_000L;
     /** One sealed family batch. Local emit() is not throttled by these. */
-    private static final long UPLOAD_MOVING_MS = 30_000L;
+    private static final long UPLOAD_MOVING_MS = 10_000L;
+    /** Still is most of the day, and a still upload has no new trail points. 60s keeps the pin fresh without doubling Durable Object writes. */
     private static final long UPLOAD_STILL_MS = 60_000L;
     /** 503 and network misses wait 5s, 15s, 45s, 2m, then 10m. An OK response clears it. */
     private static final SyncBackoff UPLOAD_BACKOFF = new SyncBackoff();
@@ -153,6 +176,40 @@ public class LocationKeepService {
     private static boolean anchorRecorded = false;
     private static boolean updatesRegistered = false;
     private static String registeredConfig = "";
+    /**
+     * In-process delivery while the foreground service is up. The PendingIntent
+     * remains so a restarted process still receives the next fix.
+     */
+    private static final LocationListener LIVE_LISTENER = new LocationListener() {
+        @Override
+        public void onLocationChanged(Location location) {
+            Context context = appContext;
+            if (context == null || location == null) return;
+            onLocations(context, java.util.Collections.singletonList(location), null);
+        }
+
+        @Override
+        public void onLocationChanged(java.util.List<Location> locations) {
+            Context context = appContext;
+            if (context == null || locations == null || locations.isEmpty()) return;
+            onLocations(context, locations, null);
+        }
+
+        @Override
+        public void onStatusChanged(String provider, int status, Bundle extras) {
+            /* API 24 requires this method. Provider state is not a fix. */
+        }
+
+        @Override
+        public void onProviderEnabled(String provider) {
+            /* The service re-registers on PROVIDERS_CHANGED. */
+        }
+
+        @Override
+        public void onProviderDisabled(String provider) {
+            /* The service re-registers on PROVIDERS_CHANGED. */
+        }
+    };
     private static long lastSampleAt = 0;
     private static Location motionAnchor;
     private static Location lastSample;
@@ -373,25 +430,70 @@ public class LocationKeepService {
 
     @SuppressWarnings("deprecation")
     public static Location locationFrom(Intent intent) {
-        if (intent == null) return null;
-        if (Build.VERSION.SDK_INT >= 33) {
-            return intent.getParcelableExtra(LocationManager.KEY_LOCATION_CHANGED, Location.class);
+        java.util.List<Location> locations = locationsFrom(intent);
+        return locations.isEmpty() ? null : locations.get(locations.size() - 1);
+    }
+
+    /** Every fix in a delivered batch, oldest first. A single extra stays a one-point list. */
+    @SuppressWarnings("deprecation")
+    public static java.util.List<Location> locationsFrom(Intent intent) {
+        java.util.List<Location> list = new ArrayList<>();
+        if (intent == null) return list;
+        if (Build.VERSION.SDK_INT >= 31) {
+            ArrayList<Location> batch = Build.VERSION.SDK_INT >= 33
+                ? intent.getParcelableArrayListExtra(LocationManager.KEY_LOCATIONS, Location.class)
+                : intent.getParcelableArrayListExtra(LocationManager.KEY_LOCATIONS);
+            if (batch != null) list.addAll(batch);
         }
-        return intent.getParcelableExtra(LocationManager.KEY_LOCATION_CHANGED);
+        if (list.isEmpty()) {
+            Location one = Build.VERSION.SDK_INT >= 33
+                ? intent.getParcelableExtra(LocationManager.KEY_LOCATION_CHANGED, Location.class)
+                : intent.getParcelableExtra(LocationManager.KEY_LOCATION_CHANGED);
+            if (one != null) list.add(one);
+        }
+        list.sort((left, right) -> Long.compare(left.getTime(), right.getTime()));
+        return list;
     }
 
     public static void onFix(Context context, Location location, BroadcastReceiver.PendingResult pending) {
+        if (location == null) {
+            if (pending != null) pending.finish();
+            return;
+        }
+        onLocations(context, java.util.Collections.singletonList(location), pending);
+    }
+
+    public static void onLocations(Context context, java.util.List<Location> locations, BroadcastReceiver.PendingResult pending) {
         attach(context);
         IO.execute(() -> {
         try {
-            if (!prefs(context).getBoolean("registered", false) || location == null) return;
+            if (!prefs(context).getBoolean("registered", false) || locations == null || locations.isEmpty()) return;
             if (!hasLocationPermission(context)) {
                 disarm(context);
                 return;
             }
-            Upload upload;
+            java.util.List<Location> ordered = new ArrayList<>();
+            for (Location location : locations) {
+                if (location != null) ordered.add(location);
+            }
+            ordered.sort((left, right) -> Long.compare(left.getTime(), right.getTime()));
+            if (ordered.size() > 1) {
+                NativeDiag.note(context, "gps", "batch", -1, -1, -1, -1, false, "", ordered.size(), 0);
+            }
+            Upload upload = null;
+            boolean flush = false;
             synchronized (LOCK) {
-                upload = handleFix(context, location);
+                for (Location location : ordered) {
+                    Upload next = handleFix(context, location);
+                    if (next == null) continue;
+                    if (next.flush) flush = true;
+                    upload = next;
+                }
+                if (upload != null) {
+                    upload.flush = upload.flush || flush;
+                    upload.trail = copyPending(UPLOAD_BATCH);
+                    upload.sent = upload.trail.length();
+                }
             }
             if (upload != null) {
                 int posted = publish(context, upload);
@@ -582,6 +684,7 @@ public class LocationKeepService {
         android.app.PendingIntent pending = locationIntent(context);
         try {
             locationManager.removeUpdates(pending);
+            locationManager.removeUpdates(LIVE_LISTENER);
         } catch (Exception ignored) {
             /* 이미 해제된 감시 */
         }
@@ -590,7 +693,7 @@ public class LocationKeepService {
         boolean gpsOn = false;
         try {
             if (precise && locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
-                locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, gpsMs, 0f, pending);
+                requestGps(locationManager, gpsMs, movingStream, pending);
                 gpsOn = true;
             }
         } catch (Exception ignored) {
@@ -608,7 +711,28 @@ public class LocationKeepService {
         }
         updatesRegistered = true;
         lastReregisterAt = System.currentTimeMillis();
-        NativeDiag.note(context, "gps", "reregister", -1, -1, -1, gpsMs, false, "", 0, 0);
+        NativeDiag.note(context, "gps", "reregister", -1, -1, -1, gpsMs, movingStream, "", 0, 0);
+        NativeDiag.note(context, "gps", "interval-" + gpsMs, -1, -1, -1, gpsMs, movingStream, "", 0, 0);
+    }
+
+    /** High accuracy, no batch delay. While still, a 10s floor can deliver a departure before the 20s slot. */
+    @SuppressLint("MissingPermission")
+    private static void requestGps(LocationManager locationManager, long gpsMs, boolean moving, android.app.PendingIntent pending) {
+        if (Build.VERSION.SDK_INT >= 31) {
+            long fastest = moving ? gpsMs : Math.min(gpsMs, 10_000L);
+            LocationRequest request = new LocationRequest.Builder(gpsMs)
+                .setQuality(LocationRequest.QUALITY_HIGH_ACCURACY)
+                .setMinUpdateIntervalMillis(fastest)
+                .setMaxUpdateDelayMillis(0L)
+                .setMinUpdateDistanceMeters(0f)
+                .build();
+            locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, request, pending);
+            Executor main = command -> new Handler(Looper.getMainLooper()).post(command);
+            locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, request, main, LIVE_LISTENER);
+            return;
+        }
+        locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, gpsMs, 0f, pending);
+        locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, gpsMs, 0f, LIVE_LISTENER, Looper.getMainLooper());
     }
 
     private static void removeUpdates(Context context) {
@@ -618,6 +742,7 @@ public class LocationKeepService {
         if (locationManager == null) return;
         try {
             locationManager.removeUpdates(locationIntent(context));
+            locationManager.removeUpdates(LIVE_LISTENER);
         } catch (Exception ignored) {
             /* 이미 해제된 감시 */
         }
@@ -872,7 +997,11 @@ public class LocationKeepService {
         stableFix = new Location(location);
         if (stableFix.getTime() <= 0) stableFix.setTime(fixAt);
         if (lastSample != null && lastSampleAt > 0) {
-            long sinceSample = now - lastSampleAt;
+            long sinceWall = now - lastSampleAt;
+            long sampleTime = lastSample.getTime() > 0L ? lastSample.getTime() : lastSampleAt;
+            long sinceFix = fixAt - sampleTime;
+            // A screen-off burst shares one wall clock. The fix time is the gap that matters.
+            long sinceSample = sinceFix >= 0L ? sinceFix : sinceWall;
             float jumped = lastSample.distanceTo(location);
             boolean relocation = jumped > stayGate(lastSample, location);
             float implied = sinceSample > 0 ? jumped / (sinceSample / 1000f) : 0f;
@@ -889,6 +1018,10 @@ public class LocationKeepService {
         boolean moving = noteMovement(location, fixAt);
         boolean stateChanged = wasMoving != moving;
         long want = gpsInterval(moving, now);
+        if (moving && !wasMoving) LocationKeepProcess.setMovingWake(context, true);
+        if (stateChanged) {
+            NativeDiag.note(context, "motion", moving ? "moving" : "still", -1, -1, Math.round(movedFromAnchor), want, moving, "", 0, 0);
+        }
         if (want != requestedGpsMs) {
             requestedGpsMs = want;
             registerUpdates(context, config);
@@ -1083,7 +1216,8 @@ public class LocationKeepService {
         // became one chord. A reported ride, or a fast gap with no speed, arms 1s.
         boolean rideReported = speed >= RIDE_MIN_MPS && moved >= RIDE_STEP_M && dt >= 1_000L && dt <= 30_000L && implied >= RIDE_MIN_MPS * 0.45f;
         boolean rideImplied = speed < 0f && dt >= 2_500L && dt <= 180_000L && moved >= RIDE_STAY_STEP_M && implied > 2.4f && implied <= 45f;
-        if (pacedWalk || pacedTrip || pacedGap || reported || rideReported || rideImplied) {
+        boolean leftAnchor = !movingStream && moved >= ANCHOR_DEPART_M && dt >= 1_000L && dt <= 180_000L && implied <= 45f;
+        if (pacedWalk || pacedTrip || pacedGap || reported || rideReported || rideImplied || leftAnchor) {
             if (speed >= RIDE_MIN_MPS || implied >= RIDE_MIN_MPS) lastRideAt = fixAt;
             motionAnchor = new Location(fix);
             motionAnchor.setTime(fixAt);
@@ -1108,6 +1242,9 @@ public class LocationKeepService {
             return false;
         }
         boolean littleDrift = moved < WALK_DISPLACE_M && dt >= MOVING_HOLD_MS;
+        // 30m only starts the stream. Ending it still uses the stay bubble
+        // (at least 50m). A one-off 30–50m jump can then return to the 20s
+        // check once the hold passes and the speed is still low.
         boolean settled = moved <= stayGate(motionAnchor, fix) && dt >= MOVING_HOLD_MS && (speed < 0f || speed < 0.7f);
         if (littleDrift || settled) {
             if (stillSinceMs == 0L) stillSinceMs = anchorAt;
