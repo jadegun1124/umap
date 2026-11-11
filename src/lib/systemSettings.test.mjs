@@ -142,7 +142,7 @@ test('gps is 2s while walking, 1s while riding, and a stay probe never becomes a
   const location = readFileSync(new URL('../../android/app/src/main/java/kr/co/umap/tracker/LocationKeepService.java', import.meta.url), 'utf8');
   assert.match(location, /GPS_MOVING_MS = 2_000L/);
   assert.match(location, /GPS_RIDE_MS = 1_000L/);
-  assert.match(location, /UPLOAD_MOVING_MS = 30_000L/);
+  assert.match(location, /UPLOAD_MOVING_MS = 10_000L/);
   assert.match(location, /UPLOAD_STILL_MS = 60_000L/);
   assert.equal(location.includes('PUBLISH_MOVING_M'), false);
   assert.match(location, /requestedGpsMs < GPS_RIDE_MS \? GPS_RIDE_MS/);

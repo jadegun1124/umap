@@ -45,6 +45,7 @@ public final class NativeDiag {
                 if (previous != null && key.equals(previous.optString("k")) && previous.optLong("b") == minute) {
                     previous.put("n", previous.optInt("n", 1) + 1);
                     previous.put("t", now);
+                    if (points > 0) previous.put("points", previous.optInt("points", 0) + points);
                 } else {
                     JSONObject row = new JSONObject();
                     row.put("t", now);

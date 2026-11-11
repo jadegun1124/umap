@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { settleTrailPoint, trailDrawParts } from './tracking.mjs';
-import { POLICY_151, acceptFix, eastOf, freshMotion, policyFromJava, replayFixes, simulateLongStayWalk } from './gpsKeepPolicy.mjs';
+import { POLICY_151, acceptBurst, acceptFix, eastOf, freshMotion, policyFromJava, replayFixes, simulateLongStayWalk } from './gpsKeepPolicy.mjs';
 import { mergeNativeFixes } from './nativeTrail.mjs';
 
 const java = readFileSync(new URL('../../android/app/src/main/java/kr/co/umap/tracker/LocationKeepService.java', import.meta.url), 'utf8');
@@ -292,4 +292,90 @@ test('stay probes that only jitter do not add trail vertices, and a real walk st
   const drawn = points.filter((point) => !point.stayEnd);
   assert.ok(drawn.length >= 20, `walk kept ${drawn.length}`);
   assert.equal(trailDrawParts(points).some((part) => part.dashed), false);
+});
+
+test('a screen-off burst keeps each 2s walk fix, and a 30m departure leaves the 20s request', () => {
+  const policy = policyFromJava(java);
+  assert.equal(policy.anchorDepartM, 30);
+  const home = { lat: 37.55, lng: 127.05 };
+  const arrived = 120_000;
+  const state = freshMotion(policy);
+  acceptFix(state, policy, { ...home, at: arrived - 30_000, speedMps: 1.4, accuracyM: 8 }, arrived - 30_000);
+  const armed = acceptFix(state, policy, { ...eastOf(home.lat, home.lng, 12), at: arrived - 22_000, speedMps: 1.4, accuracyM: 8 }, arrived - 22_000);
+  assert.equal(armed.moving, true);
+  const burst = [];
+  for (let index = 1; index <= 10; index += 1) {
+    burst.push({
+      ...eastOf(home.lat, home.lng, 12 + index * 2.4),
+      at: arrived - 22_000 + index * 2_000,
+      speedMps: 1.4,
+      accuracyM: 8,
+    });
+  }
+  const played = acceptBurst(state, policy, burst, arrived);
+  assert.equal(played.recorded.length, burst.length);
+  assert.equal(played.moving, true);
+  assert.equal(played.interval, 2_000);
+  const sameSecond = acceptBurst(freshMotion(policy), policy, [
+    { ...home, at: 1_000, speedMps: 0, accuracyM: 8 },
+    { ...eastOf(home.lat, home.lng, 1), at: 1_200, speedMps: 0, accuracyM: 8 },
+  ], 2_000);
+  assert.equal(sameSecond.recorded.length, 1);
+
+  const delayed = replayFixes(policy, [
+    { ...home, at: 0, speedMps: 0 },
+    { ...home, at: 20_000, speedMps: 0 },
+    { ...eastOf(home.lat, home.lng, 40), at: 170_000, speedMps: 0 },
+  ]);
+  assert.equal(delayed.moving, true);
+  assert.equal(delayed.interval, 2_000);
+  assert.ok(delayed.recorded >= 2);
+
+  assert.match(java, /sinceFix >= 0L \? sinceFix : sinceWall/);
+  assert.match(java, /KEY_LOCATIONS/);
+  assert.match(java, /setMaxUpdateDelayMillis\(0L\)/);
+  assert.match(java, /QUALITY_HIGH_ACCURACY/);
+  assert.match(java, /LIVE_LISTENER/);
+  assert.match(java, /onLocationChanged\(java\.util\.List<Location> locations\)/);
+  assert.match(java, /"interval-" \+ gpsMs/);
+  assert.match(java, /"batch"/);
+  assert.match(java, /"motion"/);
+  const stillPerHour = 3_600_000 / policy.stillMs;
+  const walkPerHour = 3_600_000 / policy.movingMs;
+  assert.equal(stillPerHour, 180);
+  assert.equal(walkPerHour, 1_800);
+  assert.equal(walkPerHour / stillPerHour, 10);
+});
+
+test('a sparse 20s curve bows on screen and a 40s hole stays straight', () => {
+  const home = { lat: 37.55, lng: 127.05 };
+  const t = 1_700_000_000_000;
+  const steps = 6;
+  const radius = 80;
+  const curve = [];
+  for (let index = 0; index <= steps; index += 1) {
+    const theta = (Math.PI / 2) * (index / steps);
+    curve.push({
+      ...eastOf(home.lat, home.lng, radius * Math.sin(theta)),
+      lat: home.lat + (radius * (1 - Math.cos(theta))) / 111_320,
+      at: t + index * 20_000,
+      accuracyM: 8,
+      speedMps: 1.2,
+      staying: false,
+    });
+  }
+  const parts = trailDrawParts(curve);
+  const painted = parts.flatMap((part) => part.points);
+  assert.equal(parts.some((part) => part.dashed), false);
+  assert.ok(painted.length > curve.length, `painted ${painted.length} stored ${curve.length}`);
+  const storedKeys = new Set(curve.map((point) => `${point.lat.toFixed(5)}:${point.lng.toFixed(5)}`));
+  assert.ok(painted.some((point) => point.displayOnly && !storedKeys.has(`${point.lat.toFixed(5)}:${point.lng.toFixed(5)}`)));
+  const hole = [
+    { ...home, at: t, accuracyM: 8, speedMps: 1.2, staying: false },
+    { ...eastOf(home.lat, home.lng, 40), at: t + 20_000, accuracyM: 8, speedMps: 1.2, staying: false },
+    { ...eastOf(home.lat, home.lng, 400), at: t + 60_000, accuracyM: 8, speedMps: 1.2, staying: false },
+  ];
+  const straight = trailDrawParts(hole).flatMap((part) => part.points);
+  const far = straight.filter((point) => point.at > t + 20_000 && point.at < t + 60_000);
+  assert.equal(far.length, 0);
 });

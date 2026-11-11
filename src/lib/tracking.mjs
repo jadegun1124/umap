@@ -606,6 +606,89 @@ function splitDrawPieces(points) {
   return pieces;
 }
 
+const CURVE_MIN_CHORD_M = 12;
+const CURVE_MIN_GAP_MS = 8_000;
+const CURVE_MAX_GAP_MS = 30_000;
+const CURVE_MAX_GAP_M = 300;
+const CURVE_MAX_INSERTS = 4;
+
+function localMeters(point, origin) {
+  const lat0 = (origin.lat * Math.PI) / 180;
+  return {
+    x: (point.lng - origin.lng) * 111_320 * Math.cos(lat0),
+    y: (point.lat - origin.lat) * 111_320,
+  };
+}
+
+function fromLocalMeters(xy, origin) {
+  const lat0 = (origin.lat * Math.PI) / 180;
+  return {
+    lat: origin.lat + xy.y / 111_320,
+    lng: origin.lng + xy.x / (111_320 * Math.cos(lat0)),
+  };
+}
+
+/**
+ * Display-only centripetal Catmull-Rom between stored vertices.
+ * Dense 2s samples are left alone. A gap over 30s or 300m stays a straight chord.
+ * Nothing here is written back to the journal.
+ */
+function curveSparseWalk(points) {
+  if (!Array.isArray(points) || points.length < 3) return points;
+  const output = [points[0]];
+  for (let index = 1; index < points.length; index += 1) {
+    output.push(...centripetalInserts(points, index), points[index]);
+  }
+  return output;
+}
+
+function centripetalInserts(points, index) {
+  const p1 = points[index - 1];
+  const p2 = points[index];
+  if (!p1 || !p2 || p1.displayOnly || p2.displayOnly) return [];
+  const moved = haversineMeters(p1, p2);
+  const dt = Number(p2.at) - Number(p1.at);
+  if (!(moved >= CURVE_MIN_CHORD_M) || moved > CURVE_MAX_GAP_M) return [];
+  if (!Number.isFinite(dt) || dt < CURVE_MIN_GAP_MS || dt > CURVE_MAX_GAP_MS) return [];
+  const p0 = points[index - 2] || p1;
+  const p3 = points[index + 1] || p2;
+  const steps = Math.min(CURVE_MAX_INSERTS, Math.max(1, Math.floor(moved / CURVE_MIN_CHORD_M)));
+  const c0 = localMeters(p0, p1);
+  const c1 = { x: 0, y: 0 };
+  const c2 = localMeters(p2, p1);
+  const c3 = localMeters(p3, p1);
+  const alpha = 0.5;
+  const knot = (ti, a, b) => {
+    const dist = Math.hypot(b.x - a.x, b.y - a.y);
+    return ti + dist ** alpha;
+  };
+  const t0 = 0;
+  const t1 = knot(t0, c0, c1);
+  const t2 = knot(t1, c1, c2);
+  const t3 = knot(t2, c2, c3);
+  if (!(t2 > t1) || !(t3 > t1) || !(t2 > t0)) return [];
+  const mix = (a, b, t) => ({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
+  const inserts = [];
+  for (let step = 1; step <= steps; step += 1) {
+    const t = t1 + ((t2 - t1) * step) / (steps + 1);
+    const a1 = mix(c0, c1, t1 === t0 ? 0 : (t - t0) / (t1 - t0));
+    const a2 = mix(c1, c2, (t - t1) / (t2 - t1));
+    const a3 = mix(c2, c3, t3 === t2 ? 0 : (t - t2) / (t3 - t2));
+    const b1 = mix(a1, a2, (t - t0) / (t2 - t0));
+    const b2 = mix(a2, a3, (t - t1) / (t3 - t1));
+    const xy = mix(b1, b2, (t - t1) / (t2 - t1));
+    const latlng = fromLocalMeters(xy, p1);
+    inserts.push({
+      ...p2,
+      lat: latlng.lat,
+      lng: latlng.lng,
+      at: p1.at + ((p2.at - p1.at) * step) / (steps + 1),
+      displayOnly: true,
+    });
+  }
+  return inserts;
+}
+
 function paintDrawn(points, round) {
   const pieces = splitDrawPieces(points);
   const output = [];
@@ -617,6 +700,7 @@ function paintDrawn(points, round) {
     } else {
       next = smoothShallowBends(next);
     }
+    if (round) next = curveSparseWalk(next);
     if (output.length && next.length) {
       const last = output[output.length - 1];
       const first = next[0];

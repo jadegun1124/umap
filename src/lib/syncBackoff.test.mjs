@@ -82,7 +82,7 @@ test('upload, room poll, and chat poll use the backoff and do not retry every fe
 
   const service = readFileSync(new URL('../../android/app/src/main/java/kr/co/umap/tracker/LocationKeepService.java', import.meta.url), 'utf8');
   assert.match(service, /UPLOAD_BACKOFF/);
-  assert.match(service, /UPLOAD_MOVING_MS = 30_000L/);
+  assert.match(service, /UPLOAD_MOVING_MS = 10_000L/);
   assert.match(service, /UPLOAD_STILL_MS = 60_000L/);
   assert.equal(service.includes('1_500L'), false);
 
