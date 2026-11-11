@@ -33,6 +33,7 @@ export function policyFromJava(source) {
     walkDisplaceMs: num('WALK_DISPLACE_MS'),
     walkPaceMaxMs: num('WALK_PACE_MAX_MS'),
     sampleGapMs: num('SAMPLE_GAP_MS'),
+    acceptAgeMs: num('FIX_ACCEPT_AGE_MS'),
     walkDisplaceM: flt('WALK_DISPLACE_M'),
     walkImpliedMin: flt('WALK_IMPLIED_MIN_MPS'),
     reportedImpliedMin: 0.45,
@@ -60,6 +61,7 @@ export const POLICY_151 = {
   walkDisplaceMs: 4_000,
   walkPaceMaxMs: 20_000,
   sampleGapMs: 1_200,
+  acceptAgeMs: 30_000,
   walkDisplaceM: 12,
   walkImpliedMin: 0.75,
   reportedImpliedMin: 0,
@@ -110,10 +112,13 @@ function noteMovement(state, policy, fix) {
   const implied = dt > 0 ? moved / (dt / 1000) : 0;
   const pacedWalk = dt >= policy.walkDisplaceMs && dt <= policy.walkPaceMaxMs && moved >= policy.walkDisplaceM && implied >= policy.walkImpliedMin && implied <= 12;
   const pacedTrip = dt > policy.walkPaceMaxMs && moved >= policy.walkDisplaceM && implied >= policy.walkImpliedMin && implied <= 45;
+  // A catch-up fix inside 120s used to miss both: too fast for a walk, too soon for a trip.
+  // Reported speed 0 also blocked the ride guess. 50m keeps a short GPS spike from arming 2s.
+  const pacedGap = dt >= policy.walkDisplaceMs && dt <= policy.walkPaceMaxMs && moved >= 50 && implied > 12 && implied <= 45;
   const reported = speed >= policy.reportedMinSpeed && moved >= policy.reportedMinMoved && implied >= policy.reportedImpliedMin && dt >= policy.walkDisplaceMs && dt <= policy.walkPaceMaxMs;
   const rideReported = speed >= RIDE_MIN_MPS && moved >= RIDE_STEP_M && dt >= 1_000 && dt <= 30_000 && implied >= RIDE_MIN_MPS * 0.45;
   const rideImplied = speed < 0 && dt >= 2_500 && dt <= 180_000 && moved >= RIDE_STAY_STEP_M && implied > 2.4 && implied <= 45;
-  if (pacedWalk || pacedTrip || reported || rideReported || rideImplied) {
+  if (pacedWalk || pacedTrip || pacedGap || reported || rideReported || rideImplied) {
     if (speed >= RIDE_MIN_MPS || implied >= RIDE_MIN_MPS) state.lastRideAt = fix.at;
     state.anchor = { ...fix };
     state.stillSince = 0;
@@ -154,6 +159,55 @@ function meters(a, b) {
 
 export function eastOf(lat, lng, metersEast) {
   return { lat, lng: lng + metersEast / (111320 * Math.cos((lat * Math.PI) / 180)) };
+}
+
+function stayGate(anchorAccuracy, nextAccuracy) {
+  return Math.max(50, Math.max(anchorAccuracy || 0, nextAccuracy || 0) * 2);
+}
+
+/**
+ * The accept/drop half of handleFix. Movement uses noteMovement.
+ * A null config is not represented: the service returns before this.
+ */
+export function acceptFix(state, policy, fix, now) {
+  const fixAt = fix.at;
+  const ageLimit = policy.acceptAgeMs || 30_000;
+  if (now - fixAt > ageLimit || fixAt > now + 10_000) return { drop: 'stale', recorded: false, moving: false };
+  const accuracy = fix.accuracyM;
+  if (!(accuracy > 0)) return { drop: 'accuracy', recorded: false, moving: false };
+  const precise = fix.precise !== false;
+  const freshPrecise = state.stable && now - state.stable.at < 20_000;
+  if (precise && accuracy > 80 && (freshPrecise || accuracy > 400)) return { drop: 'accuracy', recorded: false, moving: false };
+  if (!precise && accuracy > 400) return { drop: 'accuracy', recorded: false, moving: false };
+  if (state.stable) {
+    const dt = fixAt - state.stable.at;
+    if (dt < 0) return { drop: 'time', recorded: false, moving: false };
+    if (dt > 0 && dt <= 180_000) {
+      const speed = meters(state.stable, fix) / (dt / 1000);
+      if (speed > 350) return { drop: 'speed', recorded: false, moving: false };
+    }
+  }
+  state.stable = { ...fix, at: fixAt };
+  if (state.lastSample && state.lastSampleAt > 0) {
+    const since = now - state.lastSampleAt;
+    const jumped = meters(state.lastSample, fix);
+    const relocation = jumped > stayGate(state.lastSample.accuracyM, accuracy);
+    const implied = since > 0 ? jumped / (since / 1000) : 0;
+    const rideSample = implied >= RIDE_MIN_MPS && jumped >= RIDE_STEP_M && since >= 800;
+    if (since >= 0 && since < policy.sampleGapMs && !relocation && !rideSample) {
+      return { drop: 'interval', recorded: false, moving: false };
+    }
+  }
+  const moving = noteMovement(state, policy, { ...fix, at: fixAt });
+  state.lastSample = { ...fix, at: fixAt };
+  state.lastSampleAt = now;
+  const recorded = !state.anchorRecorded || moving;
+  state.anchorRecorded = true;
+  return { drop: null, recorded, moving };
+}
+
+export function freshMotion(policy) {
+  return freshState(policy);
 }
 
 export function replayFixes(policy, fixes) {

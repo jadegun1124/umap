@@ -2,6 +2,7 @@ export const VAULT_ITERATIONS: number;
 export function bytesToBase64Url(bytes: Uint8Array): string;
 export function base64UrlToBytes(value: string): Uint8Array | null;
 export function randomFamilyId(): string;
+export function historySealAck(ct: string): string;
 export function isSeal(value: unknown): boolean;
 export function isPublicKey(value: unknown): boolean;
 export function isKeyWrap(value: unknown): boolean;

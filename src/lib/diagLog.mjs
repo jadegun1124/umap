@@ -185,6 +185,17 @@ export function trimDiagEvents(events, now = Date.now(), limits = {}) {
   return sized.map((item) => item.event);
 }
 
+/** Native rows never carry coordinates. A row that does is dropped, not stripped. */
+export function mergeDiagRings(jsEvents, nativeEvents) {
+  const extra = [];
+  for (const event of Array.isArray(nativeEvents) ? nativeEvents : []) {
+    if (!event || typeof event !== 'object') continue;
+    if ('lat' in event || 'lng' in event || 'latitude' in event || 'longitude' in event) continue;
+    extra.push(event);
+  }
+  return [...(Array.isArray(jsEvents) ? jsEvents : []), ...extra].sort((left, right) => (Number(left && left.t) || 0) - (Number(right && right.t) || 0));
+}
+
 export function readDiagEvents(now = Date.now()) {
   ensureRing();
   return trimDiagEvents(ring, now);

@@ -11,5 +11,6 @@ public class UmapApp extends Application {
         if (key != null && !key.isEmpty()) {
             KakaoSdk.init(this, key);
         }
+        NativeDiag.note(this, "process", "start", -1, -1, -1, -1, false, "", -1, 0);
     }
 }

@@ -1,6 +1,7 @@
 // This phone's X25519 device key and the family keys it has unwrapped.
-// The recovery code is the only copy that can rebuild the device key after a
-// reinstall. Kakao and Naver restore the account, not this key.
+// The recovery code rebuilds the device key after a reinstall. The account
+// session also holds a wrap of the history content key, so Kakao or Naver
+// login can open sealed history without that code.
 
 import { normalizeRecoveryCode } from '../../sync/account.mjs';
 import {
@@ -8,9 +9,11 @@ import {
   bytesToBase64Url,
   mintDeviceKey,
   openJson,
+  openContentKeyForAccount,
   sealJson,
   unwrapFamilyKey,
   unwrapVault,
+  wrapContentKeyForAccount,
   wrapFamilyKey,
   wrapVault,
 } from './familySeal.mjs';
@@ -103,10 +106,7 @@ export async function prepareBackup(snapshot, storage, recoveryCode) {
     if (snapshot.homeCleared === true && !snapshot.home) kept.clearHome = true;
     return kept;
   }
-  const code = normalizeRecoveryCode(recoveryCode);
-  if (!code) return keepStoredHistory(snapshot);
   const device = await ensureDevice(storage);
-  const vault = await wrapVault(code, device);
   const content = contentKeyBytes(device);
   const sealedHistory = content
     ? await sealJson(content, device.publicKey, {
@@ -115,13 +115,18 @@ export async function prepareBackup(snapshot, storage, recoveryCode) {
       home: snapshot.home || null,
     })
     : null;
-  if (!vault || !sealedHistory) return { ...snapshot, keepHistory: true };
+  if (!sealedHistory) return { ...snapshot, keepHistory: true };
+  const code = normalizeRecoveryCode(recoveryCode);
+  const vault = code ? await wrapVault(code, device) : null;
+  const { readStoredAccountKey } = await import('./accountRestore.mjs');
+  const accountKey = readStoredAccountKey(storage);
+  const historyKey = accountKey ? await wrapContentKeyForAccount(accountKey, device.contentKey) : null;
   const historyShares = await historySharesFor(content, snapshot.historyPeers);
   const packed = {
     ...snapshot,
-    vault,
+    ...(vault ? { vault, dropRecovery: true } : {}),
+    ...(historyKey ? { historyKey } : {}),
     sealedHistory,
-    dropRecovery: true,
     keepHistory: false,
     journeys: [],
     visits: [],
@@ -277,6 +282,9 @@ export async function openAccountSecrets(account, storage, typedCode = '') {
     }
   }
   if (!readDevice(storage)) await ensureDevice(storage);
+  const { readStoredAccountKey } = await import('./accountRestore.mjs');
+  const accountKey = readStoredAccountKey(storage);
+  const accountContent = accountKey ? await openContentKeyForAccount(accountKey, account.historyKey) : null;
   let journeys = Array.isArray(account.journeys) ? account.journeys : [];
   let visits = Array.isArray(account.visits) ? account.visits : [];
   let home = account.home;
@@ -302,6 +310,7 @@ export async function openAccountSecrets(account, storage, typedCode = '') {
         const key = device && share ? await unwrapFamilyKey(device.privateKey, share, HISTORY_SHARE_KID) : null;
         if (key) opened = await openJson(key, seal);
       }
+      if (!opened && accountContent) opened = await openJson(accountContent, seal);
       if (!opened || typeof opened !== 'object') continue;
       openedAny = true;
       journeys = mergeJourneys(journeys, opened.journeys);

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { gunzipSync } from 'node:zlib';
-import { clearDiag, fixChannelSource, noteDiag, packDiagUpload, readDiagCodes, readDiagEvents, reloadDiagRing, rememberDiagCode, trimDiagEvents } from './diagLog.mjs';
+import { clearDiag, fixChannelSource, mergeDiagRings, noteDiag, packDiagUpload, readDiagCodes, readDiagEvents, reloadDiagRing, rememberDiagCode, trimDiagEvents } from './diagLog.mjs';
 
 function memoryStorage() {
   const box = new Map();
@@ -131,4 +131,12 @@ test('a native provider name is kept and a js coarse fix is network', () => {
   assert.equal(fixChannelSource('js', '', false), 'network');
   assert.equal(fixChannelSource('js', '', true), 'gps');
   assert.equal(fixChannelSource('native', '', true), 'unknown');
+});
+
+test('native diagnostic rows join the upload and a coordinate row is left out', () => {
+  const merged = mergeDiagRings(
+    [{ t: 2, kind: 'fix', reason: 'js' }],
+    [{ t: 1, kind: 'fix', reason: 'stale', acc: 40 }, { t: 3, kind: 'fix', lat: 37.5, lng: 127.1, reason: 'leak' }],
+  );
+  assert.deepEqual(merged.map((event) => event.reason), ['stale', 'js']);
 });

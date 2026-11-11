@@ -14,7 +14,7 @@ import { familyEndpointAvailable, familySyncUrl, publishProfileRemote, publishTr
 import { startLocationWatch } from '../../services/locationWatch';
 import { cleanPlace, savedPlaceLabel } from '../../lib/memberPlace.mjs';
 import { cachedAddress, placeGridKey, presentPlace, reverseGeocodeCached } from '../../services/placeGeocode';
-import { openAlwaysLocation, readNativeBattery, umapLocation, umapLocationNative, type KeepAliveTarget } from '../../services/umapLocation';
+import { openAlwaysLocation, readNativeBattery, readNativeTrail, umapLocation, umapLocationNative, type KeepAliveTarget } from '../../services/umapLocation';
 import { useFamily } from './session';
 
 const WAITING_KO: Record<string, string> = {
@@ -163,6 +163,26 @@ export function useFamilyTracking(onFirstFix: (lat: number, lng: number) => void
   }, [appVisible, nativeKeeps, precise, trackingOn]);
 
   useEffect(() => {
+    if (!umapLocationNative()) return;
+    let dead = false;
+    const pull = () => {
+      void readNativeTrail().then((points) => {
+        if (dead || points.length === 0) return;
+        familyRef.current.mergeNativeTrail(points);
+      });
+    };
+    pull();
+    const onVis = () => {
+      if (document.visibilityState === 'visible') pull();
+    };
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      dead = true;
+      document.removeEventListener('visibilitychange', onVis);
+    };
+  }, []);
+
+  useEffect(() => {
     if (!trackingOn || !umapLocationNative()) return;
     let remove = () => {};
     void umapLocation.addListener('fix', (fix) => {
@@ -181,7 +201,7 @@ export function useFamilyTracking(onFirstFix: (lat: number, lng: number) => void
       });
       nativeFixAt.current = Date.now();
       setWaiting(null);
-      familyRef.current.updateSelf(fix.lat, fix.lng, fix.accuracyM || 1, speed);
+      familyRef.current.updateSelf(fix.lat, fix.lng, fix.accuracyM || 1, speed, fix.at);
       if (!centered.current) {
         centered.current = true;
         onFirstFixRef.current(fix.lat, fix.lng);

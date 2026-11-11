@@ -329,6 +329,54 @@ test('a family phone rewraps history so Kakao login restores the name, family, a
   assert.equal(bytesToBase64Url(ownerContent).length > 0, true);
 });
 
+test('a backup without a recovery code still seals history and the account key opens it', async () => {
+  const { ACCOUNT_KEY_STORAGE } = await import('./accountRestore.mjs');
+  const { cleanAccountSnapshot } = await import('../../sync/account.mjs');
+  const storage = memoryStorage({ [ACCOUNT_KEY_STORAGE]: 'account-key-0123456789abcd' });
+  const saved = await prepareBackup({
+    memberId: 'local-owner01',
+    profileKey: 'profilekeyowner0001',
+    journeys: [{
+      id: 'j-out',
+      startedAt: Date.now() - 60_000,
+      endedAt: Date.now() - 30_000,
+      distanceM: 800,
+      points: [
+        { lat: 37.55, lng: 127.05, at: Date.now() - 60_000 },
+        { lat: 37.56, lng: 127.06, at: Date.now() - 30_000 },
+      ],
+      start: { lat: 37.55, lng: 127.05, label: null },
+      end: { lat: 37.56, lng: 127.06, label: null },
+    }],
+    visits: [],
+    home: null,
+  }, storage, '');
+  assert.equal(saved.keepHistory, false);
+  assert.equal(saved.vault, undefined);
+  assert.equal(typeof saved.sealedHistory.ct, 'string');
+  assert.equal(typeof saved.historyKey.ct, 'string');
+  const cleaned = cleanAccountSnapshot({
+    memberId: 'local-owner01',
+    profileKey: 'profilekeyowner0001',
+    profile: { name: '개발자' },
+    room: { code: '48291', writeKey: 'writeKeyAAAAAAAAAA', readKey: 'readKeyAAAAAAAAAAA' },
+    sealedHistory: saved.sealedHistory,
+    historyKey: saved.historyKey,
+    journeys: [],
+    visits: [],
+  });
+  assert.equal(cleaned.snapshot.historyKey.ct, saved.historyKey.ct);
+  const opened = await openAccountSecrets({
+    memberId: 'local-owner01',
+    sealedHistory: saved.sealedHistory,
+    historyKey: saved.historyKey,
+    journeys: [],
+    visits: [],
+  }, memoryStorage({ [ACCOUNT_KEY_STORAGE]: 'account-key-0123456789abcd' }));
+  assert.equal(opened.historyLocked, false);
+  assert.equal(opened.journeys[0].id, 'j-out');
+});
+
 test('recovery uses the same restored flag so a named account skips the name screen', () => {
   const source = readFileSync(new URL('../components/family/Onboarding.tsx', import.meta.url), 'utf8');
   assert.match(source, /finishAccount\(\{ \.\.\.result\.account, restored: result\.restored === true \}/);

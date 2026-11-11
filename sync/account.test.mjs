@@ -921,6 +921,67 @@ test('a sealed backup deletes plaintext history and the stored recovery code', a
   assert.ok(again.body.account.vault);
 });
 
+test('a backup that did not read the current seal does not replace it', async () => {
+  const { base64UrlToBytes, historySealAck, mintDeviceKey, sealJson, wrapContentKeyForAccount, wrapFamilyKey, wrapVault } = await import('../src/lib/familySeal.mjs');
+  const accounts = createMemoryAccountStore();
+  const created = await accountCall(accounts, 'POST', '/v1/account', { body: snapshot() });
+  const device = await mintDeviceKey();
+  const content = base64UrlToBytes(device.contentKey);
+  const longer = await sealJson(content, device.publicKey, {
+    journeys: snapshot().journeys,
+    visits: snapshot().visits,
+    home: null,
+  });
+  const historyKey = await wrapContentKeyForAccount(created.body.account.accountKey, device.contentKey);
+  const vault = await wrapVault('ABCDEFGHJKLN', device);
+  const share = await wrapFamilyKey(device.publicKey, content, 'umap-history-key1');
+  const stored = await accountCall(accounts, 'PUT', '/v1/account', {
+    accountKey: created.body.account.accountKey,
+    body: {
+      ...snapshot({ journeys: [], visits: [], home: null }),
+      sealedHistory: longer,
+      historyKey,
+      vault,
+      historyShares: { 'local-restore1': share },
+    },
+  });
+  assert.equal(stored.body.account.sealedHistory.ct, longer.ct);
+  const other = await mintDeviceKey();
+  const otherKey = await wrapContentKeyForAccount(created.body.account.accountKey, other.contentKey);
+  const otherVault = await wrapVault('ABCDEFGHJKLN', other);
+  const otherShare = await wrapFamilyKey(other.publicKey, base64UrlToBytes(other.contentKey), 'umap-history-key1');
+  const shorter = await sealJson(content, device.publicKey, { journeys: [], visits: [], home: null });
+  const missed = await accountCall(accounts, 'PUT', '/v1/account', {
+    accountKey: created.body.account.accountKey,
+    body: {
+      ...snapshot({ journeys: [], visits: [], home: null }),
+      sealedHistory: shorter,
+      historyKey: otherKey,
+      vault: otherVault,
+      historyShares: { 'local-restore1': otherShare },
+      dropRecovery: true,
+    },
+  });
+  assert.equal(missed.status, 200);
+  assert.equal(missed.body.account.sealedHistory.ct, longer.ct);
+  assert.equal(missed.body.account.historyKey.ct, historyKey.ct);
+  assert.equal(missed.body.account.vault.ct, vault.ct);
+  assert.equal(missed.body.account.historyShares['local-restore1'].ct, share.ct);
+  assert.equal(missed.body.account.recoveryCode, stored.body.account.recoveryCode);
+  assert.equal(Array.isArray(missed.body.account.priorSeals) ? missed.body.account.priorSeals.length : 0, 0);
+  const read = await accountCall(accounts, 'PUT', '/v1/account', {
+    accountKey: created.body.account.accountKey,
+    body: {
+      ...snapshot({ journeys: [], visits: [], home: null }),
+      sealedHistory: shorter,
+      seenSeal: historySealAck(longer.ct),
+    },
+  });
+  assert.equal(read.status, 200);
+  assert.equal(read.body.account.sealedHistory.ct, shorter.ct);
+  assert.equal(read.body.account.priorSeals.some((seal) => seal.ct === longer.ct), true);
+});
+
 test('an empty snapshot without keepHistory does not erase stored journeys', async () => {
   const accounts = createMemoryAccountStore();
   const created = await accountCall(accounts, 'POST', '/v1/account', { body: snapshot() });

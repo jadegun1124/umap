@@ -14,8 +14,10 @@ import {
   writeStoredRecoveryCode,
 } from '../lib/accountRestore.mjs';
 import { openAccountSecrets, prepareBackup } from '../lib/familyVault.mjs';
+import { historySealAck } from '../lib/familySeal.mjs';
 import { planAccountBackup } from '../lib/historyMerge.mjs';
-import { packDiagUpload, readDiagEvents } from '../lib/diagLog.mjs';
+import { mergeDiagRings, packDiagUpload, readDiagEvents } from '../lib/diagLog.mjs';
+import { readNativeDiag } from './umapLocation';
 import { familySyncUrl } from './familySync';
 
 export {
@@ -56,6 +58,7 @@ export interface AccountSnapshot {
   mergedVault?: unknown;
   keepHistory?: boolean;
   dropRecovery?: boolean;
+  seenSeal?: string;
 }
 
 function timeoutSignal(ms: number): AbortSignal {
@@ -126,10 +129,13 @@ async function planBackupFromServer(snapshot: AccountSnapshot, accountKey: strin
   let remoteLocked = false;
   let remoteJourneys: unknown[] = [];
   let remoteVisits: unknown[] = [];
+  let seenSeal = '';
   try {
     const loaded = await loadFamilyAccount(accountKey);
     if (loaded.ok && loaded.account) {
       remoteOk = true;
+      const stored = loaded.account.sealedHistory as { ct?: string } | null | undefined;
+      seenSeal = stored && typeof stored.ct === 'string' ? historySealAck(stored.ct) : '';
       const opened = await openAccountSecrets(loaded.account, typeof localStorage === 'undefined' ? null : localStorage);
       remoteLocked = opened.historyLocked === true;
       remoteJourneys = Array.isArray(opened.journeys) ? opened.journeys : [];
@@ -137,6 +143,7 @@ async function planBackupFromServer(snapshot: AccountSnapshot, accountKey: strin
     }
   } catch {
     remoteOk = false;
+    seenSeal = '';
   }
   const plan = planAccountBackup({
     localJourneys,
@@ -145,9 +152,15 @@ async function planBackupFromServer(snapshot: AccountSnapshot, accountKey: strin
     remoteLocked,
     remoteJourneys,
     remoteVisits,
+    seenSeal,
   });
   if (plan.keepHistory) return { ...snapshot, journeys: [], visits: [], keepHistory: true };
-  return { ...snapshot, journeys: plan.journeys as AccountSnapshot['journeys'], visits: plan.visits as AccountSnapshot['visits'] };
+  return {
+    ...snapshot,
+    journeys: plan.journeys as AccountSnapshot['journeys'],
+    visits: plan.visits as AccountSnapshot['visits'],
+    ...(plan.seenSeal ? { seenSeal: plan.seenSeal } : {}),
+  };
 }
 
 export async function backupFamilyAccount(snapshot: AccountSnapshot, accountKey = readStoredAccountKey(localStorage)) {
@@ -213,7 +226,7 @@ export interface HandlingEvent {
 
 export async function uploadDiagReport(accountKey = readStoredAccountKey(typeof localStorage === 'undefined' ? null : localStorage)): Promise<{ ok: boolean; id?: string; message?: string }> {
   if (!accountKey || !familySyncUrl()) return { ok: false, message: '로그인된 계정이 있어야 보냅니다. 카카오·네이버 또는 복구 코드로 들어온 뒤에 보내 주세요.' };
-  const events = readDiagEvents();
+  const events = mergeDiagRings(readDiagEvents(), await readNativeDiag());
   if (events.length === 0) return { ok: false, message: '보낼 진단 기록이 없습니다. 잠시 움직인 뒤에 다시 보내 주세요.' };
   const packed = await packDiagUpload(events);
   try {

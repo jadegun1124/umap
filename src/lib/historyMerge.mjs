@@ -86,17 +86,16 @@ export function applyMemberTrail(local, incoming) {
 
 /**
  * Decide what history a backup may upload.
- * If the server could not be read, or the seal would not open, keep the server copy.
- * Otherwise upload the id union so a shorter phone does not replace a longer backup.
+ * A failed read, or a seal that was fetched but would not open, keeps the server copy.
+ * Only a seal this phone opened is unioned by id and may replace the stored blob.
  */
-export function planAccountBackup({ localJourneys, localVisits, remoteOk, remoteLocked, remoteJourneys, remoteVisits }) {
-  if (!remoteOk || remoteLocked) {
-    return { keepHistory: true, journeys: [], visits: [] };
-  }
+export function planAccountBackup({ localJourneys, localVisits, remoteOk, remoteLocked, remoteJourneys, remoteVisits, seenSeal }) {
+  if (!remoteOk || remoteLocked) return { keepHistory: true, journeys: [], visits: [], seenSeal: '' };
   return {
     keepHistory: false,
     journeys: mergeJourneys(remoteJourneys, localJourneys),
     visits: mergeRecordsById(remoteVisits, localVisits),
+    seenSeal: typeof seenSeal === 'string' ? seenSeal : '',
   };
 }
 

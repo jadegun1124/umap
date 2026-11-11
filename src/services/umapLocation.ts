@@ -84,6 +84,9 @@ interface UmapLocationPlugin {
   alertWatchStatus(): Promise<{ running: boolean; userStopped: boolean }>;
   consumePendingChat(): Promise<{ code?: string; peer?: string }>;
   ackStopped(): Promise<void>;
+  trailJournal(): Promise<{ journal?: string }>;
+  nativeDiag(): Promise<{ events?: string }>;
+  clearNativeDiag(): Promise<void>;
   addListener(eventName: 'fix', listenerFunc: (fix: UmapFix) => void): Promise<PluginListenerHandle>;
   addListener(eventName: 'chat', listenerFunc: (event: { code?: string; peer?: string }) => void): Promise<PluginListenerHandle>;
   addListener(eventName: 'resume', listenerFunc: () => void): Promise<PluginListenerHandle>;
@@ -136,6 +139,13 @@ const web: UmapLocationPlugin = {
     return { running: false, userStopped: false, native: false };
   },
   async ackStopped() {},
+  async trailJournal() {
+    return { journal: '[]' };
+  },
+  async nativeDiag() {
+    return { events: '[]' };
+  },
+  async clearNativeDiag() {},
   async startAlertWatch() {
     return { started: false, reason: 'web' };
   },
@@ -216,6 +226,48 @@ export async function readLocationSnapshot(): Promise<LocationAccessSnapshot> {
   } catch {
     return { location: 'unavailable', precise: null, background: false };
   }
+}
+
+export async function readNativeTrail(): Promise<UmapFix[]> {
+  if (!umapLocationNative()) return [];
+  try {
+    const result = await plugin.trailJournal();
+    const parsed = JSON.parse(result.journal || '[]') as unknown;
+    if (!Array.isArray(parsed)) return [];
+    const points: UmapFix[] = [];
+    for (const item of parsed) {
+      if (!item || typeof item !== 'object') continue;
+      const row = item as Record<string, unknown>;
+      if (typeof row.lat !== 'number' || typeof row.lng !== 'number' || typeof row.at !== 'number') continue;
+      points.push({
+        lat: row.lat,
+        lng: row.lng,
+        at: row.at,
+        accuracyM: typeof row.accuracyM === 'number' ? row.accuracyM : 0,
+        speedMps: typeof row.speedMps === 'number' ? row.speedMps : null,
+      });
+    }
+    return points;
+  } catch {
+    return [];
+  }
+}
+
+export async function readNativeDiag(): Promise<Record<string, unknown>[]> {
+  if (!umapLocationNative()) return [];
+  try {
+    const result = await plugin.nativeDiag();
+    const parsed = JSON.parse(result.events || '[]') as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((item) => item && typeof item === 'object' && !('lat' in item) && !('lng' in item)) as Record<string, unknown>[];
+  } catch {
+    return [];
+  }
+}
+
+export function clearNativeDiag(): void {
+  if (!umapLocationNative()) return;
+  void plugin.clearNativeDiag().catch(() => undefined);
 }
 
 export async function listenAppResume(listener: () => void): Promise<() => void> {

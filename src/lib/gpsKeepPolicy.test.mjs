@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { settleTrailPoint, trailDrawParts } from './tracking.mjs';
-import { POLICY_151, eastOf, policyFromJava, replayFixes, simulateLongStayWalk } from './gpsKeepPolicy.mjs';
+import { POLICY_151, acceptFix, eastOf, freshMotion, policyFromJava, replayFixes, simulateLongStayWalk } from './gpsKeepPolicy.mjs';
+import { mergeNativeFixes } from './nativeTrail.mjs';
 
 const java = readFileSync(new URL('../../android/app/src/main/java/kr/co/umap/tracker/LocationKeepService.java', import.meta.url), 'utf8');
 const keepCopy = readFileSync(new URL('../components/family/FamilyMapScreen.tsx', import.meta.url), 'utf8');
@@ -81,6 +82,110 @@ test('a walk that starts after a long stay is sampled at 2s, and the 1.51 interv
   const parts = trailDrawParts(points);
   assert.equal(parts.some((part) => part.dashed), false);
   assert.ok(parts.some((part) => !part.dashed && part.points.length >= 10));
+});
+
+test('an 800m catch-up inside 120s used to store no point and now stores it', () => {
+  const policy = policyFromJava(java);
+  assert.equal(policy.acceptAgeMs, 180_000);
+  const home = { lat: 37.55, lng: 127.05 };
+  const fixes = [];
+  for (let step = 0; step <= 2; step += 1) {
+    fixes.push({ ...home, at: step * 20_000, speedMps: 0, accuracyM: 12 });
+  }
+  fixes.push({ ...eastOf(home.lat, home.lng, 800), at: 60_000, speedMps: 0, accuracyM: 15 });
+  const played = replayFixes(policy, fixes);
+  assert.equal(played.moving, true);
+  assert.ok(played.recorded >= 2, `recorded ${played.recorded}`);
+  const implied = 800 / 20;
+  const legacyWalk = implied <= 12;
+  const legacyTrip = 20_000 > policy.walkPaceMaxMs;
+  assert.equal(legacyWalk || legacyTrip, false);
+  assert.match(java, /moved >= 50f && implied > 12f/);
+  assert.match(java, /JOURNAL_CAP = 6_000/);
+  assert.match(java, /trail-journal\.seal/);
+  assert.match(java, /uploadedThrough/);
+  assert.match(java, /NativeDiag.commitFile/);
+  assert.equal(java.includes('dest.delete()'), false);
+  assert.equal(java.includes('journal.remove(0);\n        }\n        if (upload.pin'), false);
+});
+
+test('a 45s-old walk batch is kept, and a 100m fix on the 20s stay probe is not the zero-point path', () => {
+  const policy = policyFromJava(java);
+  const home = { lat: 37.55, lng: 127.05 };
+  const state = freshMotion(policy);
+  const now = 120_000;
+  const stale = acceptFix(state, policy, { ...eastOf(home.lat, home.lng, 40), at: now - 45_000, speedMps: 1.2, accuracyM: 15 }, now);
+  assert.equal(stale.drop, null);
+  assert.equal(stale.recorded, true);
+  const ancient = acceptFix(freshMotion(policy), policy, { ...home, at: now - 200_000, speedMps: 0, accuracyM: 12 }, now);
+  assert.equal(ancient.drop, 'stale');
+  const precise = freshMotion(policy);
+  acceptFix(precise, policy, { ...home, at: 0, speedMps: 0, accuracyM: 10 }, 0);
+  const coarse = acceptFix(precise, policy, { ...eastOf(home.lat, home.lng, 24), at: 20_000, speedMps: 1.2, accuracyM: 100 }, 20_000);
+  assert.equal(coarse.drop, null);
+  assert.equal(coarse.recorded, true);
+  const soon = acceptFix(precise, policy, { ...eastOf(home.lat, home.lng, 40), at: 30_000, speedMps: 1.2, accuracyM: 100 }, 30_000);
+  assert.equal(soon.drop, 'accuracy');
+  const diag = readFileSync(new URL('../../android/app/src/main/java/kr/co/umap/tracker/NativeDiag.java', import.meta.url), 'utf8');
+  assert.equal(diag.includes('latitude'), false);
+  assert.equal(diag.includes('put("lat"'), false);
+  assert.match(diag, /row.has\("lat"\)/);
+  assert.equal(diag.includes('getLatitude'), false);
+  assert.match(diag, /24L \* 60L \* 60L \* 1000L/);
+  const merged = mergeNativeFixes(
+    [{ lat: home.lat, lng: home.lng, at: 1_000, accuracyM: 8, speedMps: 0 }],
+    [
+      { lat: home.lat, lng: home.lng, at: 1_000, accuracyM: 8, speedMps: 0 },
+      { ...eastOf(home.lat, home.lng, 30), at: 20_000, accuracyM: 8, speedMps: 1.4 },
+    ],
+  );
+  assert.ok(merged.length >= 2);
+  assert.equal(mergeNativeFixes(merged, [{ ...eastOf(home.lat, home.lng, 30), at: 20_000, accuracyM: 8, speedMps: 1.4 }]), merged);
+  const late = { ...eastOf(home.lat, home.lng, 80), at: 80_000, accuracyM: 8, speedMps: 1.4 };
+  const early = { ...eastOf(home.lat, home.lng, 40), at: 40_000, accuracyM: 8, speedMps: 1.4 };
+  const stay = { lat: home.lat, lng: home.lng, at: 5_000, stayEnd: true, speedMps: 0, accuracyM: 8 };
+  const further = { ...eastOf(home.lat, home.lng, 130), at: 110_000, accuracyM: 8, speedMps: 1.4 };
+  const appended = mergeNativeFixes([stay, late], [further]);
+  assert.equal(appended.includes(stay), true);
+  assert.equal(appended.includes(late), true);
+  assert.ok(appended.some((point) => point.at === 110_000));
+  assert.equal(mergeNativeFixes(appended, [further]), appended);
+  const ordered = mergeNativeFixes([stay, late], [early]);
+  const times = ordered.map((point) => point.at);
+  assert.deepEqual(times, [...times].sort((left, right) => left - right));
+  assert.ok(times.includes(40_000));
+  assert.equal(ordered.includes(stay), true);
+  const spike = { ...eastOf(home.lat, home.lng, 25), at: 4_000, accuracyM: 30, speedMps: 0 };
+  const base = [{ ...home, at: 1_000, accuracyM: 8, speedMps: 0 }];
+  assert.equal(mergeNativeFixes(base, [spike]), base);
+  const live = [{ ...home, at: 60_000, accuracyM: 8, speedMps: 0 }];
+  const archived = mergeNativeFixes(live, [early], [{ startedAt: 0, endedAt: 60_000 }]);
+  assert.equal(archived, live);
+  const outing = [0, 40, 80, 120, 160].map((sec, index) => ({
+    ...eastOf(home.lat, home.lng, index * 30),
+    at: sec * 1000,
+    accuracyM: 8,
+    speedMps: 0,
+  }));
+  const marker = { ...outing[0], at: 35_000, stayEnd: true, speedMps: 0 };
+  outing.splice(1, 0, marker);
+  const probe = { ...eastOf(home.lat, home.lng, 8), at: 20_000, accuracyM: 10, speedMps: 0 };
+  const kept = mergeNativeFixes(outing, [probe]);
+  assert.equal(kept.length, outing.length);
+  for (const point of outing) assert.equal(kept.includes(point), true);
+  const start = { ...home, at: 0, accuracyM: 8, speedMps: 1.3 };
+  const kink = { ...eastOf(home.lat, home.lng, 0), lat: home.lat + 40 / 111_320, at: 8_000, accuracyM: 8, speedMps: 1.3 };
+  const after = { ...eastOf(home.lat, home.lng, 40), at: 16_000, accuracyM: 8, speedMps: 1.3 };
+  const onward = { ...eastOf(home.lat, home.lng, 80), at: 28_000, accuracyM: 8, speedMps: 1.3 };
+  let drawn = [];
+  for (const sample of [start, kink, after, onward]) drawn = settleTrailPoint(drawn, sample, sample.at).points;
+  const withoutKink = drawn.filter((point) => !point.stayEnd);
+  assert.equal(withoutKink.some((point) => point.at === 8_000), false);
+  const restored = mergeNativeFixes(withoutKink, [start, kink, after, onward]);
+  assert.equal(restored.some((point) => point.at === 8_000), false);
+  for (const point of withoutKink) assert.equal(restored.includes(point), true);
+  const reader = diag.slice(diag.indexOf('static String readCommitted'), diag.indexOf('private static String readArray'));
+  assert.ok(reader.indexOf('.tmp') >= 0 && reader.indexOf('.tmp') < reader.indexOf('.bak'));
 });
 
 test('a quiet stay stays at 20s, and an unclear step uses the 15s bridge', () => {

@@ -30,10 +30,11 @@ import { familyPinId, isMemberId, moveKeyed } from '../../lib/sharedIdentity.mjs
 import { applyMergeIdentity, extraRoomDecision, mergePointTrails, mergeRecordLists, planFamilyRoomMerge } from '../../lib/roomMerge.mjs';
 import { absorbPlaceholderMembers } from '../../lib/memberRoster.mjs';
 import { clearDiag, noteDiag } from '../../lib/diagLog.mjs';
+import { mergeNativeFixes } from '../../lib/nativeTrail.mjs';
 import { HISTORY_DAYS, JOURNEY_POINT_CAP, TRAIL_POINT_CAP, fixShowsRide, isWithinHistory, journeysWithinHistory, labelJourneyPlace, lastTravelAt, mergeJourneyLists, seoulDayKey, mergeVisitStops, settleTrailPoint, stayLabelDwellMs, storedTrackAfterArchive, tracksWithinHistory, trimJourneyList, visitsWithinHistory, walkLeavesStay, type JourneyRecord } from '../../lib/tracking.mjs';
 import type { DayStop } from '../../lib/tracking.mjs';
 import type { SharedPlace, SharedProfile } from '../../services/familyShare';
-import { umapLocation } from '../../services/umapLocation';
+import { clearNativeDiag, umapLocation } from '../../services/umapLocation';
 import { createKeyPart, isKeyPart, splitSyncToken } from '../../services/familySync';
 import {
   DEFAULT_CENTER,
@@ -703,7 +704,8 @@ type Action =
   | { type: 'leave-guardian'; id: string }
   | { type: 'dismiss-invite' }
   | { type: 'mark-alerts-read' }
-  | { type: 'update-self'; lat: number; lng: number; accuracyM: number; speedMps: number | null }
+  | { type: 'update-self'; lat: number; lng: number; accuracyM: number; speedMps: number | null; at?: number | null }
+  | { type: 'merge-native-trail'; points: { lat: number; lng: number; at: number; accuracyM?: number; speedMps?: number | null }[] }
   | { type: 'set-battery'; battery: number | null; charging: boolean | null }
   | { type: 'roll-day'; now: number }
   | { type: 'set-share-self'; share: boolean }
@@ -1020,8 +1022,17 @@ function reduceSession(state: Session, action: Action): Session {
       return { ...state, pendingInvite: null };
     case 'mark-alerts-read':
       return { ...state, notices: state.notices.map((item) => ({ ...item, read: true })) };
-    case 'update-self': {
+    case 'merge-native-trail': {
+      const current = state.tracks.self || [];
+      const merged = mergeNativeFixes(current, action.points, state.journeys?.self);
+      if (merged === current) return state;
       const at = Date.now();
+      const tracks = tracksWithinHistory({ ...state.tracks, self: merged }, at);
+      return archiveJourneys({ ...state, tracks, visits: visitsWithinHistory(state.visits, at) }, at);
+    }
+    case 'update-self': {
+      const stamped = typeof action.at === 'number' && Number.isFinite(action.at) ? action.at : Date.now();
+      const at = stamped > Date.now() + 10_000 || Date.now() - stamped > 24 * 60 * 60 * 1000 ? Date.now() : stamped;
       const speed = typeof action.speedMps === 'number' && Number.isFinite(action.speedMps) ? action.speedMps : null;
       const self = state.members.find((member) => member.id === 'self');
       const sample = {
@@ -1679,7 +1690,8 @@ interface FamilyApi {
   mergeRooms: () => void;
   dismissInvite: () => void;
   markAlertsRead: () => void;
-  updateSelf: (lat: number, lng: number, accuracyM: number, speedMps?: number | null) => void;
+  updateSelf: (lat: number, lng: number, accuracyM: number, speedMps?: number | null, at?: number | null) => void;
+  mergeNativeTrail: (points: { lat: number; lng: number; at: number; accuracyM?: number; speedMps?: number | null }[]) => void;
   setBattery: (battery: number | null, charging: boolean | null) => void;
   rollDay: (now: number) => void;
   setShareSelf: (share: boolean) => void;
@@ -1972,7 +1984,8 @@ export function FamilyProvider({ children }: { children: React.ReactNode }) {
     mergeRooms: () => dispatch({ type: 'merge-family-rooms' }),
     dismissInvite: () => dispatch({ type: 'dismiss-invite' }),
     markAlertsRead: () => dispatch({ type: 'mark-alerts-read' }),
-    updateSelf: (lat, lng, accuracyM, speedMps) => dispatch({ type: 'update-self', lat, lng, accuracyM, speedMps: speedMps ?? null }),
+    updateSelf: (lat, lng, accuracyM, speedMps, at) => dispatch({ type: 'update-self', lat, lng, accuracyM, speedMps: speedMps ?? null, at: at ?? null }),
+    mergeNativeTrail: (points) => dispatch({ type: 'merge-native-trail', points }),
     setBattery: (battery, charging) => dispatch({ type: 'set-battery', battery, charging }),
     rollDay: (now) => dispatch({ type: 'roll-day', now }),
     setShareSelf: (share) => dispatch({ type: 'set-share-self', share }),
@@ -1998,6 +2011,7 @@ export function FamilyProvider({ children }: { children: React.ReactNode }) {
       cancelDeviceSealRestore();
       clearStoredSessions();
       clearDiag();
+      clearNativeDiag();
       logoutLocalAccount(typeof localStorage === 'undefined' ? null : localStorage);
       dispatch({ type: 'logout' });
     },
@@ -2006,6 +2020,7 @@ export function FamilyProvider({ children }: { children: React.ReactNode }) {
       cancelDeviceSealRestore();
       forgetDurableSession();
       clearDiag();
+      clearNativeDiag();
       clearDeviceAccount(
         typeof localStorage === 'undefined' ? null : localStorage,
         typeof sessionStorage === 'undefined' ? null : sessionStorage,

@@ -85,6 +85,17 @@ test('a backup waits when the server cannot be read and otherwise unions by id',
   });
   assert.equal(held.keepHistory, true);
   assert.equal(held.journeys.length, 0);
+  const unread = planAccountBackup({
+    localJourneys: local,
+    localVisits: [],
+    remoteOk: false,
+    remoteLocked: false,
+    remoteJourneys: [],
+    remoteVisits: [],
+  });
+  assert.equal(unread.keepHistory, true);
+  assert.equal(unread.journeys.length, 0);
+  assert.equal(unread.seenSeal, '');
   const remote = [trip('khoon-drive', Date.now(), 7000)];
   const merged = planAccountBackup({
     localJourneys: local,
@@ -93,8 +104,22 @@ test('a backup waits when the server cannot be read and otherwise unions by id',
     remoteLocked: false,
     remoteJourneys: remote,
     remoteVisits: [],
+    seenSeal: 'server-seal',
   });
   assert.equal(merged.keepHistory, false);
   assert.equal(merged.journeys.some((item) => item.id === 'khoon-drive'), true);
   assert.equal(merged.journeys.some((item) => item.id === 'local-walk'), true);
+  assert.equal(merged.seenSeal, 'server-seal');
+  const locked = planAccountBackup({
+    localJourneys: local,
+    localVisits: [],
+    remoteOk: true,
+    remoteLocked: true,
+    remoteJourneys: [],
+    remoteVisits: [],
+    seenSeal: 'server-seal',
+  });
+  assert.equal(locked.keepHistory, true);
+  assert.equal(locked.journeys.length, 0);
+  assert.equal(locked.seenSeal, '');
 });
