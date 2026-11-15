@@ -790,7 +790,7 @@ function Permissions({
           <BatteryCharging className="mt-6 h-8 w-8 text-[#0084FF]" />
           <h1 className="mt-4 text-2xl font-black leading-snug">배터리 최적화 안내</h1>
           <p className="mt-3 text-sm leading-6 text-slate-600">
-            버튼을 누르면 이 앱의 배터리 제한 없음 팝업이 바로 열립니다. 허용은 그 팝업에서 직접 고릅니다. 삼성 설정에서는 절전 앱·수면 중 앱에서도 Kinnex를 제외해 주세요.
+            버튼을 누르면 이 앱의 배터리 제한 없음 팝업이 바로 열립니다. 허용은 그 팝업에서 직접 고릅니다. 삼성 설정에서는 절전 앱·수면 중 앱에서도 Kinnex를 제외해 주세요. 앱을 오래 열지 않으면 휴대폰 절전 기능 때문에 위치가 잠시 올라오지 않을 수 있어요.
           </p>
           {note && <p className="mt-3 text-sm leading-6 text-amber-800">{note}</p>}
           <div className="mt-auto space-y-3">

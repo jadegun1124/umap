@@ -11,6 +11,8 @@
             <category android:name="android.intent.category.DEFAULT" />
         </intent>
         <package android:name="com.samsung.android.permissioncontroller" />
+        <package android:name="com.samsung.android.lool" />
+        <package android:name="com.samsung.android.sm" />
         <package android:name="com.google.android.permissioncontroller" />
         <package android:name="com.android.permissioncontroller" />
         <package android:name="com.kakao.talk" />
@@ -131,8 +133,12 @@
     <!-- Draw-over is only the Always Allow hint on the system location screen.
          The app asks in Korean and still opens that screen if the user says no. -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
-    <!-- SOS polling while the screen is off. This does not create a shade card. -->
+    <!-- SOS polling while the screen is off. This does not create a shade card.
+         USE_EXACT_ALARM stays granted on this sideload build. SCHEDULE_EXACT_ALARM
+         is the user-toggleable exact alarm. If canScheduleExactAlarms is false,
+         keep uses setAndAllowWhileIdle and the settings screen can open the request. -->
     <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
     <!-- Invite QR only. The app asks at the scan button and does not record audio. -->

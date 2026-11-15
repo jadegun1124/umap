@@ -26,7 +26,7 @@ import { CHAT_LIST_POLL_MS } from '../../lib/keySyncPace.mjs';
 import { abandonFamilySync, currentSyncPhase, deleteFamilyRoomRemote, familySyncConfigured, familySyncUrl, fetchMyDirectThreads, registerRoomPush, revokeFamilyPlace, rotateRemovedMember, splitSyncToken, startAdminRemoteSync, startSyncMonitor, subscribeSyncPhase, syncRetryDelay, syncTokenFor, type SyncPhase } from '../../services/familySync';
 import { KEEP_RESTART_HOLD_MS, keepBanner, keepBannerVisible, keepRestartStatus, nextKeepPhase, serviceAlive } from '../../lib/keepBanner.mjs';
 import { OLD_APP_PLACE_LABEL, syncBannerText } from '../../lib/syncBanner.mjs';
-import { consumePendingChat, listenChatOpen, openAppSettings, overlayPermissionGranted, umapLocation, umapLocationNative } from '../../services/umapLocation';
+import { consumePendingChat, listenChatOpen, openAppSettings, openExactAlarmSettings, openSamsungSleepSettings, overlayPermissionGranted, umapLocation, umapLocationNative } from '../../services/umapLocation';
 import { sounds } from '../../utils/audio';
 import { DEFAULT_CENTER, type GuardianLink, type HomeZone, type Member, type Session } from '../../types/family';
 import { AlwaysAllowGuide, AlwaysAllowMapHint } from './AlwaysAllowGuide';
@@ -112,7 +112,7 @@ export function FamilyMapScreen() {
   const [keepPhase, setKeepPhase] = useState<'idle' | 'starting' | 'on' | 'blocked'>('idle');
   const keepDismissRef = useRef<{ kind: string; at: number } | null>(null);
   const keepPhaseRef = useRef<{ phase: 'idle' | 'starting' | 'on' | 'blocked'; until: number }>({ phase: 'idle', until: 0 });
-  const [keepLive, setKeepLive] = useState<{ battery: boolean | null; running: boolean; location: string }>({ battery: null, running: false, location: '' });
+  const [keepLive, setKeepLive] = useState<{ battery: boolean | null; running: boolean; location: string; exactAlarm: boolean | null; backgroundRestricted: boolean | null; samsung: boolean }>({ battery: null, running: false, location: '', exactAlarm: null, backgroundRestricted: null, samsung: false });
   const [profileOpen, setProfileOpen] = useState(false);
   const [recordId, setRecordId] = useState<string | null>(null);
   const [managedSettings, setManagedSettings] = useState(false);
@@ -177,6 +177,9 @@ export function FamilyMapScreen() {
           battery: status.batteryUnrestricted === false ? false : status.batteryUnrestricted === true ? true : null,
           running: alive,
           location,
+          exactAlarm: status.exactAlarms === false ? false : status.exactAlarms === true ? true : null,
+          backgroundRestricted: status.backgroundRestricted === true ? true : status.backgroundRestricted === false ? false : null,
+          samsung: status.samsung === true,
         });
         const banner = keepBannerVisible(keepBanner({
           native: true,
@@ -935,6 +938,15 @@ export function FamilyMapScreen() {
   const openBatterySettings = () => {
     void askBattery().then((result) => setSettingsNote(result.note));
   };
+  const openExactSettings = () => {
+    void openExactAlarmSettings();
+  };
+  const openBackgroundSettings = () => {
+    void openAppSettings();
+  };
+  const openSamsungSettings = () => {
+    void openSamsungSleepSettings();
+  };
   useEffect(() => consumeAndroidBack(() => {
     if (shareAsk) {
       setShareAsk(false);
@@ -1653,9 +1665,26 @@ export function FamilyMapScreen() {
               방법 보기
             </button>
             {tracking.native && (
-              <button type="button" onClick={openBatterySettings} className="mt-2 w-full rounded-full bg-slate-100 py-3 text-sm font-bold">
-                배터리 제한 없음
-              </button>
+              <div className="mt-3">
+                <AlwaysAllowNotice
+                  locationMode={keepLive.location === 'always' || keepLive.location === 'while-using' || keepLive.location === 'denied' ? keepLive.location : state.permissions.locationMode}
+                  keepAlive={state.backgroundKeepAlive}
+                  native={tracking.native}
+                  batteryUnrestricted={keepLive.battery}
+                  serviceRunning={keepLive.running}
+                  exactAlarm={keepLive.exactAlarm}
+                  backgroundRestricted={keepLive.backgroundRestricted}
+                  samsung={keepLive.samsung}
+                  showStart={false}
+                  onOpenSettings={openLocationSettings}
+                  onShowGuide={openLocationSettings}
+                  onBattery={openBatterySettings}
+                  onExact={openExactSettings}
+                  onBackground={openBackgroundSettings}
+                  onSamsung={openSamsungSettings}
+                  onStart={() => {}}
+                />
+              </div>
             )}
             {!(state.permissions.locationMode === 'always' && state.backgroundKeepAlive) && (
               <button
@@ -1711,10 +1740,16 @@ export function FamilyMapScreen() {
                 native={tracking.native}
                 batteryUnrestricted={keepLive.battery}
                 serviceRunning={keepLive.running}
+                exactAlarm={keepLive.exactAlarm}
+                backgroundRestricted={keepLive.backgroundRestricted}
+                samsung={keepLive.samsung}
                 note={settingsNote}
                 onOpenSettings={openLocationSettings}
                 onShowGuide={openLocationSettings}
                 onBattery={openBatterySettings}
+                onExact={openExactSettings}
+                onBackground={openBackgroundSettings}
+                onSamsung={openSamsungSettings}
                 onStart={() => {
                   void (async () => {
                     const notifications = await askNotifications();
