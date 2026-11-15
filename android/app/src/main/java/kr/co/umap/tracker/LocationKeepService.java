@@ -167,6 +167,8 @@ public class LocationKeepService {
     private static volatile boolean forceUpload = false;
     private static volatile boolean motionLoaded = false;
     private static final int HEARTBEAT_CODE = REQUEST_CODE + 1;
+    /** Separate from the watchdog. The same PendingIntent would replace the 5s retry with the 2 minute alarm. */
+    private static final int REVIVE_CODE = HEARTBEAT_CODE + 1;
     private static long requestedGpsMs = GPS_STILL_PROBE_MS;
     private static long stillSinceMs = 0;
     private static long lastRideAt = 0L;
@@ -602,6 +604,16 @@ public class LocationKeepService {
         return android.app.PendingIntent.getBroadcast(context, HEARTBEAT_CODE, intent, flags);
     }
 
+    private static android.app.PendingIntent reviveIntent(Context context, String mode) {
+        Intent intent = new Intent(context, LocationKeepReceiver.class);
+        intent.setAction(ACTION_HEARTBEAT);
+        intent.putExtra("reviveSoon", true);
+        if (mode != null) intent.putExtra("alarmMode", mode);
+        int flags = android.app.PendingIntent.FLAG_UPDATE_CURRENT;
+        if (Build.VERSION.SDK_INT >= 31) flags |= android.app.PendingIntent.FLAG_IMMUTABLE;
+        return android.app.PendingIntent.getBroadcast(context, REVIVE_CODE, intent, flags);
+    }
+
     public static boolean exactAlarms(AlarmManager alarms) {
         if (alarms == null) return false;
         if (Build.VERSION.SDK_INT < 31) return true;
@@ -671,7 +683,7 @@ public class LocationKeepService {
         boolean exact = exactAlarms(alarms);
         long when = System.currentTimeMillis() + KeepRevive.reviveDelayMs(exact);
         try {
-            scheduleAlarm(alarms, when, heartbeatIntent(context, exact ? "exact" : "idle"), exact);
+            scheduleAlarm(alarms, when, reviveIntent(context, exact ? "exact" : "idle"), exact);
         } catch (Exception ignored) {
             /* The periodic watchdog is the next chance. */
         }
@@ -710,6 +722,7 @@ public class LocationKeepService {
         if (alarms == null) return;
         try {
             alarms.cancel(heartbeatIntent(context, null));
+            alarms.cancel(reviveIntent(context, null));
         } catch (Exception ignored) {
             /* 이미 없는 알람 */
         }

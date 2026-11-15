@@ -82,6 +82,13 @@ test('a denied foreground start falls back to the alarm and expedited work, exce
   assert.match(process, /onTaskRemoved/);
   assert.match(process, /onDestroy/);
   assert.match(service, /fallbackAfterDenied/);
+  assert.match(service, /REVIVE_CODE = HEARTBEAT_CODE \+ 1/);
+  const reviveBody = service.slice(service.indexOf('void scheduleRevive'), service.indexOf('void scheduleHeartbeat'));
+  assert.match(reviveBody, /reviveIntent/);
+  assert.equal(reviveBody.includes('heartbeatIntent'), false);
+  const beatBody = service.slice(service.indexOf('void scheduleHeartbeat'), service.indexOf('void scheduleAlarm'));
+  assert.match(beatBody, /heartbeatIntent/);
+  assert.equal(beatBody.includes('reviveIntent'), false);
   assert.match(service, /captureFreshFix/);
   assert.match(service, /motionMoving/);
 });
