@@ -10,8 +10,10 @@ public class LocationKeepReceiver extends BroadcastReceiver {
     @Override
     public void onReceive(Context context, Intent intent) {
         if (intent != null && LocationKeepService.ACTION_HEARTBEAT.equals(intent.getAction())) {
+            Context app = context.getApplicationContext();
+            LocationKeepService.reviveFromAlarm(app, intent);
             PendingResult pending = goAsync();
-            LocationKeepService.onHeartbeat(context.getApplicationContext(), pending);
+            LocationKeepService.onHeartbeat(app, pending);
             return;
         }
         java.util.List<android.location.Location> locations = LocationKeepService.locationsFrom(intent);

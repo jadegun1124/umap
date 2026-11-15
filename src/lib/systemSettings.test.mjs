@@ -91,7 +91,9 @@ test('location keep is a foreground service that restarts with the task and the 
   assert.match(worker, /PeriodicWorkRequest/);
   assert.match(worker, /15, TimeUnit.MINUTES/);
   assert.match(worker, /scheduleRevive/);
-  assert.equal(worker.includes('LocationKeepProcess.hold'), false);
+  assert.match(worker, /ExistingPeriodicWorkPolicy.KEEP/);
+  assert.match(worker, /fgsStartAllowed/);
+  assert.ok(worker.indexOf('fgsStartAllowed') < worker.indexOf('LocationKeepProcess.hold'));
   assert.match(process, /pokeGps/);
   assert.match(process, /15_000L/);
   assert.match(location, /void pokeGps/);

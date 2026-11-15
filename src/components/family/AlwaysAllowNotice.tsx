@@ -7,10 +7,17 @@ export function AlwaysAllowNotice({
   native,
   batteryUnrestricted = null,
   serviceRunning = false,
+  exactAlarm = null,
+  backgroundRestricted = null,
+  samsung = false,
   onOpenSettings,
   onShowGuide,
   onBattery,
+  onExact = () => {},
+  onBackground = () => {},
+  onSamsung = () => {},
   onStart,
+  showStart = true,
   note,
 }: {
   locationMode: PermissionState['locationMode'];
@@ -18,15 +25,28 @@ export function AlwaysAllowNotice({
   native: boolean;
   batteryUnrestricted?: boolean | null;
   serviceRunning?: boolean;
+  exactAlarm?: boolean | null;
+  backgroundRestricted?: boolean | null;
+  samsung?: boolean;
   onOpenSettings: () => void;
   onShowGuide: () => void;
   onBattery: () => void;
+  onExact?: () => void;
+  onBackground?: () => void;
+  onSamsung?: () => void;
   onStart: () => void;
+  showStart?: boolean;
   note?: string | null;
 }) {
-  const status = keepStatus({ locationMode, batteryUnrestricted, serviceRunning });
+  const status = keepStatus({ locationMode, batteryUnrestricted, serviceRunning, exactAlarm, backgroundRestricted, samsung });
   const live = locationMode === 'always' && keepAlive && status.battery !== 'restricted';
-  const fix = (action: 'always' | 'battery') => (action === 'battery' ? onBattery : onOpenSettings);
+  const fix = (action: 'always' | 'battery' | 'exact' | 'background' | 'samsung') => {
+    if (action === 'battery') return onBattery;
+    if (action === 'exact') return onExact;
+    if (action === 'background') return onBackground;
+    if (action === 'samsung') return onSamsung;
+    return onOpenSettings;
+  };
   return (
     <div className="mb-2 rounded-2xl bg-slate-50 px-3 py-2">
       <p className="text-xs font-bold text-slate-700">{live ? '위치 유지 켜짐' : '위치 유지'}</p>
@@ -43,11 +63,26 @@ export function AlwaysAllowNotice({
         )}
         {native && (
           <div className="flex items-center justify-between gap-2">
+            <dt>정확한 알람</dt>
+            <dd className="font-bold">{status.exactAlarmLabel}</dd>
+          </div>
+        )}
+        {native && (
+          <div className="flex items-center justify-between gap-2">
+            <dt>백그라운드 제한</dt>
+            <dd className="font-bold">{status.backgroundLabel}</dd>
+          </div>
+        )}
+        {native && (
+          <div className="flex items-center justify-between gap-2">
             <dt>위치 유지</dt>
             <dd className="font-bold">{status.serviceLabel}</dd>
           </div>
         )}
       </dl>
+      {status.idleWarning && (
+        <p className="mt-2 text-[11px] font-semibold leading-4 text-slate-500">{status.idleWarning}</p>
+      )}
       {status.fixes.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-2">
           {status.fixes.map((item) => (
@@ -62,7 +97,7 @@ export function AlwaysAllowNotice({
           )}
         </div>
       )}
-      {status.fixes.length === 0 && locationMode === 'always' && !keepAlive && (
+      {showStart && status.fixes.length === 0 && locationMode === 'always' && !keepAlive && (
         <button type="button" onClick={onStart} className="mt-2 rounded-full bg-[#0084FF] px-3 py-1.5 text-[11px] font-bold text-white">
           위치 유지 켜기
         </button>

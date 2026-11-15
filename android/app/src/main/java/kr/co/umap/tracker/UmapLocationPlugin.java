@@ -1,6 +1,8 @@
 package kr.co.umap.tracker;
 
 import android.annotation.SuppressLint;
+import android.app.ActivityManager;
+import android.app.AlarmManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
@@ -427,6 +429,37 @@ public class UmapLocationPlugin extends Plugin {
     }
 
     @PluginMethod
+    public void openExactAlarm(PluginCall call) {
+        JSObject result = new JSObject();
+        if (Build.VERSION.SDK_INT < 31) {
+            result.put("opened", false);
+            call.resolve(result);
+            return;
+        }
+        Intent intent = new Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM);
+        intent.setData(Uri.parse("package:" + getContext().getPackageName()));
+        result.put("opened", startExternal(intent));
+        call.resolve(result);
+    }
+
+    /** Samsung 절전 예외 / 잠자지 않는 앱. Missing activities fall through to the app details screen. */
+    @PluginMethod
+    public void openSamsungSleep(PluginCall call) {
+        JSObject result = new JSObject();
+        String[][] targets = new String[][] {
+            {"com.samsung.android.lool", "com.samsung.android.sm.ui.battery.BatteryActivity"},
+            {"com.samsung.android.sm", "com.samsung.android.sm.ui.battery.BatteryActivity"},
+            {"com.samsung.android.lool", "com.samsung.android.sm.battery.ui.BatteryActivity"},
+            {"com.samsung.android.sm", "com.samsung.android.sm.ui.battery.AppSleepListActivity"},
+            {"com.samsung.android.lool", "com.samsung.android.sm.ui.battery.AppSleepListActivity"},
+        };
+        boolean opened = startExplicit(new Intent(), targets);
+        if (!opened) opened = openAppDetails();
+        result.put("opened", opened);
+        call.resolve(result);
+    }
+
+    @PluginMethod
     public void battery(PluginCall call) {
         JSObject result = new JSObject();
         Intent battery = getContext().registerReceiver(null, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
@@ -519,7 +552,16 @@ public class UmapLocationPlugin extends Plugin {
         result.put("location", location);
         result.put("precise", hasFine());
         PowerManager power = (PowerManager) getContext().getSystemService(Context.POWER_SERVICE);
-        result.put("batteryUnrestricted", power != null && power.isIgnoringBatteryOptimizations(getContext().getPackageName()));
+        boolean exempt = power != null && power.isIgnoringBatteryOptimizations(getContext().getPackageName());
+        result.put("batteryUnrestricted", exempt);
+        LocationKeepService.noteBatteryExempt(getContext(), exempt);
+        AlarmManager alarms = (AlarmManager) getContext().getSystemService(Context.ALARM_SERVICE);
+        result.put("exactAlarms", LocationKeepService.exactAlarms(alarms));
+        ActivityManager activity = (ActivityManager) getContext().getSystemService(Context.ACTIVITY_SERVICE);
+        boolean restricted = Build.VERSION.SDK_INT >= 28 && activity != null && activity.isBackgroundRestricted();
+        result.put("backgroundRestricted", restricted);
+        String maker = Build.MANUFACTURER == null ? "" : Build.MANUFACTURER;
+        result.put("samsung", "samsung".equalsIgnoreCase(maker));
         try {
             android.content.pm.PackageInfo info = getContext().getPackageManager().getPackageInfo(getContext().getPackageName(), 0);
             result.put("versionName", info.versionName == null ? "" : info.versionName);

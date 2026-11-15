@@ -62,6 +62,8 @@ interface UmapLocationPlugin {
   requestCamera(): Promise<NativePromptResult>;
   requestMotion(): Promise<NativePromptResult>;
   openBattery(): Promise<BatteryOptimizationResult>;
+  openExactAlarm(): Promise<{ opened: boolean }>;
+  openSamsungSleep(): Promise<{ opened: boolean }>;
   battery(): Promise<{ pct?: number | null; charging?: boolean | null }>;
   start(options: { config: string }): Promise<{ started: boolean; reason?: string }>;
   stop(): Promise<{ stopped: boolean }>;
@@ -71,6 +73,9 @@ interface UmapLocationPlugin {
     native: boolean;
     reason?: string;
     batteryUnrestricted?: boolean;
+    exactAlarms?: boolean;
+    backgroundRestricted?: boolean;
+    samsung?: boolean;
     location?: 'always' | 'while-using' | 'denied';
     precise?: boolean;
     versionName?: string;
@@ -125,6 +130,12 @@ const web: UmapLocationPlugin = {
   },
   async openBattery() {
     return { opened: false, unrestricted: false };
+  },
+  async openExactAlarm() {
+    return { opened: false };
+  },
+  async openSamsungSleep() {
+    return { opened: false };
   },
   async battery() {
     return { pct: null, charging: null };
@@ -352,6 +363,26 @@ export async function requestMotionPermission(): Promise<NativePromptResult> {
     return { state, openedSettings: result.openedSettings === true };
   } catch {
     return { state: 'unavailable', openedSettings: false };
+  }
+}
+
+export async function openExactAlarmSettings(): Promise<boolean> {
+  if (!umapLocationNative()) return false;
+  try {
+    const result = await plugin.openExactAlarm();
+    return result.opened === true;
+  } catch {
+    return false;
+  }
+}
+
+export async function openSamsungSleepSettings(): Promise<boolean> {
+  if (!umapLocationNative()) return false;
+  try {
+    const result = await plugin.openSamsungSleep();
+    return result.opened === true;
+  } catch {
+    return false;
   }
 }
 

@@ -1,5 +1,6 @@
 package kr.co.umap.tracker;
 
+import android.app.ForegroundServiceStartNotAllowedException;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
@@ -47,16 +48,45 @@ public class LocationKeepProcess extends Service {
         return foreground;
     }
 
-    public static void hold(Context context) {
-        if (context == null) return;
+    public static boolean hold(Context context) {
+        return hold(context, "app");
+    }
+
+    /**
+     * Start the location foreground service. On Android 12+ this throws
+     * ForegroundServiceStartNotAllowedException outside an allowed window.
+     * The exception is caught. The next alarm and WorkManager try again.
+     * capture is set only when this process was not already in the foreground,
+     * so a repeated start from the open app does not upload on every poll.
+     */
+    public static boolean hold(Context context, String path) {
+        if (context == null) return false;
+        String via = path == null || path.isEmpty() ? "app" : path;
+        boolean capture = !foreground;
         try {
             Intent intent = new Intent(context, LocationKeepProcess.class);
             intent.putExtra("fromKeep", true);
+            intent.putExtra("revivePath", via);
+            intent.putExtra("capture", capture);
             if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(intent);
             else context.startService(intent);
-        } catch (Exception ignored) {
-            /* A background start limit leaves the PendingIntent and the alarm. */
+            NativeDiag.note(context, "revive", via, -1, -1, -1, -1, false, "", 0, 0);
+            return true;
+        } catch (RuntimeException error) {
+            noteFgsFailure(context, error);
+            LocationKeepService.fallbackAfterDenied(context, via);
+            return false;
         }
+    }
+
+    private static void noteFgsFailure(Context context, Exception error) {
+        String reason = "fgs-error";
+        if (Build.VERSION.SDK_INT >= 31 && isFgsDenied(error)) reason = "fgs-denied";
+        NativeDiag.note(context, "revive", reason, -1, -1, -1, -1, false, "", 0, 0);
+    }
+
+    private static boolean isFgsDenied(Exception error) {
+        return error instanceof ForegroundServiceStartNotAllowedException;
     }
 
     public static void release(Context context) {
@@ -94,6 +124,8 @@ public class LocationKeepProcess extends Service {
             promote();
         } catch (Exception error) {
             foreground = false;
+            noteFgsFailure(this, error);
+            LocationKeepService.scheduleRevive(this);
             stopSelf();
             return START_NOT_STICKY;
         }
@@ -106,9 +138,10 @@ public class LocationKeepProcess extends Service {
             return START_NOT_STICKY;
         }
         if (intent == null || !intent.getBooleanExtra("fromKeep", false)) {
-            LocationKeepService.restartIfWanted(this);
+            LocationKeepService.restartIfWanted(this, intent == null ? "sticky" : "app");
         }
-        LocationKeepService.ensureRunning(this);
+        boolean capture = intent == null || intent.getBooleanExtra("capture", false);
+        LocationKeepService.ensureRunning(this, capture);
         registerProviders();
         gpsWatch.removeCallbacks(pokeGps);
         gpsWatch.postDelayed(pokeGps, FIX_WATCH_MS);
@@ -118,7 +151,12 @@ public class LocationKeepProcess extends Service {
     @Override
     public void onTaskRemoved(Intent rootIntent) {
         if (!LocationKeepService.wanted(this)) return;
-        hold(this);
+        NativeDiag.note(this, "revive", "task", -1, -1, -1, -1, false, "", 0, 0);
+        if (!foreground) {
+            boolean exempt = LocationKeepService.batteryExempt(this);
+            if (KeepRevive.fgsStartAllowed(Build.VERSION.SDK_INT, "task", exempt)) hold(this, "task");
+            else LocationKeepService.fallbackAfterDenied(this, "task");
+        }
         LocationKeepService.ensureWatchdog(this);
     }
 
@@ -129,7 +167,11 @@ public class LocationKeepProcess extends Service {
         setMovingWake(this, false);
         gpsWatch.removeCallbacks(pokeGps);
         unregisterProviders();
-        if (revive) LocationKeepService.scheduleRevive(this);
+        if (revive) {
+            NativeDiag.note(this, "revive", "destroy", -1, -1, -1, -1, false, "", 0, 0);
+            LocationKeepService.scheduleRevive(this);
+            if (KeepRevive.enqueueExpedited("destroy")) KeepAliveWorker.enqueueExpedited(this);
+        }
         super.onDestroy();
     }
 

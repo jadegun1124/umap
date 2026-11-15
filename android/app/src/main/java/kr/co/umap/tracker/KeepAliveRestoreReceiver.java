@@ -15,6 +15,7 @@ public class KeepAliveRestoreReceiver extends BroadcastReceiver {
             && !"android.intent.action.QUICKBOOT_POWERON".equals(action)) {
             return;
         }
-        LocationKeepService.restartIfWanted(context.getApplicationContext());
+        String path = Intent.ACTION_MY_PACKAGE_REPLACED.equals(action) ? "update" : "boot";
+        LocationKeepService.restartIfWanted(context.getApplicationContext(), path);
     }
 }
